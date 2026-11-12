@@ -33,7 +33,7 @@ claude   # 首次运行按提示登录
 
 ### 方式一：下载 DMG / ZIP
 
-从 [Releases](../../releases) 下载最新 `ClaudePicker-x.y.z.dmg`，打开后把 **Claude Code** 拖进 Applications。
+从 [Releases](../../releases) 下载最新 `ClaudePicker-x.y.z.dmg`，打开后把 **ClaudePicker** 拖进「应用程序」文件夹（安装后显示名为 Claude Code）。
 
 首次打开会被 Gatekeeper 拦下（应用使用 ad-hoc 签名，没有 Apple 开发者公证）。任选一种放行：
 
@@ -48,8 +48,7 @@ xattr -dr com.apple.quarantine /Applications/ClaudePicker.app
 ```bash
 git clone https://github.com/zeng-66/claude-picker.git
 cd claude-picker
-swift build -c release
-./scripts/build-app.sh --dmg     # 产出 dist/ClaudePicker.app 与 dmg
+./scripts/build-app.sh --dmg     # 编译 + 组 app + 图标 + 签名 + 出 dmg
 open dist/ClaudePicker.app
 ```
 

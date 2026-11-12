@@ -29,51 +29,74 @@
 ### 1.3 目录结构
 
 ```
-/Users/zcl/.local/share/claude-picker/
+/Users/zcl/project/claude-picker/          # 源码仓库（GitHub: zeng-66/claude-picker）
 ├── Package.swift               # SPM 清单
 ├── Package.resolved
 ├── Sources/ClaudeDeck/
 │   ├── main.swift              # 1737 行：常量、Store、全部 SwiftUI 视图、AppDelegate、buildProjects
 │   ├── Models.swift            #  465 行：Session/Project、SessionScanner、TreeOrder、ClaudeConfig、UsageFetcher
-│   ├── TerminalPane.swift      #   94 行：TerminalSession 包装 SwiftTerm
-│   └── main.swift.bak66        # 旧备份，可删
+│   └── TerminalPane.swift      #   94 行：TerminalSession 包装 SwiftTerm
 ├── SwiftTerm/                  # vendored 依赖（HEAD c86e1d8，已删 .git/.build）
-├── ClaudePicker.app/           # 产物 bundle
-│   └── Contents/{MacOS/ClaudePicker, Resources/(空), Info.plist}
+├── scripts/
+│   ├── build-app.sh            # 构建 + 组装 app + 图标 + 签名 + 打包（--zip/--dmg）
+│   └── make_icon.py            # 从 ClawdMark 的 cells 生成 AppIcon.icns
+├── docs/icon.png               # README 用图标
+├── dist/                       # 构建产物（.gitignore，不进仓库）
+│   ├── ClaudePicker.app
+│   ├── ClaudePicker-1.0.0.dmg
+│   └── ClaudePicker-1.0.0.zip
+├── README.md
+├── DEVELOPMENT.md              # 本文件
+└── .gitignore
+
+~/.local/share/claude-picker/              # 仅运行态数据
 ├── settings.json               # App 自己的设置（字号、侧边栏宽度）
-├── tree.json                   # 树顺序 + 删除记录
-├── main.swift                  # ⚠️ cc-open 时代遗留（56999B），不参与构建，可删
-└── order.json                  # ⚠️ cc-open 时代遗留，无人读取，可删
+└── tree.json                   # 树顺序 + 隐藏记录
 ```
 
-> 构建入口只有 `Sources/ClaudeDeck/`。根目录那个 `main.swift` 是历史遗留，改它没有任何效果。
+> 状态目录路径在 `Models.swift` 里硬编码为 `~/.local/share/claude-picker`，与源码位置无关。改代码不影响用户数据。
 
 ---
 
 ## 2. 构建与部署
 
-### 2.1 四步（每次改动后固定执行）
+### 2.1 日常开发（脚本一把梭）
 
 ```bash
-cd /Users/zcl/.local/share/claude-picker
-
-# 1. 编译
-swift build -c release
-
-# 2. 覆盖 bundle 里的可执行文件（产物名是 ClaudeDeck，bundle 里的名字是 ClaudePicker）
-cp .build/release/ClaudeDeck ClaudePicker.app/Contents/MacOS/ClaudePicker
-
-# 3. 重新 ad-hoc 签名（cp 之后签名必然失效，不签会被 Gatekeeper 拦）
-codesign --force --deep --sign - ClaudePicker.app
-
-# 4. 重启进程
+cd /Users/zcl/project/claude-picker
+./scripts/build-app.sh          # 编译 + 组装 dist/ClaudePicker.app + 图标 + 签名
 pkill -x ClaudePicker; sleep 0.3
-open -a /Users/zcl/.local/share/claude-picker/ClaudePicker.app
+open -a dist/ClaudePicker.app
 ```
 
-一次完整 release 构建约 5~9 秒（增量更快）。构建成功会打印 `Build complete! (5.50秒)`。
+脚本做六件事：`swift build -c release` → 组装 `dist/ClaudePicker.app`（可执行文件从 `.build/release/ClaudeDeck` 复制并改名为 `ClaudePicker`）→ 用 `scripts/make_icon.py` 生成 `AppIcon.icns` → 写 `Info.plist` → `codesign --force --deep --sign -` → 可选 `--zip` / `--dmg`。
 
-### 2.2 只编译不部署
+环境变量可覆盖打包参数：`VERSION`（默认 1.0.0）、`BUILD_NUMBER`（默认 1）、`MIN_MACOS`（默认 14.0）。
+
+### 2.2 手写四步（脚本不适用时）
+
+```bash
+cd /Users/zcl/project/claude-picker
+swift build -c release                                          # 1. 编译
+cp .build/release/ClaudeDeck dist/ClaudePicker.app/Contents/MacOS/ClaudePicker   # 2. 换可执行文件
+codesign --force --deep --sign - dist/ClaudePicker.app          # 3. cp 之后签名必然失效
+pkill -x ClaudePicker; sleep 0.3; open -a dist/ClaudePicker.app # 4. 重启
+```
+
+一次完整 release 构建约 5~9 秒（增量更快）。构建成功会打印 `Build complete! (5.50秒)`。注意二进制产物名是 `ClaudeDeck`，bundle 里的名字是 `ClaudePicker`。
+
+### 2.3 发布到 GitHub Releases
+
+```bash
+./scripts/build-app.sh --dmg
+gh release create v1.0.1 --title "ClaudePicker 1.0.1" \
+  --notes-file /tmp/relnotes.md \
+  dist/ClaudePicker-1.0.1.dmg dist/ClaudePicker-1.0.1.zip
+```
+
+`dist/` 已在 `.gitignore` 里，安装包只走 Releases，不进仓库。
+
+### 2.4 只编译不部署
 
 ```bash
 swift build -c release 2>&1 | tail -20
@@ -81,17 +104,17 @@ swift build -c release 2>&1 | tail -20
 
 改完代码先看编译是否过，再走部署。Swift 的报错行号直接对应 `Sources/ClaudeDeck/*.swift`。
 
-### 2.3 验证部署真的生效
+### 2.5 验证部署真的生效
 
 ```bash
 pgrep -x ClaudePicker                        # 拿到 pid
-ls -l ClaudePicker.app/Contents/MacOS/ClaudePicker   # 时间戳应该是刚刚
-codesign -dv ClaudePicker.app 2>&1 | head -3         # 签名状态
+ls -l dist/ClaudePicker.app/Contents/MacOS/ClaudePicker   # 时间戳应该是刚刚
+codesign -dv dist/ClaudePicker.app 2>&1 | head -3         # 签名状态
 ```
 
 **不要把「编译通过」当成「已生效」**——忘记 cp 或忘记 pkill 都会让你以为改动没起作用。
 
-### 2.4 工具链事实
+### 2.6 工具链事实
 
 ```
 swift-driver version: 1.168.6  Apple Swift version 6.4.2 (swiftlang-6.4.2.1.9 clang-2100.4.1.1)
@@ -560,7 +583,11 @@ view.startProcess(executable: "/bin/zsh",
 
 11. **`StatusBarView` 的 `Menu` label 只能是单个 `Text`。** `.menuStyle(.borderlessButton)` 会把复合 label 当模板图渲染，文字消失。
 
-12. **改完必须走完 §2.1 的四步。** 尤其是 `codesign`——`cp` 之后旧签名失效，不重签会启动失败。
+12. **改完必须重新签名。** 无论是 `./scripts/build-app.sh` 还是手写 `cp`，覆盖 `Contents/MacOS/ClaudePicker` 之后旧签名必然失效，不重签会启动失败（`codesign` 校验不过直接被 Gatekeeper 拦）。
+
+13. **`dist/` 不在仓库里。** `.gitignore` 挡掉了 `dist/`、`*.dmg`、`*.zip`。安装包只通过 GitHub Releases 分发；`git status` 干净就说明没误提交。
+
+14. **`swift-tools-version:6.2` 要求 Swift 6.2+。** 老版本工具链会直接拒绝解析 `Package.swift`。`platforms: [.macOS(.v14)]` 是编译期下限，`Info.plist` 的 `LSMinimumSystemVersion` 由 `build-app.sh` 的 `MIN_MACOS` 控制，两者要对齐。
 
 ---
 
@@ -570,7 +597,7 @@ view.startProcess(executable: "/bin/zsh",
 
 1. 常量都在 `main.swift:6-18` 或对应视图的类型内部，先改常量再改视图。
 2. 用 `git diff` 之外的方式确认改动点：`grep -n "kSidebarW\|kTerminalTopPad" Sources/ClaudeDeck/main.swift`。
-3. 四步部署。
+3. `./scripts/build-app.sh` 部署。
 4. 截图验证：`screencapture -x -o -l <wid>`，用 Pillow 确认尺寸后裁切放大关键区域。
 
 ### 11.2 加一个树上的新动作（例如「恢复误删会话」）
@@ -584,7 +611,7 @@ view.startProcess(executable: "/bin/zsh",
 
 1. 在 `Models.swift` 加类型 + `ClaudeConfig` 的读写方法。
 2. 在 `Store` 加 `@Published` 字段和 setter（setter 里同时做「写盘」和「发斜杠命令」两件事）。
-3. 在 `StatusBarView` 的 `HStack` 里插一个 `menu(label:value:)` 或按钮，注意前后加 `sep`。
+3. 在 `StatusBarView` 的 `HStack` 里插一个 `menu(label:value:)` 或按钮，注意前后加 `sep`（分隔符视图）。
 4. `reloadClaudeOptions()` 里补上外部改动的同步。
 
 ### 11.4 加启动参数
@@ -593,27 +620,39 @@ view.startProcess(executable: "/bin/zsh",
 
 ### 11.5 想做的事（还没做）
 
-- [ ] App 图标：`Contents/Resources/` 是空的，`Info.plist` 没有 `CFBundleIconFile`。可以用 `ClawdMark` 的 `cells` 数据生成 1024×1024 PNG，再 `iconutil` 打包成 `.icns`。
 - [ ] 「恢复误删会话」UI 入口（见 §11.2）。
 - [ ] 同时开多个终端（当前 `open()` 会先 `terminate()` 旧的）。做法：`active` 改成 `[TerminalSession]` + `selectedTab`，`TerminalPane` 按 tag 切换。
-- [ ] 清理遗留文件：根目录 `main.swift`、`order.json`、`Sources/ClaudeDeck/main.swift.bak66`。
+- [ ] 通用二进制：现在只出 arm64。可试 `./scripts/build-app.sh` 里加 `--arch arm64 --arch x86_64`，但 vendored SwiftTerm 也要能双架构编译。
+- [ ] CI：现在构建和发版全在本地 `scripts/build-app.sh` + `gh release create`，可以接 GitHub Actions。
+
+### 11.6 已完成（不要再做一遍）
+
+- [x] App 图标：`scripts/make_icon.py` 从 `ClawdMark` 的 cells 生成，`Info.plist` 带 `CFBundleIconFile=AppIcon`。
+- [x] 硬编码路径 `panel.directoryURL`：改为从 `FileManager.default.homeDirectoryForCurrentUser` 派生。
+- [x] 遗留文件清理：根 `main.swift`、`order.json`、`main.swift.bak66` 已删除。
 
 ---
 
 ## 12. 快速命令备忘
 
 ```bash
-cd /Users/zcl/.local/share/claude-picker
+cd /Users/zcl/project/claude-picker
 
-# 构建 + 部署
-swift build -c release \
-  && cp .build/release/ClaudeDeck ClaudePicker.app/Contents/MacOS/ClaudePicker \
-  && codesign --force --deep --sign - ClaudePicker.app \
-  && (pkill -x ClaudePicker; sleep 0.3; open -a "$PWD/ClaudePicker.app")
+# 构建 + 打包
+./scripts/build-app.sh              # 只出 app
+./scripts/build-app.sh --zip        # app + zip
+./scripts/build-app.sh --dmg        # app + dmg
+
+# 本地部署并重启
+pkill -x ClaudePicker; sleep 0.3; open -a "$PWD/dist/ClaudePicker.app"
+
+# 装到 /Applications（用新版本时）
+ditto dist/ClaudePicker.app /Applications/ClaudePicker.app
 
 # 看状态文件
-cat settings.json; echo; cat tree.json | python3 -m json.tool | head -40
-cat ~/.claude/settings.json | python3 -m json.tool
+cat ~/.local/share/claude-picker/settings.json
+python3 -m json.tool ~/.local/share/claude-picker/tree.json | head -40
+python3 -m json.tool ~/.claude/settings.json
 
 # 恢复被误删的会话：编辑 tree.json，把 sid 从 hiddenSessions 删掉
 python3 - <<'PY'
@@ -625,12 +664,6 @@ p.write_text(json.dumps(d, ensure_ascii=False, indent=2))
 PY
 
 # 找窗口 id 并截图（验证 UI）
-python3 - <<'PY'
-import Quartz
-for w in Quartz.CGWindowListCopyWindowInfo(
-        Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID):
-    if w.get("kCGWindowOwnerName") == "ClaudePicker":
-        print(w["kCGWindowNumber"], w["kCGWindowBounds"])
-PY
+/tmp/tools/widonly            # 自建小工具，CGWindowList 过滤 owner
 screencapture -x -o -l <wid> /tmp/cp.png
 ```
