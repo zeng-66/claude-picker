@@ -1,0 +1,30 @@
+# Swift / SwiftPM
+.build/
+.swiftpm/
+Package.resolved.bak
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+
+# 本地状态文件（运行时数据，不进仓库）
+settings.json
+tree.json
+order.json
+
+# 旧版本 / 备份
+*.bak
+*.bak[0-9]*
+*.orig
+
+# 构建产物（Release 包通过 GitHub Releases 分发，不入库）
+dist/
+*.dmg
+*.zip
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# 图标生成中间产物
+build/
