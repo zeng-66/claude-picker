@@ -3713,13 +3713,20 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
             }
             // A full-screen application executes each arrow key on its own, so a flick that
             // banked a hundred lines must not become a hundred keystrokes in one event.
+            //
+            // Arrow keys are the traditional xterm Alternate Scroll Mode encoding, but they
+            // are the wrong key for a full-screen TUI that keeps an input line: the program
+            // receives Up/Down and treats them as history navigation, so the wheel silently
+            // rewrites what the user typed instead of scrolling the transcript. Send Page
+            // Up/Down, which full-screen pagers and TUIs (less, claude, htop) map to
+            // "scroll the viewport" — the behavior the user asked the wheel for.
             let keys = wheelReportBudget.grant(
                 WheelReportBudget.requestedKeys(lineCount: lines))
             for _ in 0..<keys {
                 if scrollingUp {
-                    sendKeyUp()
+                    send(EscapeSequences.cmdPageUp)
                 } else {
-                    sendKeyDown()
+                    send(EscapeSequences.cmdPageDown)
                 }
             }
         } else {
