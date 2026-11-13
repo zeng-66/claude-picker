@@ -230,12 +230,12 @@ AppDelegate.applicationDidFinishLaunching
 | 步骤 | 细节 |
 |---|---|
 | 扫描范围 | `~/.claude/projects/<项目目录>/*.jsonl` |
-| 读取量 | 每个文件只读**前 128KB**（`head(_:bytes: 131072)`），截断到最后一个 `\n` 后再逐行解析 |
+| 读取量 | 工作目录和首条消息读取前 128KB，总结从尾部按 64KB 块倒序查找 |
 | `sid` | 文件名去掉 `.jsonl` |
 | `date` | 文件 `contentModificationDate`（**不是**消息里的时间戳） |
 | `cwd` | 第一条带 `cwd` 字段的记录 |
-| 标题 | 只认 `type == "user"` ∧ `isSidechain != true` ∧ `origin.kind == "human"` 的消息，取 `message.content` 文本 → `summarize` |
-| 总结 | `tailSummary`：另读文件**尾部 64KB**，取最后一条会话标题记录——新版 CLI 写 `{"type":"summary","summary":...}`，2.1.x 写 `{"type":"ai-title","aiTitle":...}`，两种都认；没有则 `summary == nil`，会话行只显示相对时间 |
+| 标题 | 优先使用最后一条有效会话总结。没有总结时，从首条合格人类消息提炼标题 |
+| 总结 | `tailSummary` 按完整 JSONL 行倒序查找 `summary.summary` / `ai-title.aiTitle`，跳过空白和未写完的记录。第一行显示总结，第二行显示相对时间。打开会话和任务结束后刷新元数据 |
 | 兜底 | 无合格标题时：见过 `[Image` → `"图片对话"`，否则 `"空会话"` |
 | 排序 | 同一 cwd 内按 `date` 倒序 |
 
@@ -551,12 +551,21 @@ view.startProcess(executable: "/bin/zsh",
 
 ### 9.1 忙闲判定（loading）
 
-两条通道，标题通道优先：
+任务状态优先跟随 Claude CLI 的 OSC 7501 结构化报告。`programStatusChanged` 收到任一 `working` 记录时置忙，子代理仍在运行时保持忙状态。`blocked` 暂停指示并清除本次完成标记，`done` / `idle` / `error` 及记录清除在全部任务停止后置闲。
 
-1. **OSC 0 标题 spinner（主通道）**。claude CLI 忙时每 ~960ms 通过 `ESC]0;<spinner><标题>BEL` 重写终端标题，spinner 前缀即状态：`◐ ◑ ◒ ◓`（VTE 系为 `>`）= 忙，`✳`（VTE 系为 `*`）= 空闲。`setTerminalTitle` 里 `parseSpinnerTitle` 剥前缀得干净标题 + `spin: Bool?`（无前缀 → nil，不动 busy）。见到 spinner 即置 `titleChannelActive = true`，并刷新 `titleFreshUntil = now + 5s`。用户刚输入过（`userInputUntil` 内）时忽略 spinner 帧——滚轮翻页会触发 claude 重绘标题带 spinner，误判成忙（Bug#1）。
-2. **CPU 采样（兜底）**。`sampleCpu` 每 0.4s 用 `proc_pid_rusage` 取进程 CPU 增量，`delta ≥ 250_000ns` 连续 2 拍 → busy，连续 2 拍无增长 → 不忙。仅当标题通道没被确认（用户设了 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`，标题 5s 不新鲜）时生效：`guard !titleChannelActive, now >= titleFreshUntil else { return }`。抑制期（`suppressUntil` 激活/切走 1.2s、`userInputUntil` 打字 0.8s）内**仍必须推进 `lastCpuNanos` 基线**再 return，否则窗口过后首拍会把攒下的 CPU 当爆发误判成忙（Bug#2）。
+SwiftTerm 会向 CLI 声明支持 OSC 7501，新版 Claude 协商成功后会省略标题 spinner。收到结构化报告后持续以该通道为准。
 
-busy 的消费方：`onBusy(true)` → `Store.runningKeys` 加 key（会话行橙色转圈，`TimelineView` 驱动）；`onBusy(false)` 时若 pane 在后台且 `awayOutput == true` → `unreadKeys` 打绿点。前台终端另有左上角「工作中」胶囊（`terminalArea` 的 `.overlay(alignment: .topLeading)`）。
+旧版 CLI 使用 OSC 0 标题信号。忙帧 `◐ ◑ ◒ ◓`（VTE 系为 `>`）置忙，空闲帧 `✳`（VTE 系为 `*`）置闲。无状态前缀的标题只更新标题文本。
+
+标题通道在空闲会话切换视图后的 1.2 秒、终端用户输入后的 0.8 秒内过滤重绘忙帧。结构化任务状态立即生效。键盘输入按第一响应者识别，鼠标操作包含终端子视图。空闲信号始终生效，已运行的任务在切换视图或输入期间保持状态。
+
+`onBusy` 同步更新 `Store.runningKeys`，会话行橙色转圈跟随这个集合。切走后仍在执行或新开始执行的任务完成时才加入 `unreadKeys`，打开会话清除未读标记。空闲进程退出保持已读状态。
+
+运行指示依赖 CLI 的任务状态或终端标题报告，设置 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` 会停用这些报告。
+
+终端滚轮灵敏度设为 `0.25`，通过独立的 `allowMouseWheelReporting` 使用 CLI 的鼠标滚动上报，文本拖选保留本地处理。普通滚轮在低灵敏度下累计不足一行的距离，避免最小一步抵消减速设置。
+
+回归验证运行 `./scripts/check-session-regressions.sh`，覆盖总结解析、打开时刷新、忙闲切换和后台未读条件。测试子进程使用隔离的替身命令。
 
 ---
 
@@ -640,8 +649,8 @@ busy 的消费方：`onBusy(true)` → `Store.runningKeys` 加 key（会话行�
 - [x] App 图标：`scripts/make_icon.py` 从 `ClawdMark` 的 cells 生成，`Info.plist` 带 `CFBundleIconFile=AppIcon`。
 - [x] 硬编码路径 `panel.directoryURL`：改为从 `FileManager.default.homeDirectoryForCurrentUser` 派生。
 - [x] 遗留文件清理：根 `main.swift`、`order.json`、`main.swift.bak66` 已删除。
-- [x] 忙闲指示（loading）：OSC 0 标题 spinner 主通道 + CPU 采样兜底，会话行转圈、终端「工作中」胶囊、后台绿点（见 §9.1）。
-- [x] 会话总结：`Session.summary` 来自 jsonl 尾部 `ai-title`/`summary` 记录，会话行第二行显示「相对时间 · 总结」（见 §4.3）。
+- [x] 忙闲指示（loading）：OSC 7501 任务状态及 OSC 0 标题兼容，会话行转圈、后台绿点（见 §9.1）。
+- [x] 会话总结：`Session.summary` 来自 jsonl 尾部 `ai-title`/`summary` 记录，会话行第一行显示总结，第二行仅显示相对时间（见 §4.3）。
 - [x] 滚轮翻页：vendored SwiftTerm 的 alternate buffer 滚轮改发 `cmdPageUp/PageDown`，不再发方向键（claude 会把 ↑ 当历史导航）。
 
 ---

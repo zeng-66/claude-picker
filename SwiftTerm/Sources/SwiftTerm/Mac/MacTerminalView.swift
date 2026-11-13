@@ -1735,6 +1735,10 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     /// need a way of toggling this behavior.
     public var allowMouseReporting: Bool = true
 
+    /// Allows wheel reports independently of pointer reporting, so application
+    /// scrolling can stay fine-grained while text selection is handled locally.
+    public var allowMouseWheelReporting: Bool = false
+
     /// Controls how link tracking resolves hovered links:
     /// `.explicit` = OSC 8 only, `.implicit` = explicit + implicit fallback, `.none` = off.
     public var linkReporting: LinkReporting = .implicit
@@ -3621,7 +3625,7 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
             if requestsLocalHandling {
                 return terminal.isDisplayBufferAlternate ? .none : .localScrollback
             }
-            if allowMouseReporting && terminal.mouseMode != .off {
+            if (allowMouseReporting || allowMouseWheelReporting) && terminal.mouseMode != .off {
                 return .mouse
             }
             if terminal.isDisplayBufferAlternate {
@@ -3650,6 +3654,13 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
         if event.hasPreciseScrollingDeltas {
             lines = scrollAccumulator.takeWholeLines(
                 distance: scaledDelta,
+                cellHeight: cellHeight,
+                route: scrollRoute)
+        } else if scrollSensitivity < 1 {
+            // Retain fractional wheel travel at low sensitivity. Convert line
+            // units to points so precise and classic events share one unit.
+            lines = scrollAccumulator.takeWholeLines(
+                distance: scaledDelta * cellHeight,
                 cellHeight: cellHeight,
                 route: scrollRoute)
         } else {
