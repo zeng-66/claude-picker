@@ -8,10 +8,11 @@ macOS 上的 Claude Code 会话浏览器：一个窗口里看到所有项目的�
 
 在终端里跑 `claude` 时，想接着上次那个会话，得先记住项目路径、翻 `~/.claude/projects` 找 session id，再 `claude --resume <sid>`。ClaudePicker 把这件事做成一次点击：
 
-- 左侧两栏树：项目（按最近活跃排序）→ 会话（标题 + 相对时间）
+- 左侧两栏树：项目（按最近活跃排序）→ 会话（标题 + 相对时间 + 会话总结）
 - 右侧内嵌终端：点会话即在这个窗口里 `claude --resume`，不用另开 Terminal.app
 - 底部状态栏：当前模式 / 模型 / 推理强度 / 快速模式，直接读写 `~/.claude/settings.json`
 - 右上角 usage 圆环：读 Claude CLI 的 OAuth 凭据，显示 5 小时与 7 天用量
+- 忙闲指示：claude 正在工作时，会话行显示橙色转圈、终端左上角出现「工作中」胶囊；后台会话有新产出时，切回来前会在会话行打绿点
 
 ## 环境要求
 
@@ -97,6 +98,8 @@ open dist/ClaudePicker.app
 ```
 
 每个文件只读前 128 KB 取标题，标题只认 `type == "user"`、非 sidechain、`origin.kind == "human"` 的第一条人类消息。
+
+会话总结来自 jsonl **尾部 64 KB**：优先取 Claude Code 追加的会话标题记录（新版 `{"type":"summary"}` / 2.1.x 的 `{"type":"ai-title"}`，取最后一条）；没有该记录时总结行为空，只显示相对时间。忙闲判定有两条通道：claude 通过 OSC 0 终端标题写入的 spinner 前缀（`◐ ◑` = 忙，`✳` = 空闲），以及标题通道不可用时（如设置了 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`）回落到进程 CPU 采样启发式。
 
 ## 文件分布
 

@@ -235,6 +235,7 @@ AppDelegate.applicationDidFinishLaunching
 | `date` | 文件 `contentModificationDate`（**不是**消息里的时间戳） |
 | `cwd` | 第一条带 `cwd` 字段的记录 |
 | 标题 | 只认 `type == "user"` ∧ `isSidechain != true` ∧ `origin.kind == "human"` 的消息，取 `message.content` 文本 → `summarize` |
+| 总结 | `tailSummary`：另读文件**尾部 64KB**，取最后一条会话标题记录——新版 CLI 写 `{"type":"summary","summary":...}`，2.1.x 写 `{"type":"ai-title","aiTitle":...}`，两种都认；没有则 `summary == nil`，会话行只显示相对时间 |
 | 兜底 | 无合格标题时：见过 `[Image` → `"图片对话"`，否则 `"空会话"` |
 | 排序 | 同一 cwd 内按 `date` 倒序 |
 
@@ -548,6 +549,15 @@ view.startProcess(executable: "/bin/zsh",
 - `TerminalPane.makeNSView` **直接返回 `session.view`**，`updateNSView` 是空的——同一个 NSView 实例复用，靠外层 `.id(ObjectIdentifier)` 切换。
 - 配色硬编码在 `configure`：底色 `(0.055, 0.062, 0.078)`、前景 `(0.90, 0.91, 0.93)`、光标 `(0.95, 0.55, 0.35)`。
 
+### 9.1 忙闲判定（loading）
+
+两条通道，标题通道优先：
+
+1. **OSC 0 标题 spinner（主通道）**。claude CLI 忙时每 ~960ms 通过 `ESC]0;<spinner><标题>BEL` 重写终端标题，spinner 前缀即状态：`◐ ◑ ◒ ◓`（VTE 系为 `>`）= 忙，`✳`（VTE 系为 `*`）= 空闲。`setTerminalTitle` 里 `parseSpinnerTitle` 剥前缀得干净标题 + `spin: Bool?`（无前缀 → nil，不动 busy）。见到 spinner 即置 `titleChannelActive = true`，并刷新 `titleFreshUntil = now + 5s`。用户刚输入过（`userInputUntil` 内）时忽略 spinner 帧——滚轮翻页会触发 claude 重绘标题带 spinner，误判成忙（Bug#1）。
+2. **CPU 采样（兜底）**。`sampleCpu` 每 0.4s 用 `proc_pid_rusage` 取进程 CPU 增量，`delta ≥ 250_000ns` 连续 2 拍 → busy，连续 2 拍无增长 → 不忙。仅当标题通道没被确认（用户设了 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`，标题 5s 不新鲜）时生效：`guard !titleChannelActive, now >= titleFreshUntil else { return }`。抑制期（`suppressUntil` 激活/切走 1.2s、`userInputUntil` 打字 0.8s）内**仍必须推进 `lastCpuNanos` 基线**再 return，否则窗口过后首拍会把攒下的 CPU 当爆发误判成忙（Bug#2）。
+
+busy 的消费方：`onBusy(true)` → `Store.runningKeys` 加 key（会话行橙色转圈，`TimelineView` 驱动）；`onBusy(false)` 时若 pane 在后台且 `awayOutput == true` → `unreadKeys` 打绿点。前台终端另有左上角「工作中」胶囊（`terminalArea` 的 `.overlay(alignment: .topLeading)`）。
+
 ---
 
 ## 10. 已知坑（改代码前必读）
@@ -630,6 +640,9 @@ view.startProcess(executable: "/bin/zsh",
 - [x] App 图标：`scripts/make_icon.py` 从 `ClawdMark` 的 cells 生成，`Info.plist` 带 `CFBundleIconFile=AppIcon`。
 - [x] 硬编码路径 `panel.directoryURL`：改为从 `FileManager.default.homeDirectoryForCurrentUser` 派生。
 - [x] 遗留文件清理：根 `main.swift`、`order.json`、`main.swift.bak66` 已删除。
+- [x] 忙闲指示（loading）：OSC 0 标题 spinner 主通道 + CPU 采样兜底，会话行转圈、终端「工作中」胶囊、后台绿点（见 §9.1）。
+- [x] 会话总结：`Session.summary` 来自 jsonl 尾部 `ai-title`/`summary` 记录，会话行第二行显示「相对时间 · 总结」（见 §4.3）。
+- [x] 滚轮翻页：vendored SwiftTerm 的 alternate buffer 滚轮改发 `cmdPageUp/PageDown`，不再发方向键（claude 会把 ↑ 当历史导航）。
 
 ---
 
