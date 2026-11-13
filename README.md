@@ -111,6 +111,10 @@ open dist/ClaudePicker.app
 | `~/.claude/settings.json` | Claude CLI 自身配置（状态栏读写它） |
 | `~/.claude/projects/` | 会话数据源 |
 
+## Git 面板
+
+支持文件暂存与差异查看、提交、获取/拉取/推送、分支切换和工作树管理。操作语义与回归测试见 [Git 面板说明](docs/git-panel.md)。
+
 ## 开发
 
 完整开发文档见 [DEVELOPMENT.md](DEVELOPMENT.md)：源码地图、数据链路、状态机、UI 常量、终端集成、已知坑、迭代 checklist。

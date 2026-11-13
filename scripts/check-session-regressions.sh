@@ -28,9 +28,9 @@ if [[ -f "$build_dir/SwiftTerm.o" ]]; then
     module_dir="$build_dir"
     objects=("$build_dir/SwiftTerm.o")
 fi
-swiftc -I "$module_dir" Sources/ClaudeDeck/Models.swift "$check_dir/TerminalPane.swift" \
+swiftc -I "$module_dir" Sources/ClaudeDeck/Models.swift Sources/ClaudeDeck/Git.swift "$check_dir/TerminalPane.swift" \
     "$check_dir/main.swift" "${objects[@]}" -o "$check_dir/terminal-checks" > "$check_dir/terminal-build.log" 2>&1 \
-    || { head -35 "$check_dir/terminal-build.log"; exit 1; }
+    || { (grep -n -C 3 "error:" "$check_dir/terminal-build.log" || tail -20 "$check_dir/terminal-build.log"); exit 1; }
 result=0
 "$check_dir/session-checks" || result=1
 "$check_dir/terminal-checks" || result=1

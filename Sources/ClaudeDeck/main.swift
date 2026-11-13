@@ -86,6 +86,30 @@ final class Store: ObservableObject {
     @Published var usage = UsageSnapshot(session: nil, weekly: nil)
     @Published var usageLoading = false
     @Published var showSettings = false
+    // Git 面板状态
+    @Published var gitStatus = GitStatus()
+    private var gitContext = ""
+    private var gitStatusRequest = UUID()
+    private var gitExtrasRequest = UUID()
+    private var gitDiffRequest = UUID()
+    @Published var gitLoading = false
+    @Published var showGit = false
+    @Published var gitMessage = ""          // 提交信息输入框（@State 不可用，绑定到 Store）
+    @Published var gitActionOutput = ""     // 最近一次 git 动作的输出
+    @Published var gitActionRunning = false
+    // v2：分支 / diff / worktree
+    @Published var gitTab = 0               // 面板分段：0 状态 / 1 分支 / 2 工作树
+    @Published var gitBranches: [GitBranch] = []
+    @Published var gitBranchesLoading = false
+    @Published var gitWorktrees: [GitWorktree] = []
+    @Published var gitWorktreesLoading = false
+    @Published var gitNewBranch = ""        // 新建分支输入
+    @Published var gitWorktreePath = ""     // 新建 worktree 路径输入
+    @Published var gitWorktreeBranch = ""   // 新建 worktree 分支输入
+    @Published var gitDiffText = ""
+    @Published var gitDiffTitle = ""
+    @Published var gitDiffLoading = false
+    @Published var showGitDiff = false
     @Published var dragging: TreeRow?
     @Published var sidebarW: CGFloat
     @Published var hoverRow: Int?
@@ -338,6 +362,7 @@ final class Store: ObservableObject {
         refreshSession(cwd: cwd, sid: sid ?? newId ?? "")
         pane = 1
         onFocusTerminal?()
+        refreshGit()
     }
 
     /// 新建会话插到该项目会话列表最前（tree.json 存的也是这个顺序 → 重启后仍在最前）
@@ -629,7 +654,279 @@ final class Store: ObservableObject {
         }
     }
 
+    // MARK: Git
 
+    /// Git 工作目录：优先当前终端 cwd，退回当前选中项目路径
+    var gitCwd: String {
+        activePath.isEmpty ? (currentProject?.path ?? "") : activePath
+    }
+
+    func refreshGit() {
+        let cwd = gitCwd
+        if gitContext != cwd {
+            gitContext = cwd
+            gitStatus = GitStatus()
+            gitBranches = []; gitWorktrees = []
+            gitMessage = ""; gitActionOutput = ""
+            gitNewBranch = ""; gitWorktreePath = ""; gitWorktreeBranch = ""
+            gitExtrasRequest = UUID(); gitDiffRequest = UUID()
+            gitBranchesLoading = false; gitWorktreesLoading = false
+            showGitDiff = false; gitDiffLoading = false; gitDiffText = ""
+        }
+        let request = UUID()
+        gitStatusRequest = request
+        guard !cwd.isEmpty else { gitLoading = false; return }
+        gitLoading = true
+        GitRunner.fetchStatus(cwd: cwd) { [weak self] st in
+            guard let self, self.gitStatusRequest == request else { return }
+            guard self.gitCwd == cwd else { self.refreshGit(); return }
+            self.gitStatus = st
+            self.gitLoading = false
+            if let error = st.errorText { self.gitActionOutput = error }
+            if self.showGit { self.refreshGitExtras() }
+        }
+    }
+
+    /// Bind each mutation to the displayed repository and refresh after completion.
+    private func runGit(_ cmdGroups: [[String]], resultPrefix: String = "",
+                        onSuccess: (() -> Void)? = nil) {
+        guard !gitActionRunning, !gitLoading, gitContext == gitCwd,
+              gitStatus.isRepo, !gitStatus.repoRoot.isEmpty else { return }
+        let cwd = gitStatus.repoRoot
+        let context = gitCwd
+        gitActionRunning = true
+        GitRunner.perform(cmdGroups, cwd: cwd) { [weak self] r in
+            guard let self else { return }
+            self.gitActionRunning = false
+            if self.gitCwd == context {
+                self.gitActionOutput = resultPrefix + (r.ok ? "：完成" : "：失败")
+                    + (r.output.isEmpty ? "" : "\n" + r.output)
+                if r.ok { onSuccess?() }
+            }
+            self.refreshGit()
+        }
+    }
+
+    private func confirmGitDiscard(_ detail: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "确认放弃改动？"
+        alert.informativeText = detail
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "放弃改动")
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    func gitStageAll() {
+        runGit([["add", "-A"]], resultPrefix: "暂存全部变更")
+    }
+
+    func gitUnstageAll() {
+        runGit([gitStatus.hasHead ? ["reset"] : ["rm", "--cached", "-r", "-f", "--", "."]], resultPrefix: "取消全部暂存")
+    }
+
+    func gitCommit() {
+        let msg = gitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !msg.isEmpty else {
+            gitActionOutput = "提交信息为空"
+            return
+        }
+        guard gitStatus.stagedCount > 0, !gitStatus.changes.contains(where: \.conflicted) else { return }
+        runGit([["commit", "-m", msg]], resultPrefix: "提交") {
+            if self.gitMessage.trimmingCharacters(in: .whitespacesAndNewlines) == msg { self.gitMessage = "" }
+        }
+    }
+
+    func gitFetch() {
+        runGit([["fetch", "--all", "--prune"]], resultPrefix: "获取远程更新")
+    }
+
+    func gitPull() {
+        runGit([["pull", "--ff-only"]], resultPrefix: "拉取")
+    }
+
+    func gitPush() {
+        guard !gitStatus.detached, gitStatus.hasHead else { return }
+        if gitStatus.hasRemote {
+            runGit([["push"]], resultPrefix: "推送")
+        } else if gitStatus.remotes.count == 1, let remote = gitStatus.remotes.first {
+            runGit([["push", "--set-upstream", "--", remote, gitStatus.branch]], resultPrefix: "推送并设置跟踪分支")
+        } else {
+            gitActionOutput = "请先在终端设置跟踪分支（没有远程仓库或存在多个远程仓库）"
+        }
+    }
+
+    func gitDiscardAll() {
+        guard confirmGitDiscard("将还原所有未暂存的已跟踪文件，并删除未跟踪文件和目录；已暂存内容保留。此操作无法撤销。") else { return }
+        var groups: [[String]] = []
+        if gitStatus.changes.contains(where: { !$0.untracked && $0.unstaged }) { groups.append(["restore", "--worktree", "--", "."]) }
+        groups.append(["clean", "-fd"])
+        runGit(groups, resultPrefix: "放弃未暂存改动")
+    }
+
+    func gitStage(_ file: GitFileChange) {
+        runGit([["add", "--"] + file.paths], resultPrefix: "暂存 \(file.path)")
+    }
+
+    func gitUnstage(_ file: GitFileChange) {
+        runGit([gitStatus.hasHead ? ["reset", "--"] + file.paths : ["rm", "--cached", "-f", "--"] + file.paths], resultPrefix: "取消暂存 \(file.path)")
+    }
+
+    func gitDiscard(_ file: GitFileChange) {
+        guard file.unstaged, !file.conflicted, confirmGitDiscard("将放弃 \(file.path) 的未暂存改动；已暂存内容保留。此操作无法撤销。") else { return }
+        if file.untracked {
+            runGit([["clean", "-fd", "--", file.path]], resultPrefix: "删除 \(file.path)")
+        } else {
+            runGit([["restore", "--worktree", "--", file.path]], resultPrefix: "还原 \(file.path)")
+        }
+    }
+
+    // MARK: Git v2：分支 / diff / worktree
+
+    /// 面板打开或切 tab 时刷新分支与 worktree 列表
+    func refreshGitExtras() {
+        guard gitContext == gitCwd, gitStatus.isRepo, !gitStatus.repoRoot.isEmpty else { return }
+        let cwd = gitStatus.repoRoot
+        let context = gitCwd
+        let request = UUID()
+        gitExtrasRequest = request
+        gitBranchesLoading = true; gitWorktreesLoading = true
+        GitRunner.fetchBranches(cwd: cwd) { [weak self] list, error in
+            guard let self, self.gitExtrasRequest == request, self.gitCwd == context else { return }
+            if let error { self.gitActionOutput = "读取分支失败：\n" + error }
+            self.gitBranches = list
+            self.gitBranchesLoading = false
+        }
+        GitRunner.fetchWorktrees(cwd: cwd) { [weak self] list, error in
+            guard let self, self.gitExtrasRequest == request, self.gitCwd == context else { return }
+            if let error { self.gitActionOutput = "读取工作树失败：\n" + error }
+            self.gitWorktrees = list
+            self.gitWorktreesLoading = false
+        }
+    }
+
+    func gitCheckout(_ branch: GitBranch) {
+        // 远程分支：创建同名本地跟踪分支
+        if branch.remote {
+            let local = String(branch.name.split(separator: "/").dropFirst().joined(separator: "/"))
+            if let existing = gitBranches.first(where: { !$0.remote && $0.upstream == branch.name }) {
+                runGit([["switch", "--", existing.name]], resultPrefix: "切换到 \(existing.name)")
+            } else {
+                runGit([["switch", "--track", "-c", local, "--", branch.ref]], resultPrefix: "切换到 \(local)")
+            }
+        } else {
+            runGit([["switch", "--", branch.name]], resultPrefix: "切换到 \(branch.name)")
+        }
+    }
+
+    func gitCreateBranch() {
+        let name = gitNewBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            gitActionOutput = "分支名为空"
+            return
+        }
+        runGit([["check-ref-format", "--branch", name], ["switch", "-c", name]], resultPrefix: "新建分支 \(name)") {
+            if self.gitNewBranch.trimmingCharacters(in: .whitespacesAndNewlines) == name { self.gitNewBranch = "" }
+        }
+    }
+
+    func gitWorktreeAdd() {
+        let inputPath = gitWorktreePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !inputPath.isEmpty else {
+            gitActionOutput = "worktree 路径为空"
+            return
+        }
+        let path = (inputPath as NSString).expandingTildeInPath
+        let branch = gitWorktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let groups: [[String]]
+        if branch.isEmpty {
+            groups = [["worktree", "add", "--", path]]
+        } else if gitBranches.contains(where: { !$0.remote && $0.name == branch }) {
+            groups = [["worktree", "add", "--", path, branch]]
+        } else {
+            groups = [["check-ref-format", "--branch", branch], ["worktree", "add", "-b", branch, "--", path]]
+        }
+        runGit(groups, resultPrefix: "新建 worktree \(path)") {
+            if self.gitWorktreePath.trimmingCharacters(in: .whitespacesAndNewlines) == inputPath { self.gitWorktreePath = "" }
+            if self.gitWorktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines) == branch { self.gitWorktreeBranch = "" }
+        }
+    }
+
+    func gitWorktreeRemove(_ wt: GitWorktree) {
+        guard wt.path != gitStatus.repoRoot else { return }
+        let alert = NSAlert()
+        alert.messageText = "移除工作树？"
+        alert.informativeText = "将移除目录 \(wt.path)。分支仍保留；包含未提交内容或被锁定的工作树会拒绝移除。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "移除")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        runGit([["worktree", "remove", "--", wt.path]], resultPrefix: "移除 worktree \(wt.path)")
+    }
+
+    /// 在工作树中打开某个 worktree 目录（作为新项目加入侧边栏）
+    func gitOpenWorktree(_ wt: GitWorktree) {
+        _ = addDirectory(wt.path)
+        showGit = false
+        open(cwd: wt.path, sid: nil, label: (wt.path as NSString).lastPathComponent)
+    }
+
+    // MARK: Git diff
+
+    private func showDiff(_ args: [String], title: String) {
+        let cwd = gitStatus.repoRoot.isEmpty ? gitCwd : gitStatus.repoRoot
+        guard !cwd.isEmpty else { return }
+        guard gitContext == gitCwd, !gitLoading else { return }
+        let context = gitCwd
+        let request = UUID()
+        gitDiffRequest = request
+        gitDiffTitle = title
+        gitDiffText = ""
+        gitDiffLoading = true
+        showGitDiff = true
+        let safeArgs = [args[0], "--no-ext-diff", "--no-textconv"] + args.dropFirst()
+        GitRunner.fetchDiff(Array(safeArgs), cwd: cwd) { [weak self] text in
+            guard let self else { return }
+            guard self.gitDiffRequest == request, self.gitCwd == context else { return }
+            self.gitDiffText = text.isEmpty ? "（无差异）" : text
+            self.gitDiffLoading = false
+        }
+    }
+
+    /// 工作区未暂存改动
+    func gitDiffWorking() {
+        showDiff(["diff"], title: "工作区改动（未暂存）")
+    }
+
+    /// 暂存区改动
+    func gitDiffStaged() {
+        showDiff(["diff", "--cached"], title: "暂存区改动")
+    }
+
+    /// 单个文件改动（未跟踪文件用 /dev/null 对比）
+    func gitDiffFile(_ file: GitFileChange, staged: Bool? = nil) {
+        if file.untracked {
+            showDiff(["diff", "--no-index", "--", "/dev/null", file.path], title: file.path)
+        } else if staged ?? file.staged {
+            showDiff(["diff", "--cached", "--"] + file.paths, title: "\(file.path)（暂存区）")
+        } else {
+            showDiff(["diff", "--", file.path], title: file.path)
+        }
+    }
+
+    /// 某次提交的完整改动
+    func gitDiffCommit(_ entry: GitLogEntry) {
+        showDiff(["show", "--format=%h %s%n作者：%an%n时间：%cr", entry.id], title: "提交 \(entry.id)")
+    }
+
+    /// 某个分支相对当前 HEAD 的差异
+    func gitDiffBranch(_ branch: GitBranch) {
+        showDiff(["diff", "HEAD...\(branch.ref)", "--stat"], title: "分支 \(branch.name) 相对 HEAD")
+    }
+
+    /// 两个提交之间的差异
+    func gitDiffBetween(_ from: GitLogEntry, _ to: GitLogEntry) {
+        showDiff(["diff", "\(from.id)", "\(to.id)"], title: "\(from.id) → \(to.id)")
+    }
 }
 
 // MARK: - 背景磨砂
@@ -1152,6 +1449,636 @@ struct SettingsPanel: View {
     }
 }
 
+// MARK: - Git 面板
+
+struct GitPanel: View {
+    @ObservedObject var store: Store
+    var onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(kTint)
+                Text("Git")
+                    .font(store.appFont(13, .semibold))
+                    .foregroundStyle(.white)
+                if store.gitLoading {
+                    ProgressView()
+                        .scaleEffect(0.55)
+                        .frame(width: 14, height: 14)
+                }
+                Spacer()
+                Button {
+                    store.refreshGit()
+                    store.refreshGitExtras()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("刷新状态")
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("关闭（Esc）")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            Divider().overlay(.white.opacity(0.08))
+
+            // 分段切换：状态 / 分支 / 工作树
+            HStack(spacing: 0) {
+                tabButton(0, "状态")
+                tabButton(1, "分支")
+                tabButton(2, "工作树")
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    switch store.gitTab {
+                    case 1:
+                        branchesSection
+                    case 2:
+                        worktreesSection
+                    default:
+                        branchRow
+                        actionBar
+                        changesSection
+                        logsSection
+                    }
+                    if !store.gitActionOutput.isEmpty {
+                        outputBox
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .frame(width: 560)
+        .frame(maxHeight: 620)
+        .onAppear { store.refreshGitExtras() }
+        .background {
+            ZStack {
+                BehindBlur(material: .hudWindow)
+                Color.black.opacity(0.35)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
+    }
+
+    // MARK: 子视图
+
+    private var branchRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.45))
+            Text(abbrevPath(store.gitStatus.repoRoot.isEmpty ? store.gitCwd : store.gitStatus.repoRoot))
+                .font(.system(size: 10.5))
+                .foregroundStyle(.white.opacity(0.6))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            HStack(spacing: 6) {
+                badge("分支：\(store.gitStatus.branch)", color: .white.opacity(0.74))
+                if !store.gitStatus.upstream.isEmpty {
+                    badge("上游：\(store.gitStatus.upstream)", color: .white.opacity(0.5))
+                }
+                if store.gitStatus.ahead > 0 {
+                    badge("↑\(store.gitStatus.ahead)", color: Color(red: 0.55, green: 0.85, blue: 0.55))
+                }
+                if store.gitStatus.behind > 0 {
+                    badge("↓\(store.gitStatus.behind)", color: Color(red: 0.55, green: 0.75, blue: 0.95))
+                }
+            }
+        }
+    }
+
+    private var actionBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                actionButton("获取", icon: "arrow.clockwise", disabled: store.gitStatus.remotes.isEmpty) { store.gitFetch() }
+                actionButton("拉取", icon: "arrow.down.circle", disabled: !store.gitStatus.hasRemote) { store.gitPull() }
+                actionButton("推送", icon: "arrow.up.circle", disabled: store.gitStatus.detached || !store.gitStatus.hasHead || store.gitStatus.remotes.isEmpty) { store.gitPush() }
+                actionButton("暂存全部", icon: "plus.square.on.square", disabled: store.gitStatus.changes.isEmpty) { store.gitStageAll() }
+                actionButton("取消暂存", icon: "minus.square", disabled: store.gitStatus.stagedCount == 0) { store.gitUnstageAll() }
+                actionButton("放弃未暂存", icon: "trash", disabled: !store.gitStatus.changes.contains(where: \.unstaged) || store.gitStatus.changes.contains(where: \.conflicted), danger: true) { store.gitDiscardAll() }
+                Spacer()
+                if store.gitActionRunning {
+                    ProgressView()
+                        .scaleEffect(0.55)
+                        .frame(width: 14, height: 14)
+                }
+            }
+            HStack(spacing: 6) {
+                TextField("提交信息…", text: $store.gitMessage)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(.white.opacity(0.07))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+                            }
+                    }
+                    .onSubmit { store.gitCommit() }
+                actionButton("提交", icon: "checkmark.circle.fill",
+                           disabled: store.gitStatus.changes.contains(where: \.conflicted) || store.gitStatus.stagedCount == 0 || store.gitMessage.trimmingCharacters(in: .whitespaces).isEmpty) {
+                    store.gitCommit()
+                }
+            }
+        }
+    }
+
+    private var outputBox: some View {
+        Text(store.gitActionOutput)
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.75))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(.black.opacity(0.3))
+            }
+            .lineLimit(6)
+            .textSelection(.enabled)
+    }
+
+    private var changesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("变更文件（\(store.gitStatus.changes.count)）")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer()
+                smallTextButton("工作区 diff") { store.gitDiffWorking() }
+                smallTextButton("暂存区 diff") { store.gitDiffStaged() }
+            }
+            if store.gitStatus.changes.isEmpty {
+                Text(store.gitStatus.isRepo ? "工作区干净" : "当前目录不是 Git 仓库")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.4))
+            } else {
+                ForEach(store.gitStatus.changes) { f in
+                    HStack(spacing: 6) {
+                        Text(f.statusLabel)
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(fileStatusColor(f))
+                            .frame(width: 42, alignment: .leading)
+                        Text(f.path)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        miniButton("Δ", help: "查看该文件 diff") { store.gitDiffFile(f) }
+                        if f.staged {
+                            miniButton("−", help: "取消暂存") { store.gitUnstage(f) }
+                        }
+                        if f.unstaged {
+                            miniButton("+", help: "暂存") { store.gitStage(f) }
+                        }
+                        if f.staged && f.unstaged {
+                            miniButton("W", help: "查看未暂存 diff") { store.gitDiffFile(f, staged: false) }
+                        }
+                        if f.unstaged && !f.conflicted {
+                            miniButton("×", help: "放弃未暂存改动", danger: true) { store.gitDiscard(f) }
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(.white.opacity(0.04))
+                    }
+                }
+            }
+        }
+    }
+
+    private var logsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("最近提交")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+            if store.gitStatus.logs.isEmpty {
+                Text("无提交记录")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.4))
+            } else {
+                ForEach(store.gitStatus.logs) { e in
+                    HStack(spacing: 6) {
+                        Text(e.id)
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(kTint.opacity(0.9))
+                        Text(e.subject)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 4)
+                        Text("\(e.author) · \(e.relTime)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.35))
+                        miniButton("Δ", help: "查看该提交 diff") { store.gitDiffCommit(e) }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(.white.opacity(0.04))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: 分支 / 工作树 / tab
+
+    private func tabButton(_ idx: Int, _ title: String) -> some View {
+        Button {
+            store.gitTab = idx
+        } label: {
+            Text(title)
+                .font(.system(size: 11, weight: store.gitTab == idx ? .semibold : .regular))
+                .foregroundStyle(store.gitTab == idx ? AnyShapeStyle(kTint) : AnyShapeStyle(.white.opacity(0.55)))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(.white.opacity(store.gitTab == idx ? 0.09 : 0.0))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var branchesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("分支（\(store.gitBranches.count)）")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                if store.gitBranchesLoading {
+                    ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                }
+                Spacer()
+            }
+            // 新建分支
+            HStack(spacing: 6) {
+                TextField("新分支名…", text: $store.gitNewBranch)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(.white.opacity(0.07))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+                            }
+                    }
+                    .onSubmit { store.gitCreateBranch() }
+                actionButton("新建并切换", icon: "plus", disabled: store.gitNewBranch.trimmingCharacters(in: .whitespaces).isEmpty) {
+                    store.gitCreateBranch()
+                }
+            }
+            if store.gitBranches.isEmpty && !store.gitBranchesLoading {
+                Text(store.gitStatus.isRepo ? "无分支信息" : "当前目录不是 Git 仓库")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.4))
+            } else {
+                ForEach(store.gitBranches) { b in
+                    HStack(spacing: 6) {
+                        Image(systemName: b.current ? "checkmark.circle.fill" : (b.remote ? "globe" : "arrow.triangle.branch"))
+                            .font(.system(size: 9))
+                            .foregroundStyle(b.current ? AnyShapeStyle(kTint) : AnyShapeStyle(.white.opacity(b.remote ? 0.35 : 0.5)))
+                        Text(b.name)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.white.opacity(b.remote ? 0.55 : 0.85))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(b.sha)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.3))
+                        Spacer(minLength: 4)
+                        if !b.upstream.isEmpty {
+                            badge(b.upstream, color: .white.opacity(0.5))
+                        }
+                        if b.current {
+                            badge("当前", color: kTint)
+                        } else {
+                            actionButton("切换", icon: "arrow.left.arrow.right", disabled: store.gitActionRunning) {
+                                store.gitCheckout(b)
+                            }
+                        }
+                        miniButton("Δ", help: "与当前分支比较（--stat）") { store.gitDiffBranch(b) }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(.white.opacity(b.current ? 0.07 : 0.04))
+                    }
+                }
+            }
+        }
+    }
+
+    private var worktreesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("工作树（\(store.gitWorktrees.count)）")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                if store.gitWorktreesLoading {
+                    ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                }
+                Spacer()
+            }
+            // 新建 worktree
+            HStack(spacing: 6) {
+                TextField("路径…", text: $store.gitWorktreePath)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(.white.opacity(0.07))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+                            }
+                    }
+                TextField("分支（可选）…", text: $store.gitWorktreeBranch)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(.white.opacity(0.07))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+                            }
+                    }
+                    .frame(width: 110)
+                    .onSubmit { store.gitWorktreeAdd() }
+                actionButton("添加", icon: "plus", disabled: store.gitWorktreePath.trimmingCharacters(in: .whitespaces).isEmpty || store.gitActionRunning) {
+                    store.gitWorktreeAdd()
+                }
+            }
+            if store.gitWorktrees.isEmpty && !store.gitWorktreesLoading {
+                Text(store.gitStatus.isRepo ? "无工作树信息" : "当前目录不是 Git 仓库")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.4))
+            } else {
+                ForEach(store.gitWorktrees) { wt in
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.45))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(abbrevPath(wt.path))
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.8))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text("\(wt.branch) · \(wt.head)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.35))
+                        }
+                        Spacer(minLength: 4)
+                        actionButton("打开", icon: "square.and.arrow.up", disabled: store.gitActionRunning) {
+                            store.gitOpenWorktree(wt)
+                        }
+                        actionButton("移除", icon: "trash", disabled: store.gitActionRunning || wt.path == store.gitStatus.repoRoot, danger: true) {
+                            store.gitWorktreeRemove(wt)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(.white.opacity(0.04))
+                    }
+                }
+            }
+        }
+    }
+
+    private func smallTextButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(.white.opacity(0.06))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: 辅助
+
+    private func badge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.white.opacity(0.06))
+            }
+    }
+
+    private func actionButton(_ title: String, icon: String, disabled: Bool = false, danger: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .foregroundStyle(disabled ? AnyShapeStyle(.white.opacity(0.28)) : (danger ? AnyShapeStyle(Color(red: 0.95, green: 0.45, blue: 0.4)) : AnyShapeStyle(.white.opacity(0.8))))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(.white.opacity(disabled ? 0.03 : 0.08))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                    }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled || store.gitActionRunning || store.gitLoading)
+    }
+
+    private func miniButton(_ title: String, help: String, danger: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(danger ? Color(red: 0.95, green: 0.45, blue: 0.4) : .white.opacity(0.6))
+                .frame(width: 18, height: 18)
+                .background {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(.white.opacity(0.06))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .disabled(store.gitActionRunning || store.gitLoading)
+    }
+
+    private func fileStatusColor(_ f: GitFileChange) -> Color {
+        if f.conflicted { return .red }
+        if f.untracked { return .white.opacity(0.45) }
+        if f.status.contains("A") { return Color(red: 0.55, green: 0.85, blue: 0.55) }
+        if f.status.contains("D") { return Color(red: 0.95, green: 0.45, blue: 0.4) }
+        if f.status.contains("M") { return kTint }
+        return .white.opacity(0.6)
+    }
+
+    private func abbrevPath(_ p: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if p.hasPrefix(home) { return "~" + p.dropFirst(home.count) }
+        return p
+    }
+}
+
+// MARK: - Diff 查看
+
+struct GitDiffView: View {
+    @ObservedObject var store: Store
+    var onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(kTint)
+                Text("差分")
+                    .font(store.appFont(13, .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                Text(store.gitDiffTitle)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if store.gitDiffLoading {
+                    ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                }
+                Spacer()
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 22, height: 22)
+                        .background { Circle().fill(.white.opacity(0.08)) }
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("关闭（Esc）")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            Divider().overlay(.white.opacity(0.08))
+
+            if store.gitDiffLoading && store.gitDiffText.isEmpty {
+                VStack(spacing: 8) {
+                    ProgressView()
+                    Text("正在生成差分…")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(20)
+            } else {
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        let lines = store.gitDiffText.components(separatedBy: "\n")
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(diffLineColor(line))
+                                .fixedSize(horizontal: true, vertical: false)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .padding(10)
+                }
+                .background { Color.black.opacity(0.25) }
+                .textSelection(.enabled)
+            }
+        }
+        .frame(width: 680)
+        .frame(maxHeight: 640)
+        .background {
+            ZStack {
+                BehindBlur(material: .hudWindow)
+                Color.black.opacity(0.35)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
+    }
+
+    private func diffLineColor(_ line: String) -> Color {
+        if line.hasPrefix("+++") || line.hasPrefix("---") { return .white.opacity(0.4) }
+        if line.hasPrefix("+") { return Color(red: 0.55, green: 0.85, blue: 0.55) }
+        if line.hasPrefix("-") { return Color(red: 0.95, green: 0.45, blue: 0.4) }
+        if line.hasPrefix("@@") { return Color(red: 0.5, green: 0.7, blue: 1.0) }
+        if line.hasPrefix("diff ") || line.hasPrefix("index ") { return .white.opacity(0.5) }
+        return .white.opacity(0.78)
+    }
+}
+
 // MARK: - 状态栏
 
 struct StatusBarView: View {
@@ -1210,6 +2137,7 @@ struct StatusBarView: View {
 
             Spacer(minLength: 8)
 
+            gitButton
 
             UsageRing(snapshot: store.usage, loading: store.usageLoading)
                 .padding(.trailing, 12)
@@ -1221,10 +2149,53 @@ struct StatusBarView: View {
         .overlay(alignment: .top) {
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
         }
+        .onChange(of: store.gitCwd) { _, _ in store.refreshGit() }
     }
 
     private var sep: some View {
         Rectangle().fill(.white.opacity(0.07)).frame(width: 1, height: 12)
+    }
+
+    /// Git 状态按钮：分支名 + 变更计数 + ahead/behind，点击打开 Git 面板
+    @ViewBuilder
+    private var gitButton: some View {
+        if store.gitStatus.isRepo {
+            Button {
+                if !store.showGit { store.refreshGit(); store.refreshGitExtras() }
+                store.showGit.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: store.gitLoading ? "arrow.triangle.2.circlepath" : "arrow.triangle.branch")
+                        .font(.system(size: 9.5, weight: .semibold))
+                    Text(store.gitStatus.branch)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .lineLimit(1)
+                    if store.gitStatus.ahead > 0 {
+                        Text("↑\(store.gitStatus.ahead)")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.55, green: 0.85, blue: 0.55))
+                    }
+                    if store.gitStatus.behind > 0 {
+                        Text("↓\(store.gitStatus.behind)")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.55, green: 0.75, blue: 0.95))
+                    }
+                    if store.gitStatus.dirtyCount > 0 {
+                        Text("●\(store.gitStatus.dirtyCount)")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(kTint)
+                    }
+                }
+                .foregroundStyle(store.showGit ? AnyShapeStyle(kTint) : AnyShapeStyle(.white.opacity(0.74)))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(height: 30, alignment: .center)
+            .help("Git：\(store.gitStatus.branch)（点击查看面板）")
+            .padding(.trailing, 10)
+        }
     }
 
     /// borderlessButton 的 Menu 会把 label 当模板图渲染，复合 label 里只能用 SF Symbols 图标 + Text；
@@ -1285,7 +2256,20 @@ struct PickerView: View {
                     .transition(.opacity)
             }
 
-
+            if store.showGit {
+                Color.black.opacity(0.32)
+                    .ignoresSafeArea()
+                    .onTapGesture { store.showGit = false }
+                GitPanel(store: store, onClose: { store.showGit = false })
+                    .transition(.opacity)
+            }
+            if store.showGitDiff {
+                Color.black.opacity(0.32)
+                    .ignoresSafeArea()
+                    .onTapGesture { store.showGitDiff = false }
+                GitDiffView(store: store, onClose: { store.showGitDiff = false })
+                    .transition(.opacity)
+            }
         }
         .background {
             ZStack {
@@ -1650,6 +2634,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if ev.keyCode == 53 { self.store.showSettings = false; return nil }
                 return ev
             }
+            if self.store.showGitDiff {
+                if ev.keyCode == 53 { self.store.showGitDiff = false; return nil }
+                return ev
+            }
+            if self.store.showGit {
+                if ev.keyCode == 53 { self.store.showGit = false; return nil }
+                return ev
+            }
             if ev.keyCode == 11 && ev.modifierFlags.contains(.command) {
                 self.store.toggleSidebar()
                 return nil
@@ -1715,9 +2707,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         store.refreshUsage()
+        store.refreshGit()
         usageTimer = Timer.scheduledTimer(withTimeInterval: 90, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.store.refreshUsage()
+                self?.store.refreshGit()
             }
         }
 
@@ -1832,6 +2826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window?.makeKeyAndOrderFront(nil)
         // 外部可能改过 settings.json，重新激活时同步一次
         store.reloadClaudeOptions()
+        store.refreshGit()
     }
 
     func applicationWillTerminate(_ n: Notification) {
