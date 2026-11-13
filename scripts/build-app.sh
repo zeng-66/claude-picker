@@ -77,12 +77,28 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>ClaudePicker · 本地 Claude Code 会话浏览器</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Claude Code 需要访问「下载」文件夹，以便在其中运行会话、读取项目文件。</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Claude Code 需要访问「文稿」文件夹，以便在其中运行会话、读取项目文件。</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Claude Code 需要访问「桌面」文件夹，以便在其中运行会话、读取项目文件。</string>
 </dict>
 </plist>
 PLIST
 
-echo "==> 5/6 ad-hoc 签名"
-codesign --force --deep --sign - "$APP"
+# 用固定的本地自签证书签名。ad-hoc 签名的 designated requirement 会绑定 cdhash，
+# 每次重建 cdhash 都变，导致 TCC（下载/文稿/桌面）授权永远失配、每次都要重新弹窗。
+# 用证书签名后 DR 变成 certificate leaf，跨重建稳定，用户点一次「允许」即可长期有效。
+SIGN_ID="${SIGN_ID:-ClaudePicker Local Dev}"
+
+echo "==> 5/6 签名（${SIGN_ID}）"
+if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_ID"; then
+	codesign --force --deep --sign "$SIGN_ID" --identifier "$BUNDLE_ID" "$APP"
+else
+	echo "    !! 未找到证书 ${SIGN_ID}，退回 ad-hoc 签名（TCC 授权无法跨重建保持）"
+	codesign --force --deep --sign - --identifier "$BUNDLE_ID" "$APP"
+fi
 codesign --verify --verbose=2 "$APP" 2>&1 | tail -3
 
 echo "==> 6/6 打包"
