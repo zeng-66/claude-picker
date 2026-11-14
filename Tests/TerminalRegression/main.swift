@@ -156,7 +156,11 @@ MainActor.assumeIsolated {
     try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: command.path)
     let session = TerminalSession(cwd: directory.path, resumeId: nil, options: RenderOptions(), fontName: "", fontSize: 12)
     defer { session.terminate() }
-    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    // 等假 claude（tee）真正起来再发滚轮：机器忙时进程启动可能超过 0.2 秒
+    let startDeadline = Date().addingTimeInterval(3)
+    while !FileManager.default.fileExists(atPath: capture.path), Date() < startDeadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
     session.view.feed(text: "\u{1b}[?1049h\u{1b}[?1000h\u{1b}[?1006h")
     RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     let wheel = NSEvent(cgEvent: CGEvent(scrollWheelEvent2Source: nil, units: .line,

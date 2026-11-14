@@ -1,0 +1,1585 @@
+.app {
+  display: grid;
+  grid-template-columns: 210px minmax(220px, 1fr) minmax(570px, 55%);
+  grid-template-rows: 59px minmax(0, 1fr) 29px;
+  min-width: 1000px;
+}
+.titlebar {
+  grid-column: 1/-1;
+  grid-row: 1;
+}
+.shell {
+  grid-column: 3;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #3a3b40;
+  min-width: 0;
+  overflow: hidden;
+}
+.statusbar {
+  grid-column: 1/-1;
+  grid-row: 3;
+}
+.project-context {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  background: #222326;
+  border-right: 1px solid #36373c;
+  padding: 19px 8px 10px;
+  min-height: 0;
+  overflow: auto;
+}
+.project-context-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 7px 20px;
+  font-size: 11px;
+}
+.project-context-heading > span {
+  display: flex;
+  gap: 12px;
+  color: #868a92;
+}
+.project-context-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 14px 6px;
+  color: #b2b4bb;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.project-context-group > b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-context-group > svg {
+  flex-shrink: 0;
+}
+.project-context-group > small {
+  margin-left: auto;
+}
+.context-session {
+  padding: 11px 10px 11px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font-size: 10px;
+  color: #a0a2a8;
+}
+.context-session b {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-session small {
+  font-size: 9px;
+  color: #737780;
+}
+.context-session.selected {
+  background: #49392f;
+  border-color: #80604a;
+  color: #ecd2c0;
+}
+.context-add {
+  margin-top: auto;
+  min-height: 30px;
+  padding: 9px;
+  background: #2e2f33;
+  color: #b7b9c0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+.session-context {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0e1014;
+}
+.session-context > header {
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-bottom: 1px solid #24262b;
+  font-size: 10px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.session-context > header > svg {
+  color: #b19d8d;
+}
+.session-context > header > span {
+  color: #686e79;
+  margin-left: auto;
+  font-size: 9px;
+}
+.session-terminal {
+  padding: 24px 18px;
+  flex: 1;
+  overflow: auto;
+  font:
+    11px/1.9 Menlo,
+    'PingFang SC',
+    monospace;
+  color: #b8bbc4;
+}
+.terminal-welcome {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 36px;
+}
+.terminal-welcome b {
+  color: #dcaa87;
+  font-size: 19px;
+}
+.terminal-welcome span {
+  color: #717884;
+  font-size: 10px;
+}
+.terminal-user {
+  padding: 12px;
+  background: #23252b;
+  border-left: 2px solid #88745f;
+  line-height: 1.9;
+}
+.terminal-answer {
+  padding-top: 20px;
+}
+.terminal-answer p {
+  color: #b4b8c3;
+  font-size: 11px;
+  line-height: 1.9;
+}
+.terminal-command {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  margin-top: 45px;
+  border-top: 1px solid #525660;
+  border-bottom: 1px solid #525660;
+  padding: 10px 0;
+  color: #d2a181;
+}
+.terminal-caret {
+  height: 15px;
+  width: 6px;
+  background: #d2a181;
+}
+.session-context > footer {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 10px 14px;
+  border-top: 1px solid #282b31;
+  color: #8b8f98;
+  font-size: 9px;
+  flex-wrap: wrap;
+}
+.shell .sidebar {
+  width: 100%;
+  padding: 0;
+  background: #1c1d20;
+  border: 0;
+  border-bottom: 1px solid #34353a;
+  flex-shrink: 0;
+  min-height: 0;
+  display: block;
+}
+.shell .workspace-label,
+.shell .side-bottom {
+  display: none;
+}
+.shell .repos {
+  margin: 0;
+  padding: 9px 12px;
+  display: flex;
+  gap: 5px;
+  border-bottom: 1px solid #2b2c30;
+  overflow: auto;
+}
+.shell .repo {
+  width: auto;
+  padding: 6px 8px;
+  font-size: 10px;
+  margin: 0;
+  flex-shrink: 0;
+}
+.shell .repo svg {
+  width: 14px;
+  height: 14px;
+}
+.shell .repo small {
+  display: none;
+}
+.shell nav {
+  display: flex;
+  overflow: auto;
+  padding: 5px 8px;
+  gap: 3px;
+  scrollbar-width: thin;
+}
+.shell nav button {
+  width: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  gap: 5px;
+  padding: 8px 9px;
+  margin: 0;
+}
+.shell nav button svg {
+  width: 14px;
+  height: 14px;
+}
+.shell nav button small {
+  font-size: 9px;
+  margin-left: 2px;
+}
+.shell main {
+  min-height: 0;
+}
+.shell .toolbar {
+  height: auto;
+  min-height: 76px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+  gap: 9px;
+  align-content: center;
+}
+.shell .crumb {
+  font-size: 10px;
+}
+.shell .toolbar-actions {
+  gap: 5px;
+  width: 100%;
+}
+.shell .toolbar-actions button {
+  font-size: 10px;
+  padding: 5px 7px;
+}
+.shell .toolbar-actions button:first-child {
+  margin-right: auto;
+  max-width: 240px;
+}
+.shell .toolbar-actions small {
+  font-size: 9px;
+}
+.shell .separator {
+  display: none;
+}
+.shell .page-heading {
+  padding: 16px 14px;
+}
+.shell .page-heading h1 {
+  font-size: 18px;
+  gap: 8px;
+}
+.shell .eyebrow,
+.shell .page-heading p {
+  display: none;
+}
+.shell .page-heading > button {
+  font-size: 10px;
+  padding: 6px 8px;
+}
+.shell .heading-tag {
+  font-size: 9px;
+  padding: 3px 5px;
+}
+.shell .workarea {
+  grid-template-columns: 215px minmax(0, 1fr);
+  margin: 0 12px 12px;
+  min-height: 0;
+}
+.shell .panel-head {
+  padding: 0 10px;
+  height: 43px;
+}
+.shell .panel-head b {
+  font-size: 10px;
+}
+.shell .file-filter {
+  padding: 10px 12px 4px;
+}
+.shell .file-main b {
+  font-size: 10px;
+}
+.shell .file-main small {
+  font-size: 8px;
+}
+.shell .file-main {
+  gap: 6px;
+  padding: 10px 0;
+}
+.shell .file-main > svg {
+  width: 14px;
+}
+.shell .file-row {
+  padding: 0 8px;
+}
+.shell .commit-box {
+  padding: 12px;
+}
+.shell .commit-title {
+  font-size: 10px;
+}
+.shell .commit-options label {
+  font-size: 8px;
+}
+.shell .commit-btn {
+  font-size: 10px;
+}
+.shell .diff-title {
+  gap: 5px;
+}
+.shell .diff-title b {
+  max-width: 105px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell .diff-title span {
+  font-size: 9px;
+}
+.shell .diff-title svg {
+  display: none;
+}
+.shell .segmented button {
+  padding: 4px 5px;
+}
+.shell .diff-path {
+  height: auto;
+  min-height: 34px;
+  padding: 8px 10px;
+  font-size: 9px;
+  flex-wrap: wrap;
+}
+.shell .diff-path > div {
+  margin-left: auto;
+}
+.shell .code-columns {
+  min-width: 560px;
+}
+.shell .hunk {
+  font-size: 9px;
+  padding: 9px 10px;
+}
+.shell .hunk > span {
+  display: none;
+}
+.shell .hunk > button {
+  font-size: 8px;
+}
+.shell .diff-footer {
+  gap: 9px;
+  font-size: 8px;
+  padding: 0 10px;
+}
+.shell .diff-footer button {
+  font-size: 8px;
+}
+.shell .content-panel {
+  margin: 0 12px 12px;
+  padding: 12px;
+}
+.shell .content-tools {
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.shell .search-input {
+  width: 230px;
+}
+.shell .content-tools > .primary {
+  font-size: 10px;
+}
+.shell .entity-row,
+.shell .history-row {
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 14px 4px;
+}
+.shell .entity-row b,
+.shell .history-row b {
+  font-size: 10px;
+}
+.shell .entity-row > div,
+.shell .history-row > div {
+  flex: 1;
+  min-width: 220px;
+}
+.shell .entity-row p,
+.shell .history-row p {
+  font-size: 9px;
+}
+.shell .entity-row button,
+.shell .history-row button {
+  font-size: 9px;
+  padding: 6px 7px;
+}
+.shell .operation-grid {
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.shell .operation-grid button {
+  font-size: 10px;
+}
+.shell .conflict-columns {
+  grid-template-columns: 1fr;
+}
+.shell .conflict-banner {
+  padding: 12px;
+}
+.shell .conflict-banner b {
+  font-size: 11px;
+}
+.shell .conflict-banner p {
+  font-size: 10px;
+}
+.shell .conflict h3 {
+  font-size: 10px;
+}
+@media (min-width: 1600px) {
+  .app {
+    grid-template-columns: 235px minmax(330px, 1fr) minmax(720px, 53%);
+  }
+  .shell .workarea {
+    grid-template-columns: 245px minmax(0, 1fr);
+  }
+}
+@media (max-width: 1000px) {
+  .app:not(.solo) {
+    min-width: 0;
+    grid-template-columns: 170px minmax(0, 1fr);
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .app:not(.solo) .project-context {
+    grid-column: 1;
+  }
+  .app:not(.solo) .session-context {
+    display: none;
+  }
+  .app:not(.solo) .shell {
+    grid-column: 2;
+  }
+  .app:not(.solo) .shell .workarea {
+    grid-template-columns: 210px minmax(0, 1fr);
+  }
+}
+@media (max-width: 480px) {
+  .app:not(.solo) {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 650px;
+  }
+  .app:not(.solo) .project-context {
+    display: none;
+  }
+  .app:not(.solo) .shell {
+    grid-column: 1;
+    border-left: 0;
+  }
+  .app:not(.solo) .shell .sidebar {
+    display: block;
+  }
+  .app:not(.solo) .shell nav button span,
+  .app:not(.solo) .shell nav button small {
+    display: inline;
+  }
+  .app:not(.solo) .shell .repos {
+    display: flex;
+  }
+  .app:not(.solo) .shell .workarea {
+    display: flex;
+    min-height: 0;
+    overflow: auto;
+  }
+  .app:not(.solo) .shell .changes {
+    min-height: 470px;
+    flex-shrink: 0;
+  }
+  .app:not(.solo) .shell .diff-panel {
+    min-height: 400px;
+    flex-shrink: 0;
+  }
+  .app:not(.solo) .shell .file-list {
+    min-height: 130px;
+    max-height: 230px;
+  }
+  .app:not(.solo) .shell .page-heading > button {
+    font-size: 10px;
+  }
+  .app:not(.solo) .shell .content-panel {
+    min-height: 0;
+  }
+  .app:not(.solo) .shell .toolbar-actions {
+    flex-wrap: nowrap;
+  }
+  .app:not(.solo) .shell .toolbar-actions button:first-child {
+    max-width: 170px;
+  }
+  .app:not(.solo) .shell .toolbar-actions .push {
+    margin-left: 0;
+  }
+  .app:not(.solo) .shell .heading-tag {
+    display: none;
+  }
+}
+.shell .code-columns.unified {
+  min-width: 380px;
+}
+.commit-overlay {
+  position: relative;
+  inset: auto;
+  grid-column: 3;
+  grid-row: 2;
+  padding: 12px;
+  background: #111316;
+  backdrop-filter: none;
+  min-width: 0;
+  min-height: 0;
+}
+.commit-detail {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+}
+.commit-file-list {
+  width: 180px;
+}
+.commit-summary h2 {
+  font-size: 14px;
+}
+.commit-preview-toolbar {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.commit-preview-toolbar > span {
+  max-width: 100%;
+}
+.commit-detail-header {
+  padding: 12px 14px;
+}
+.commit-summary {
+  padding: 14px;
+}
+.commit-detail-footer {
+  padding: 10px 12px;
+}
+@media (max-width: 1000px) {
+  .app:not(.solo) .commit-overlay {
+    grid-column: 2;
+  }
+}
+@media (max-width: 480px) {
+  .app:not(.solo) .commit-overlay {
+    grid-column: 1;
+    padding: 8px;
+  }
+  .app:not(.solo) .commit-file-list {
+    width: 100%;
+  }
+}
+/* 内嵌在 ClaudePicker 第三栏时：项目与会话由原生侧栏承担，这里只留 Git 工作台本体 */
+.app.solo {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 29px;
+  min-width: 0;
+}
+.app.solo .shell {
+  grid-column: 1;
+  grid-row: 1;
+  border-left: 0;
+}
+.app.solo .statusbar {
+  grid-column: 1;
+  grid-row: 2;
+}
+/* solo 内嵌第三栏：项目选择器与九项导航收成顶部一条，内容区吃满整宽，
+   对齐原型 three-column 的形态（第三栏不再被 150px 的左列分走宽度）。 */
+.app.solo .git-workspace-layout {
+  flex-direction: column;
+}
+.app.solo .git-workspace-layout > .sidebar {
+  width: 100% !important;
+  min-width: 0;
+  height: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-right: 0;
+  border-bottom: 1px solid #34353a;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.app.solo .git-workspace-layout > .sidebar nav {
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+  padding: 0;
+  overflow: visible;
+}
+.app.solo .git-workspace-layout > .sidebar nav button {
+  width: auto;
+  flex-shrink: 0;
+  padding: 6px 9px;
+  margin: 0;
+}
+.app.solo .git-nav-project {
+  flex-shrink: 0;
+}
+/* 导航条放不下时横向滚动；WKWebView 默认滚动条是粗白条，换成细暗色。 */
+.app.solo .git-workspace-layout > .sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3b40 transparent;
+}
+.app.solo .git-workspace-layout > .sidebar::-webkit-scrollbar {
+  height: 4px;
+}
+.app.solo .git-workspace-layout > .sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app.solo .git-workspace-layout > .sidebar::-webkit-scrollbar-thumb {
+  background: #3a3b40;
+  border-radius: 2px;
+}
+.app.session-collapsed {
+  grid-template-columns: 210px 44px minmax(570px, 1fr);
+}
+.session-context > header > .session-collapse {
+  margin-left: 7px;
+  border: 0;
+  background: none;
+  padding: 4px;
+  color: #8f939c;
+  font-size: 0;
+}
+.session-context > header > .session-collapse svg {
+  width: 15px;
+  height: 15px;
+}
+.session-context > header > .session-collapse:hover {
+  color: #dcad91;
+  background: #26282d;
+}
+.session-context.collapsed {
+  display: flex;
+  align-items: stretch;
+  background: #15171b;
+  border-right: 1px solid #303238;
+}
+.collapsed-terminal-rail {
+  height: 100%;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: #15171b !important;
+  padding: 15px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  color: #9a9fa8;
+}
+.collapsed-terminal-rail:hover {
+  background: #1e2024 !important;
+  color: #ddb095;
+}
+.collapsed-terminal-rail span {
+  writing-mode: vertical-rl;
+  letter-spacing: 4px;
+  font-size: 9px;
+  color: #777d86;
+}
+.collapsed-terminal-rail svg {
+  width: 16px;
+  height: 16px;
+}
+.collapsed-terminal-rail svg:first-child {
+  transform: rotate(180deg);
+}
+@media (max-width: 1000px) {
+  .app:not(.solo).session-collapsed {
+    grid-template-columns: 170px minmax(0, 1fr);
+  }
+  .app:not(.solo) .session-context.collapsed {
+    display: none;
+  }
+}
+.project-context-group.active-project {
+  color: #edc0a4;
+}
+.project-context-group.active-project > svg:nth-of-type(2) {
+  color: #d69370;
+}
+.context-session.created-session {
+  border-left: 2px solid #6f9c79;
+  background: #202b23;
+}
+.context-session.created-session small {
+  color: #7fa18a;
+}
+
+/* ---- T6：真实项目/会话行的忙闲标记与状态（数据来自原生 app.projects/app.sessions） ---- */
+.project-context-group {
+  cursor: pointer;
+}
+.project-context-group .group-caret {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-right: -2px;
+}
+.project-context-group .group-caret svg {
+  color: #8f939b;
+}
+.context-session {
+  /* 图标列 + 标题/时间两行，语义与第一栏会话行一致（转圈=运行中，绿点=完成未读） */
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px 9px 18px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.context-session:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.context-session .session-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.context-session .session-mark {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.context-session .session-mark.running > svg {
+  color: #d8a06a;
+  animation: session-spin 0.9s linear infinite;
+}
+.context-session .session-mark.unread::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4dd97a;
+}
+.context-session.created-session {
+  cursor: default;
+}
+@keyframes session-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.context-empty {
+  padding: 8px 10px 8px 30px;
+  font-size: 10px;
+  color: #737780;
+}
+.context-empty.inline {
+  font-size: 9px;
+}
+.context-more {
+  align-self: flex-start;
+  margin: 2px 0 6px 30px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 9px;
+  color: #8f939b;
+  cursor: pointer;
+}
+.context-more:hover {
+  color: #d8a06a;
+}
+.context-error {
+  margin: 4px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #3a2622;
+  border: 1px solid #7d4636;
+  font-size: 9px;
+  color: #e9b29d;
+}
+
+/* ===== 顶部一行：项目下拉 ｜ Git 工作台（含分支）｜ 文件预览 ===== */
+.workspace-tool-switcher {
+  position: relative;
+  z-index: 20;
+  gap: 8px;
+}
+.workspace-tool-switcher::before {
+  display: none;
+}
+.tool-project-picker {
+  height: 28px;
+  min-width: 0;
+  max-width: 200px;
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid #3c3e44;
+  border-radius: 6px;
+  background: #232429;
+  color: #c49476;
+  position: relative;
+}
+.tool-project-picker > svg {
+  flex-shrink: 0;
+}
+.tool-project-picker > svg:last-child {
+  color: #7f848d;
+  pointer-events: none;
+}
+.tool-project-picker select {
+  appearance: none;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: #d5d6da;
+  font-size: 10.5px;
+  font-weight: 600;
+  outline: 0;
+  text-overflow: ellipsis;
+}
+.tool-project-picker select option {
+  background: #232429;
+  color: #d5d6da;
+}
+.workspace-tool-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* Git 工作台标签 + 分支 */
+.branch-switcher {
+  position: relative;
+  min-width: 0;
+}
+.branch-tab {
+  user-select: none;
+  -webkit-user-select: none;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  min-width: 0;
+}
+.workspace-tool-switcher .branch-tab button {
+  padding: 6px 7px;
+}
+.branch-tab.active {
+  background: #342b26;
+}
+.workspace-tool-switcher .branch-tab.active button {
+  color: #e3b093;
+}
+.branch-tab-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.workspace-tool-switcher .branch-tab .branch-tab-caret {
+  padding: 6px 6px 6px 2px;
+}
+.branch-chip {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.22);
+  color: #c9cbd0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px;
+}
+.branch-busy {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid #e3b093;
+  border-right-color: transparent;
+  animation: branch-spin 0.8s linear infinite;
+}
+@keyframes branch-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.workspace-tool-switcher .branch-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 320px;
+  max-height: min(520px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  background: #1d1e22;
+  border: 1px solid #3a3b40;
+  border-radius: 9px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  z-index: 40;
+}
+.workspace-tool-switcher .branch-popover-actions {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid #2c2d32;
+}
+.workspace-tool-switcher .branch-popover-actions button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  border: 1px solid #34353a;
+  border-radius: 6px;
+  background: #24252a;
+  color: #c9cbd0;
+  font-size: 10px;
+}
+.workspace-tool-switcher .branch-popover-actions button.push {
+  color: #e3b093;
+  border-color: #4a3a30;
+}
+.workspace-tool-switcher .branch-popover-actions button:disabled {
+  opacity: 0.5;
+}
+.workspace-tool-switcher .branch-popover-actions small {
+  color: #858890;
+}
+.workspace-tool-switcher .branch-status {
+  padding: 6px 10px;
+  color: #e3b093;
+  font-size: 10px;
+}
+.workspace-tool-switcher .branch-error {
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid #5a3433;
+  border-radius: 6px;
+  background: #2a1f20;
+  color: #d78e8c;
+  font-size: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.workspace-tool-switcher .branch-error pre {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow: auto;
+  color: #c9a3a2;
+  font-size: 9.5px;
+}
+.workspace-tool-switcher .branch-dialog {
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid #3a3b40;
+  border-radius: 6px;
+  background: #24252a;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 10.5px;
+  color: #c9cbd0;
+}
+.workspace-tool-switcher .branch-dialog input {
+  height: 26px;
+  border: 1px solid #44464c;
+  border-radius: 5px;
+  background: #1b1c20;
+  color: #dadbdd;
+  padding: 0 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  outline: 0;
+}
+.workspace-tool-switcher .branch-dialog > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.workspace-tool-switcher .branch-dialog button {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #3c3e44;
+  border-radius: 5px;
+  background: #2a2b30;
+  color: #c9cbd0;
+  font-size: 10px;
+}
+.workspace-tool-switcher .branch-dialog button.primary {
+  background: #6b4a38;
+  border-color: #6b4a38;
+  color: #f1d6c6;
+}
+.workspace-tool-switcher .branch-dialog button.danger {
+  background: #5a2f2e;
+  border-color: #5a2f2e;
+  color: #f0c9c8;
+}
+.workspace-tool-switcher .branch-dialog button:disabled {
+  opacity: 0.5;
+}
+.workspace-tool-switcher .branch-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 8px 4px;
+  padding: 0 8px;
+  height: 26px;
+  border: 1px solid #34353a;
+  border-radius: 6px;
+  background: #18191c;
+  color: #6f737b;
+}
+.workspace-tool-switcher .branch-search input {
+  height: 100%;
+  padding: 0;
+  box-shadow: none;
+  border-radius: 0;
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: #dadbdd;
+  font-size: 10.5px;
+  outline: 0;
+}
+.workspace-tool-switcher .branch-list {
+  overflow: auto;
+  padding: 2px 6px 6px;
+  min-height: 0;
+}
+.workspace-tool-switcher .branch-group {
+  padding: 8px 6px 4px;
+  color: #6f737b;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+.workspace-tool-switcher .branch-empty {
+  padding: 4px 8px;
+  color: #6f737b;
+  font-size: 10px;
+}
+.workspace-tool-switcher .branch-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #c9cbd0;
+  font-size: 10.5px;
+  text-align: left;
+}
+.workspace-tool-switcher .branch-row:hover {
+  background: #2a2b30;
+}
+.workspace-tool-switcher .branch-row.current {
+  color: #e3b093;
+}
+.workspace-tool-switcher .branch-row svg {
+  flex-shrink: 0;
+  color: #7f848d;
+}
+.workspace-tool-switcher .branch-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.workspace-tool-switcher .branch-row em {
+  font-style: normal;
+  font-size: 9px;
+  color: #858890;
+  flex-shrink: 0;
+}
+.workspace-tool-switcher .branch-row em.cur {
+  color: #91bd9c;
+}
+.workspace-tool-switcher .branch-row em.gone {
+  color: #d78e8c;
+}
+.workspace-tool-switcher .branch-hint {
+  padding: 6px 10px;
+  border-top: 1px solid #2c2d32;
+  color: #6f737b;
+  font-size: 9px;
+}
+
+.workspace-tool-switcher .branch-menu {
+  position: absolute;
+  min-width: 190px;
+  padding: 4px;
+  background: #222327;
+  border: 1px solid #3a3b40;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  z-index: 60;
+}
+.workspace-tool-switcher .branch-menu-title {
+  padding: 5px 8px 6px;
+  color: #858890;
+  font-size: 9.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border-bottom: 1px solid #2f3035;
+  margin-bottom: 3px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-tool-switcher .branch-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #d5d6da;
+  font-size: 10.5px;
+  text-align: left;
+}
+.workspace-tool-switcher .branch-menu button:hover:not(:disabled) {
+  background: #3a2f29;
+  color: #f1d6c6;
+}
+.workspace-tool-switcher .branch-menu button:disabled {
+  opacity: 0.4;
+}
+.workspace-tool-switcher .branch-menu button.danger {
+  color: #d78e8c;
+}
+.workspace-tool-switcher .branch-menu-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: #2f3035;
+}
+
+/* ===== 第三栏内容区：收窄四周边距 ===== */
+.app.solo .git-workspace-layout .workarea {
+  margin: 6px 8px 8px !important;
+  border-radius: 7px;
+  grid-template-columns: var(--changes-w, 250px) minmax(0, 1fr) !important;
+  position: relative;
+}
+.app.solo .git-workspace-layout .content-panel {
+  margin: 6px 8px 8px !important;
+  padding: 12px !important;
+  border-radius: 7px;
+}
+.app.solo .git-workspace-layout .content-tools {
+  margin-bottom: 12px;
+}
+.app.solo .git-workspace-layout .panel-head {
+  height: 38px;
+  padding: 0 10px;
+}
+.app.solo .git-workspace-layout .file-filter {
+  padding: 8px 10px 4px;
+}
+.app.solo .git-workspace-layout .commit-box {
+  padding: 10px;
+  overflow: auto;
+  margin-top: 0;
+}
+.app.solo .git-workspace-layout .commit-title {
+  margin-bottom: 8px;
+}
+.app.solo .git-workspace-layout .file-list {
+  flex: 1;
+  min-height: 0;
+}
+.app.solo .file-browser {
+  grid-template-columns: var(--tree-w, 216px) minmax(0, 1fr) !important;
+  position: relative;
+}
+
+/* ===== 可拖动分割条 ===== */
+.splitter {
+  z-index: 5;
+  flex-shrink: 0;
+  touch-action: none;
+}
+.splitter-x {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+}
+.splitter-y {
+  position: relative;
+  height: 6px;
+  margin: -3px 0;
+  cursor: row-resize;
+}
+.splitter::after {
+  content: '';
+  position: absolute;
+  background: transparent;
+  transition: background 0.12s;
+}
+.splitter-x::after {
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+}
+.splitter-y::after {
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 2px;
+}
+.splitter:hover::after,
+body.is-resizing-x .splitter-x::after,
+body.is-resizing-y .splitter-y::after {
+  background: #de9771;
+}
+body.is-resizing-x,
+body.is-resizing-x * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body.is-resizing-y,
+body.is-resizing-y * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
+.workspace-tool-switcher .branch-menu button,
+.workspace-tool-switcher .branch-row {
+  justify-content: flex-start;
+}
+
+/* 会话 ⇄ 分支绑定提示条 */
+.follow-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 8px 0;
+  padding: 6px 10px;
+  border: 1px solid #5a4632;
+  border-radius: 7px;
+  background: #2a2420;
+  color: #e3c3a8;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+.follow-banner span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.follow-banner b {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  color: #f1d6c6;
+}
+.follow-banner em {
+  font-style: normal;
+  color: #a8907c;
+}
+.follow-banner button {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid #4a3a30;
+  border-radius: 5px;
+  background: #2f2924;
+  color: #e3c3a8;
+  font-size: 10px;
+}
+.follow-banner button.primary {
+  background: #6b4a38;
+  border-color: #6b4a38;
+  color: #f8e4d6;
+}
+
+/* 原生标题栏驱动的分支弹层：锚在第三栏右上角（按钮就在它正上方的标题栏里） */
+.app.solo .shell {
+  position: relative;
+}
+.workspace-tool-switcher.headless-host {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  z-index: 40;
+}
+.workspace-tool-switcher.headless-host .branch-popover {
+  left: auto;
+  right: 0;
+  top: 4px;
+}
+
+/* 「项目 / 分支」合一弹层：左列项目，右列该项目的分支 */
+.workspace-tool-switcher .branch-popover.with-projects {
+  width: min(540px, calc(100vw - 16px));
+  flex-direction: row;
+}
+.workspace-tool-switcher .branch-projects {
+  width: 180px;
+  flex-shrink: 0;
+  overflow: auto;
+  padding: 2px 6px 6px;
+  border-right: 1px solid #2c2d32;
+  background: #1a1b1e;
+}
+.workspace-tool-switcher .branch-project {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #c9cbd0;
+  font-size: 10.5px;
+  text-align: left;
+}
+.workspace-tool-switcher .branch-project span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-tool-switcher .branch-project svg {
+  flex-shrink: 0;
+  color: #7f848d;
+}
+.workspace-tool-switcher .branch-project:hover {
+  background: #2a2b30;
+}
+.workspace-tool-switcher .branch-project.current {
+  background: #342b26;
+  color: #e3b093;
+}
+.workspace-tool-switcher .branch-project.current svg {
+  color: #c49476;
+}
+.workspace-tool-switcher .branch-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workspace-tool-switcher .branch-row.picked {
+  background: #2c2620;
+  box-shadow: inset 0 0 0 1px #4a3a30;
+}
+
+/* ===== 工作区变更文件：单行（文件名 + 灰色小字目录）、可收起 ===== */
+.app.solo .git-workspace-layout .file-row .file-main span {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.app.solo .git-workspace-layout .file-row .file-main span b {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app.solo .git-workspace-layout .file-row .file-main span small {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9.5px;
+  color: #6f737b;
+  margin: 0;
+}
+.app.solo .git-workspace-layout .file-row .file-main {
+  padding-top: 5px;
+  padding-bottom: 5px;
+  min-width: 0;
+}
+.app.solo .git-workspace-layout .group-title {
+  cursor: pointer;
+  user-select: none;
+}
+.app.solo .git-workspace-layout .panel-head b {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.app.solo .git-workspace-layout .panel-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #858991;
+}
+.app.solo .git-workspace-layout .panel-collapse:hover {
+  background: #2a2b30;
+  color: #dadbdd;
+}
+.app.solo .git-workspace-layout .workarea.changes-collapsed {
+  grid-template-columns: 30px minmax(0, 1fr) !important;
+}
+.app.solo .git-workspace-layout .changes-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 10px 0;
+  border: 0;
+  border-right: 1px solid #34353a;
+  background: #1a1b1e;
+  color: #858991;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.app.solo .git-workspace-layout .changes-rail span {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+}
+.app.solo .git-workspace-layout .changes-rail small {
+  color: #e3b093;
+  font-size: 10px;
+}
+.app.solo .git-workspace-layout .changes-rail:hover {
+  background: #232429;
+  color: #dadbdd;
+}
+.app.solo .git-workspace-layout .group-title:focus {
+  outline: none;
+}
+.app.solo .git-workspace-layout .group-title:focus-visible {
+  outline: 1px solid #6b4a38;
+  outline-offset: -1px;
+}
+
+/* ===== 去掉状态栏、收紧四周边距 ===== */
+.app.solo.no-status {
+  grid-template-rows: minmax(0, 1fr);
+}
+.app.solo.no-status .log-panel {
+  bottom: 8px;
+  right: 8px;
+  border-radius: 8px;
+  z-index: 30;
+}
+.app.solo .git-workspace-layout .workarea {
+  margin: 4px !important;
+}
+.app.solo .git-workspace-layout .content-panel {
+  margin: 4px !important;
+}
+.app.solo .git-workspace-layout > .sidebar {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.app.solo .git-workspace-layout > .sidebar .nav-log {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #858991;
+}
+.app.solo .git-workspace-layout > .sidebar .nav-log:hover,
+.app.solo .git-workspace-layout > .sidebar .nav-log.active {
+  background: #342b26;
+  color: #e3b093;
+}
+.app.solo .git-workspace-layout .changes-rail {
+  width: 26px;
+}
+.app.solo .git-workspace-layout .workarea.changes-collapsed {
+  grid-template-columns: 26px minmax(0, 1fr) !important;
+}
+/* 导航条与操作日志按钮同一行：导航吃剩余宽度（放不下时横向滚动），按钮固定在最右 */
+.app.solo .git-workspace-layout > .sidebar {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center;
+}
+.app.solo .git-workspace-layout > .sidebar nav {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto !important;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.app.solo .git-workspace-layout > .sidebar nav::-webkit-scrollbar {
+  display: none;
+}

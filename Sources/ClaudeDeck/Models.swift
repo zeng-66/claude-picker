@@ -105,6 +105,27 @@ enum SessionScanner {
         return nil
     }
 
+    /// 会话最后一次记录的 git 分支（Claude Code 每条 jsonl 记录都带 `gitBranch`）。
+    /// 只读尾部一块，从后往前找第一条非空值；找不到返回 nil。
+    static func lastGitBranch(_ url: URL, bytes: Int = 65536) -> String? {
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? fh.close() }
+        guard let end = try? fh.seekToEnd() else { return nil }
+        let start = end > UInt64(bytes) ? end - UInt64(bytes) : 0
+        guard (try? fh.seek(toOffset: start)) != nil,
+              let chunk = try? fh.readToEnd(), !chunk.isEmpty else { return nil }
+        let key = Data("\"gitBranch\"".utf8)
+        for line in chunk.split(separator: 0x0a).reversed() {
+            let record = Data(line)
+            guard record.range(of: key) != nil,
+                  let obj = try? JSONSerialization.jsonObject(with: record) as? [String: Any],
+                  let branch = (obj["gitBranch"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !branch.isEmpty, branch != "HEAD" else { continue }
+            return branch
+        }
+        return nil
+    }
+
     /// 新建会话初次落盘前没有文件路径，按稳定的会话 ID 查找。
     static func find(id: String) -> Session? {
         guard let directories = try? FileManager.default.contentsOfDirectory(
@@ -196,15 +217,69 @@ struct TreeOrder: Codable {
     /// 被删除（从列表移除）的目录 / 会话，scan 时过滤掉
     var hiddenProjects: [String] = []
     var hiddenSessions: [String] = []
+    /// 新建会话时用户起的名字（会话 id → 名称），优先于 claude 自动生成的标题
+    var titles: [String: String] = [:]
+
+    init() {}
+
+    /// 老版本 tree.json 没有新字段，缺哪个就用默认值；整体解码失败会丢掉用户排好的顺序。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        projects = try c.decodeIfPresent([String].self, forKey: .projects) ?? []
+        sessions = try c.decodeIfPresent([String: [String]].self, forKey: .sessions) ?? [:]
+        expanded = try c.decodeIfPresent([String].self, forKey: .expanded) ?? []
+        hiddenProjects = try c.decodeIfPresent([String].self, forKey: .hiddenProjects) ?? []
+        hiddenSessions = try c.decodeIfPresent([String].self, forKey: .hiddenSessions) ?? []
+        titles = try c.decodeIfPresent([String: String].self, forKey: .titles) ?? [:]
+    }
+}
+
+/// 会话的工作目录 → 所属项目目录。在 `<项目>/.worktrees/<名字>` 里跑的会话归到 `<项目>` 名下，
+/// 否则每个 worktree 都会在侧栏里冒出来一个独立的「项目」。
+enum WorktreeLayout {
+    static let directoryName = ".worktrees"
+
+    static func owner(of cwd: String) -> String {
+        let marker = "/" + directoryName + "/"
+        guard let range = cwd.range(of: marker, options: .backwards) else { return cwd }
+        let rest = cwd[range.upperBound...]
+        // 只认 `.worktrees/<名字>` 这一层，再往下的子目录不是 worktree 根
+        guard !rest.isEmpty, !rest.contains("/") else { return cwd }
+        return String(cwd[..<range.lowerBound])
+    }
+}
+
+/// 数据目录。调试包（bundle id 以 `.dev` 结尾，由 `build-app.sh --dev` 产出）用独立目录，
+/// 首次启动从正式目录拷一份 tree.json / settings.json，之后两边互不干扰。
+enum AppDataDir {
+    static let url: URL = {
+        // 回归测试（没有 bundle id）必须指到临时目录，否则会写坏正式版的 tree.json / settings.json。
+        if let override = ProcessInfo.processInfo.environment["CLAUDE_PICKER_DATA_DIR"], !override.isEmpty {
+            let custom = URL(fileURLWithPath: override, isDirectory: true)
+            try? FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+            return custom
+        }
+        let share = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".local/share", isDirectory: true)
+        let main = share.appendingPathComponent("claude-picker", isDirectory: true)
+        let fm = FileManager.default
+        guard Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true else {
+            try? fm.createDirectory(at: main, withIntermediateDirectories: true)
+            return main
+        }
+        let dev = share.appendingPathComponent("claude-picker-dev", isDirectory: true)
+        if !fm.fileExists(atPath: dev.path) {
+            try? fm.createDirectory(at: dev, withIntermediateDirectories: true)
+            for name in ["tree.json", "settings.json"] {
+                try? fm.copyItem(at: main.appendingPathComponent(name), to: dev.appendingPathComponent(name))
+            }
+        }
+        return dev
+    }()
 }
 
 enum TreeOrderStore {
-    static var fileURL: URL {
-        let base = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".local/share/claude-picker", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base.appendingPathComponent("tree.json")
-    }
+    static var fileURL: URL { AppDataDir.url.appendingPathComponent("tree.json") }
 
     static func load() -> TreeOrder {
         guard let data = try? Data(contentsOf: fileURL),
@@ -227,6 +302,17 @@ struct AppSettings: Codable, Equatable {
     var termFontSize: Double = 12.5
     var sidebarCollapsed: Bool = false
     var sidebarWidth: Double = 322
+    /// 第三栏（Git 工作台）：宽度 / 是否展开
+    var thirdPaneWidth: Double = 620
+    var thirdPaneVisible: Bool = true
+    /// 终端栏收成竖条（仅在第三栏显示时生效）
+    var terminalCollapsed: Bool = false
+    /// 会话与分支绑定：打开会话时 Git 工作台跳到该会话所在项目与分支
+    var followSessionBranch: Bool = false
+    /// 信息密度：comfortable（舒适）/ compact（紧凑）
+    var density: String = "comfortable"
+    /// 终端栏占窗口宽度的百分比（拖动第二、三栏之间的分隔条调整）
+    var terminalWidthPercent: Double = 30
 
     init() {}
 
@@ -240,16 +326,17 @@ struct AppSettings: Codable, Equatable {
         termFontSize = try c.decodeIfPresent(Double.self, forKey: .termFontSize) ?? d.termFontSize
         sidebarCollapsed = try c.decodeIfPresent(Bool.self, forKey: .sidebarCollapsed) ?? d.sidebarCollapsed
         sidebarWidth = try c.decodeIfPresent(Double.self, forKey: .sidebarWidth) ?? d.sidebarWidth
+        thirdPaneWidth = try c.decodeIfPresent(Double.self, forKey: .thirdPaneWidth) ?? d.thirdPaneWidth
+        thirdPaneVisible = try c.decodeIfPresent(Bool.self, forKey: .thirdPaneVisible) ?? d.thirdPaneVisible
+        terminalCollapsed = try c.decodeIfPresent(Bool.self, forKey: .terminalCollapsed) ?? d.terminalCollapsed
+        followSessionBranch = try c.decodeIfPresent(Bool.self, forKey: .followSessionBranch) ?? d.followSessionBranch
+        density = try c.decodeIfPresent(String.self, forKey: .density) ?? d.density
+        terminalWidthPercent = try c.decodeIfPresent(Double.self, forKey: .terminalWidthPercent) ?? d.terminalWidthPercent
     }
 }
 
 enum SettingsStore {
-    static var fileURL: URL {
-        let base = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".local/share/claude-picker", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base.appendingPathComponent("settings.json")
-    }
+    static var fileURL: URL { AppDataDir.url.appendingPathComponent("settings.json") }
 
     static func load() -> AppSettings {
         guard let data = try? Data(contentsOf: fileURL),
@@ -436,16 +523,40 @@ enum ClaudeConfig {
 
 // MARK: - Usage 额度（来自 api.anthropic.com/api/oauth/usage）
 
-struct UsageWindow: Equatable {
+struct UsageWindow: Equatable, Codable {
     var percent: Double        // 0...100
     var resetsAt: Date?
 }
 
-struct UsageSnapshot: Equatable {
+struct UsageSnapshot: Equatable, Codable {
     var session: UsageWindow?      // five_hour
     var weekly: UsageWindow?       // seven_day
     var fetchedAt: Date = Date()
     var errorText: String?
+}
+
+/// 最近一次成功取到的用量，存在数据目录里：启动时先显示它，接口偶尔失败也不至于整块变空。
+enum UsageCache {
+    static var fileURL: URL { AppDataDir.url.appendingPathComponent("usage.json") }
+
+    /// 读缓存；已经过了重置时间的窗口作废（那一项的数据已经不是现在的了）。
+    static func load(now: Date = Date()) -> UsageSnapshot? {
+        guard let data = try? Data(contentsOf: fileURL),
+              var snap = try? JSONDecoder().decode(UsageSnapshot.self, from: data) else { return nil }
+        func valid(_ w: UsageWindow?) -> UsageWindow? {
+            guard let w, let reset = w.resetsAt, reset > now else { return nil }
+            return w
+        }
+        snap.session = valid(snap.session)
+        snap.weekly = valid(snap.weekly)
+        snap.errorText = nil
+        return snap.session == nil && snap.weekly == nil ? nil : snap
+    }
+
+    static func save(_ snap: UsageSnapshot) {
+        guard let data = try? JSONEncoder().encode(snap) else { return }
+        try? data.write(to: fileURL, options: .atomic)
+    }
 }
 
 /// 读 Keychain 里的 OAuth token，然后请求用量接口。不阻塞主线程。

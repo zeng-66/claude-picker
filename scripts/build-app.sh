@@ -5,6 +5,8 @@
 #   ./scripts/build-app.sh            # 只在本地 dist/ 里产出
 #   ./scripts/build-app.sh --zip      # 额外打 zip
 #   ./scripts/build-app.sh --dmg      # 额外打 dmg
+#   ./scripts/build-app.sh --dev      # 调试包：dist-dev/ClaudePickerDev.app，独立 bundle id 与数据目录，
+#                                     # 不会顶掉正在使用的正式版（调试时一律用它）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,8 +20,6 @@ BUILD_NUMBER="${BUILD_NUMBER:-1}"
 MIN_MACOS="${MIN_MACOS:-14.0}"
 
 DIST="$ROOT/dist"
-APP="$DIST/$APP_NAME.app"
-CONTENTS="$APP/Contents"
 
 WANT_ZIP=0
 WANT_DMG=0
@@ -27,23 +27,40 @@ for arg in "$@"; do
   case "$arg" in
     --zip) WANT_ZIP=1 ;;
     --dmg) WANT_DMG=1 ;;
+    --dev)
+      APP_NAME="ClaudePickerDev"
+      DISPLAY_NAME="Claude Code Dev"
+      BUNDLE_ID="local.zcl.claude-picker.dev"
+      DIST="$ROOT/dist-dev"
+      ;;
     *) echo "未知参数: $arg" >&2; exit 2 ;;
   esac
 done
 
-echo "==> 1/6 构建 release"
+APP="$DIST/$APP_NAME.app"
+CONTENTS="$APP/Contents"
+
+echo "==> 1/7 构建 release"
 swift build -c release
 
-echo "==> 2/6 清理 dist 并组装 bundle"
+echo "==> 2/7 构建前端（Web → Contents/Resources/web）"
+if [[ ! -d Web/node_modules ]]; then
+    echo "    Web/node_modules 不存在，先装一次依赖"
+    (cd Web && npm install --no-audit --no-fund)
+fi
+(cd Web && npm run build)
+
+echo "==> 3/7 清理 dist 并组装 bundle"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
-cp ".build/release/ClaudeDeck" "$CONTENTS/MacOS/ClaudePicker"
+cp ".build/release/ClaudeDeck" "$CONTENTS/MacOS/$APP_NAME"
+cp -R Web/dist "$CONTENTS/Resources/web"
 
-echo "==> 3/6 生成图标"
+echo "==> 4/7 生成图标"
 python3 scripts/make_icon.py "build/icon" >/dev/null
 iconutil -c icns "build/icon/AppIcon.iconset" -o "$CONTENTS/Resources/AppIcon.icns"
 
-echo "==> 4/6 写 Info.plist"
+echo "==> 5/7 写 Info.plist"
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -54,7 +71,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 	<key>CFBundleDisplayName</key>
 	<string>$DISPLAY_NAME</string>
 	<key>CFBundleExecutable</key>
-	<string>ClaudePicker</string>
+	<string>$APP_NAME</string>
 	<key>CFBundleIdentifier</key>
 	<string>$BUNDLE_ID</string>
 	<key>CFBundleIconFile</key>
@@ -92,7 +109,7 @@ PLIST
 # 用证书签名后 DR 变成 certificate leaf，跨重建稳定，用户点一次「允许」即可长期有效。
 SIGN_ID="${SIGN_ID:-ClaudePicker Local Dev}"
 
-echo "==> 5/6 签名（${SIGN_ID}）"
+echo "==> 6/7 签名（${SIGN_ID}）"
 if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_ID"; then
 	codesign --force --deep --sign "$SIGN_ID" --identifier "$BUNDLE_ID" "$APP"
 else
@@ -101,7 +118,7 @@ else
 fi
 codesign --verify --verbose=2 "$APP" 2>&1 | tail -3
 
-echo "==> 6/6 打包"
+echo "==> 7/7 打包"
 if [ "$WANT_ZIP" = "1" ]; then
   ( cd "$DIST" && rm -f "$APP_NAME-$VERSION.zip" && ditto -c -k --sequesterRsrc --keepParent "$APP" "$APP_NAME-$VERSION.zip" )
   echo "    zip: $DIST/$APP_NAME-$VERSION.zip"

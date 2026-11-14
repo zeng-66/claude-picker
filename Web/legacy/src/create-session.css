@@ -1,0 +1,223 @@
+.create-session-modal {
+  width: min(540px, 100%);
+  max-height: min(790px, calc(100dvh - 40px));
+  overflow: auto;
+  background: #1b1c20;
+  border: 1px solid #44474f;
+  border-radius: 12px;
+  box-shadow: 0 24px 90px #0009;
+  padding: 0;
+}
+.create-session-modal > header {
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 19px;
+  border-bottom: 1px solid #32343a;
+}
+.create-session-modal > header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 550;
+}
+.create-session-modal > header > div svg {
+  color: #d69b79;
+}
+.create-session-modal > header > button {
+  border: 0;
+  background: none;
+  padding: 4px;
+  color: #8c919a;
+}
+.session-project-context {
+  margin: 16px 18px 0;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #222421;
+  border: 1px solid #34382f;
+  border-radius: 7px;
+}
+.session-project-context > svg {
+  color: #c5a274;
+}
+.session-project-context > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.session-project-context b {
+  font-size: 11px;
+}
+.session-project-context small {
+  font-size: 9px;
+  color: #81878f;
+}
+.session-project-context > span {
+  margin-left: auto;
+  font-size: 8px;
+  color: #91ad98;
+  border: 1px solid #425246;
+  border-radius: 4px;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+.session-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  padding: 16px 18px 0;
+}
+.session-mode-tabs > button {
+  min-width: 0;
+  justify-content: start;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid #393b42;
+  background: #202125;
+  color: #aeb2ba;
+  gap: 9px;
+}
+.session-mode-tabs > button.selected {
+  background: #352d27;
+  border-color: #8b624a;
+  color: #ebc3a7;
+}
+.session-mode-tabs > button > svg {
+  flex-shrink: 0;
+}
+.session-mode-tabs > button > span {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 5px;
+  min-width: 0;
+}
+.session-mode-tabs b {
+  font-size: 10px;
+}
+.session-mode-tabs small {
+  font-size: 8px;
+  color: #777e88;
+  white-space: normal;
+  line-height: 1.5;
+}
+.session-mode-tabs .selected small {
+  color: #aa8f7e;
+}
+.session-form {
+  padding: 16px 18px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.session-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #9ca2ac;
+  font-size: 9px;
+}
+.session-form label > span small {
+  color: #646b75;
+  font-size: 8px;
+}
+.session-form input,
+.session-form textarea {
+  width: 100%;
+  background: #151619;
+  border-color: #393b42;
+  font-size: 10px;
+}
+.session-form textarea {
+  min-height: 74px;
+  resize: vertical;
+  line-height: 1.7;
+}
+.session-location-preview {
+  margin: 12px 18px 16px;
+  padding: 12px;
+  background: #151619;
+  border: 1px solid #35373d;
+  border-radius: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.session-location-preview > div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  font-size: 9px;
+}
+.session-location-preview > div > span {
+  color: #757c86;
+}
+.session-location-preview code {
+  font:
+    9px/1.55 Menlo,
+    monospace;
+  color: #b7a18f;
+  overflow-wrap: anywhere;
+}
+.session-location-preview p {
+  margin: 3px 0 0;
+  padding-top: 9px;
+  border-top: 1px solid #2f3137;
+  font:
+    9px/1.8 Menlo,
+    monospace;
+  color: #767d87;
+  overflow-wrap: anywhere;
+}
+.session-location-preview p code {
+  color: #b88e73;
+}
+.create-session-modal > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 14px 18px;
+  border-top: 1px solid #32343a;
+}
+.create-session-modal > footer button {
+  font-size: 10px;
+}
+.create-session-modal > footer .primary {
+  min-width: 116px;
+}
+@media (max-width: 560px) {
+  .session-mode-tabs {
+    grid-template-columns: 1fr;
+  }
+  .session-location-preview > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .session-project-context > span {
+    display: none;
+  }
+  .create-session-modal {
+    max-height: calc(100dvh - 20px);
+  }
+}
+.content-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.content-actions .create-session-entry {
+  color: #dfb294;
+  background: #302923;
+  border-color: #5d4638;
+}
+.content-actions .create-session-entry svg {
+  width: 14px;
+  height: 14px;
+}

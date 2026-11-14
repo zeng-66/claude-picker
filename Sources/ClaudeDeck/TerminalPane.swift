@@ -2,6 +2,9 @@ import AppKit
 import SwiftUI
 import SwiftTerm
 
+/// 终端底色：与界面第二栏一致（原型 .terminal-pane 的 #202122）。窗口底色与终端视图共用。
+let kTerminalBackground = NSColor(srgbRed: 0x20 / 255.0, green: 0x21 / 255.0, blue: 0x22 / 255.0, alpha: 1)
+
 /// 一个内嵌终端会话：包装 LocalProcessTerminalView，负责启停 claude。
 final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalViewDelegate, @unchecked Sendable {
     @Published private(set) var title: String = ""
@@ -13,6 +16,8 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     let cwd: String
     private let resumeId: String?
     private let sessionId: String?
+    private let displayName: String?
+    private let initialPrompt: String?
     /// 进程起来后一段时间内不接受注入命令（claude 还在初始化）
     private var readyAt = Date.distantFuture
     /// 切到这个会话后的短暂抑制期：挂载视图会触发 PTY resize → claude 整屏重绘，
@@ -30,11 +35,17 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     /// 任务忙闲翻转时回调
     var onBusy: ((Bool) -> Void)?
 
+    /// - Parameters:
+    ///   - name: 新建会话的显示名（`claude --name`），恢复会话时忽略。
+    ///   - prompt: 新建会话的首条提示词，作为 claude 的位置参数直接带进去。
     init(cwd: String, resumeId: String?, sessionId: String? = nil,
+         name: String? = nil, prompt: String? = nil,
          options: RenderOptions, fontName: String, fontSize: Double) {
         self.cwd = cwd
         self.resumeId = resumeId
         self.sessionId = sessionId
+        self.displayName = name
+        self.initialPrompt = prompt
         self.view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         // 文本选中保留本地处理，滚轮单独使用应用的滚动协议。
         self.view.allowMouseReporting = false
@@ -47,8 +58,9 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     }
 
     private func configure(fontName: String, fontSize: Double) {
-        view.nativeBackgroundColor = NSColor(srgbRed: 0.055, green: 0.062, blue: 0.078, alpha: 1)
-        view.nativeForegroundColor = NSColor(srgbRed: 0.90, green: 0.91, blue: 0.93, alpha: 1)
+        // 底色与界面第二栏一致（原型 .terminal-pane 的 #202122）
+        view.nativeBackgroundColor = kTerminalBackground
+        view.nativeForegroundColor = NSColor(srgbRed: 0.86, green: 0.85, blue: 0.84, alpha: 1)
         applyFont(fontName: fontName, fontSize: fontSize)
         view.caretColor = NSColor(srgbRed: 0.95, green: 0.55, blue: 0.35, alpha: 1)
     }
@@ -71,6 +83,11 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
             cmd = "exec claude --session-id \(shellQuote(s))"
         }
         cmd += " " + options.flags()
+        if resumeId == nil {
+            if let name = displayName, !name.isEmpty { cmd += " --name \(shellQuote(name))" }
+            // 提示词放在最后，前面加 `--` 防止以 `-` 开头的内容被当成选项
+            if let prompt = initialPrompt, !prompt.isEmpty { cmd += " -- \(shellQuote(prompt))" }
+        }
         args.append(cmd)
         let env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         view.startProcess(executable: "/bin/zsh", args: args, environment: env,
@@ -85,6 +102,18 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         guard alive, Date() >= readyAt, let proc = view.process, proc.running else { return false }
         let bytes = ArraySlice(Array(text.utf8))
         proc.send(data: bytes)
+        return true
+    }
+
+    /// 把输入框里的一段提示词交给 claude：按「粘贴」送进去（多行内容走括号粘贴，不会被逐行提交），
+    /// 稍等一下再回车。会话还没准备好时返回 false，由调用方稍后重试。
+    @MainActor @discardableResult
+    func submit(_ text: String) -> Bool {
+        guard isReady, let proc = view.process, proc.running else { return false }
+        view.pasteText(text.replacingOccurrences(of: "\r\n", with: "\n"))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.send("\r")
+        }
         return true
     }
 
