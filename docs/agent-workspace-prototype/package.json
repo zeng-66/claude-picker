@@ -1,0 +1,21 @@
+{
+  "name": "claude-picker-agent-workspace-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5198",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5198"
+  },
+  "dependencies": {
+    "@phosphor-icons/web": "2.1.2"
+  },
+  "devDependencies": {
+    "vite": "6.4.1"
+  },
+  "optionalDependencies": {
+    "@esbuild/darwin-arm64": "^0.25.12",
+    "@rollup/rollup-darwin-arm64": "^4.68.3"
+  }
+}
