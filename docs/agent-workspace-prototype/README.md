@@ -68,3 +68,5 @@ TAPD 业务状态与 AI 执行状态分别展示。AI 任务完成不表示需�
 - [开发说明](DEVELOPMENT.md)：产品约束、领域模型、状态机、架构与接入契约。
 - [交互与按钮规格](INTERACTIONS.md)：当前 action 全量映射、字段、快捷键、拖动及正式行为。
 - [验收计划](ACCEPTANCE.md)：真实接入、目录判断、多 Work、恢复与投递故障场景。
+
+- [agent-starter 融合设计](AGENT_STARTER_INTEGRATION.md)：技能/知识、仓规、权限守卫、任务卡及 WorkBuddy 同步边界；本次仅文档设计，未安装能力包。
