@@ -672,6 +672,27 @@ export function SettingsModal({ settings, onChange, onOpenMcp, onClose }) {
         </label>
       </section>
       <section className="original-settings-section">
+        <h3>会话交互方式</h3>
+        <div className="segmented" role="group" aria-label="会话交互方式">
+          {[
+            ['terminal', '原生终端'],
+            ['chat', '图形聊天（实验）'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={(settings.interactionMode ?? 'terminal') === value ? 'chosen' : ''}
+              onClick={() => onChange({ interactionMode: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p>
+          图形聊天使用 Swttch 界面和应用自带的本地服务，消息、工具审批都在第二栏里完成。切换时会结束另一种方式下运行中的会话（历史保留）。
+        </p>
+      </section>
+      <section className="original-settings-section">
         <h3>会话与分支</h3>
         <label className="follow-session-setting">
           <span>打开会话时，Git 工作台跳到该会话的分支</span>

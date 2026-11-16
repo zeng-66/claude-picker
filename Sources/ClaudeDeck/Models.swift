@@ -313,6 +313,12 @@ struct AppSettings: Codable, Equatable {
     var density: String = "comfortable"
     /// 终端栏占窗口宽度的百分比（拖动第二、三栏之间的分隔条调整）
     var terminalWidthPercent: Double = 30
+    /// 会话交互方式（实验）：原生终端或 Swttch 图形聊天；默认保留原生终端。
+    var interactionMode: InteractionMode = .terminal
+    /// 图形聊天资源目录（含 backend/dist 与 webview/dist），空 = 自动查找
+    var swttchDir: String = ""
+    /// node 可执行文件路径，空 = 自动查找
+    var nodePath: String = ""
 
     init() {}
 
@@ -332,6 +338,20 @@ struct AppSettings: Codable, Equatable {
         followSessionBranch = try c.decodeIfPresent(Bool.self, forKey: .followSessionBranch) ?? d.followSessionBranch
         density = try c.decodeIfPresent(String.self, forKey: .density) ?? d.density
         terminalWidthPercent = try c.decodeIfPresent(Double.self, forKey: .terminalWidthPercent) ?? d.terminalWidthPercent
+        interactionMode = (try? c.decodeIfPresent(InteractionMode.self, forKey: .interactionMode)) ?? d.interactionMode
+        swttchDir = try c.decodeIfPresent(String.self, forKey: .swttchDir) ?? d.swttchDir
+        nodePath = try c.decodeIfPresent(String.self, forKey: .nodePath) ?? d.nodePath
+    }
+}
+
+enum InteractionMode: String, Codable, CaseIterable {
+    case terminal, chat
+
+    var label: String {
+        switch self {
+        case .terminal: return "原生终端"
+        case .chat: return "图形聊天（实验）"
+        }
     }
 }
 

@@ -34,12 +34,12 @@ if [[ -f "$build_dir/SwiftTerm.o" ]]; then
     objects=("$build_dir/SwiftTerm.o")
 fi
 swiftc -I "$module_dir" Sources/ClaudeDeck/Models.swift \
-    Sources/ClaudeDeck/Git/*.swift Sources/ClaudeDeck/ThirdPane/*.swift \
+    Sources/ClaudeDeck/Git/*.swift Sources/ClaudeDeck/ThirdPane/*.swift Sources/ClaudeDeck/Chat*.swift \
     "$check_dir/TerminalPane.swift" \
     "$check_dir/main.swift" "${objects[@]}" -framework WebKit -o "$check_dir/terminal-checks" > "$check_dir/terminal-build.log" 2>&1 \
     || { (grep -n -C 3 "error:" "$check_dir/terminal-build.log" || tail -20 "$check_dir/terminal-build.log"); exit 1; }
 swiftc -I "$module_dir" Sources/ClaudeDeck/Models.swift \
-    Sources/ClaudeDeck/Git/*.swift Sources/ClaudeDeck/ThirdPane/*.swift \
+    Sources/ClaudeDeck/Git/*.swift Sources/ClaudeDeck/ThirdPane/*.swift Sources/ClaudeDeck/Chat*.swift \
     "$check_dir/TerminalPane.swift" \
     "$check_dir/bridge/main.swift" "${objects[@]}" -framework WebKit -o "$check_dir/bridge-checks" > "$check_dir/bridge-build.log" 2>&1 \
     || { (grep -n -C 3 "error:" "$check_dir/bridge-build.log" || tail -20 "$check_dir/bridge-build.log"); exit 1; }

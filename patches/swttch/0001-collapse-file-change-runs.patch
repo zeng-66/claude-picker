@@ -1,0 +1,20 @@
+diff --git a/webview/src/pages/ChatPage/transcript/TranscriptToolRun.tsx b/webview/src/pages/ChatPage/transcript/TranscriptToolRun.tsx
+index 1adac53..62fcab9 100644
+--- a/webview/src/pages/ChatPage/transcript/TranscriptToolRun.tsx
++++ b/webview/src/pages/ChatPage/transcript/TranscriptToolRun.tsx
+@@ -748,12 +748,9 @@ export function TranscriptToolRun({ calls }: { calls: ToolCall[] }) {
+   const active = live !== null && calls.some((call) => call.toolUse.id === live.toolUseId);
+   // Shut unless the view is Verbose or the reader opened it: a run that is still going on is not opened for them,
+   // and the line over it (the dots, what is running, the seconds) is what tells them it is working.
+-  // A run of file edits and new files is open from the start, while it goes on and after it ends: the desktop app
+-  // keeps the line for each file under the summary (measured on its recording of an edit to two files at once).
+-  const fileChanges = calls.every((call) => call.toolUse.name === 'Edit' || call.toolUse.name === 'Write');
+-  // While it goes on it is open; once it has ended it stays open when it is short and shuts when it is long (the desktop
+-  // app left an edit to two files open and shut the one that wrote twenty).
+-  const startsOpen = verbose || (fileChanges && (active || calls.length <= 3));
++  // Local patch (Claude Picker): a run of file edits and new files starts shut like every other run, so its diff is
++  // only shown once the reader opens it. Upstream opened short or still-running file-change runs from the start.
++  const startsOpen = verbose;
+   const [open, setOpen] = useState(startsOpen);
+   useEffect(() => setOpen(startsOpen), [startsOpen]);
+   const toggle = () => setOpen((v) => !v);

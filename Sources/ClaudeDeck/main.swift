@@ -81,6 +81,16 @@ final class Store: ObservableObject {
     @Published var unreadKeys: Set<String> = []
 
     var active: TerminalSession? { activeKey.isEmpty ? nil : panes[activeKey] }
+    /// 图形聊天模式下第二栏显示聊天页（与终端互斥，二者不会同时驱动同一会话）
+    @Published private(set) var chatActive = false
+    /// 图形聊天当前目标：(workingDir, sessionId)；新建会话在拿到 id 前 sessionId 为 nil
+    private(set) var chatTarget: (cwd: String, sid: String?)?
+    var chatBackend: ChatBackendManager { .shared }
+    var chatHost: ChatHost { .shared }
+    private var chatWired = false
+    private var chatStateObserver: AnyCancellable?
+    /// 放进第二栏「洞」里的视图：终端或聊天页
+    var activeView: NSView? { chatActive ? chatHost.webView : active?.view }
     @Published var activeLabel: String = ""
     @Published var activePath: String = ""
     @Published var settings: AppSettings = SettingsStore.load()
@@ -141,7 +151,17 @@ final class Store: ObservableObject {
         }
 
         var activeInfo: Any = NSNull()
-        if let terminal = active {
+        if chatActive, let target = chatTarget {
+            let owner = projectIndex(owning: target.cwd).map { projects[$0].path } ?? target.cwd
+            activeInfo = [
+                "sessionId": target.sid ?? "",
+                "cwd": target.cwd,
+                "projectPath": owner,
+                "label": activeLabel,
+                "busy": false,
+                "chat": true,
+            ] as [String: Any]
+        } else if let terminal = active {
             let owner = projectIndex(owning: terminal.cwd).map { projects[$0].path } ?? terminal.cwd
             activeInfo = [
                 "sessionId": activeSessionId,
@@ -181,6 +201,7 @@ final class Store: ObservableObject {
                 "terminal": !settings.terminalCollapsed,
                 "workbench": settings.thirdPaneVisible,
                 "terminalWidth": settings.terminalWidthPercent,
+                "interactionMode": settings.interactionMode.rawValue,
             ] as [String: Any],
             "usage": usageInfo(),
         ]
@@ -394,6 +415,10 @@ final class Store: ObservableObject {
     /// 打开（或切到）一个会话。`sid == nil` 是新建：`name` 作为会话名，`prompt` 作为首条提示词。
     @discardableResult
     func open(cwd: String, sid: String?, label: String, name: String? = nil, prompt: String? = nil) -> String {
+        if settings.interactionMode == .chat {
+            openChat(cwd: cwd, sid: sid, label: label, name: name)
+            return sid ?? ""
+        }
         // 新建会话：先预生成 session id，会话一建立就有稳定标识，也能立刻插到列表最前
         let newId = sid == nil ? UUID().uuidString.lowercased() : nil
         let sessionId = sid ?? newId ?? ""
@@ -452,6 +477,135 @@ final class Store: ObservableObject {
         return sessionId
     }
 
+    // MARK: 图形聊天
+
+    /// 图形模式打开会话：同一 WebView 切换路由；服务未就绪时先启动，就绪后再显示。
+    func openChat(cwd: String, sid: String?, label: String, name: String? = nil) {
+        wireChat()
+        // 同一会话不能同时被原生终端和图形模式驱动：先结束残留的终端实例。
+        if let sid, let t = panes.removeValue(forKey: key(cwd: cwd, sid: sid)) {
+            t.terminate()
+            runningKeys.remove(key(cwd: cwd, sid: sid))
+        }
+        let k = key(cwd: cwd, sid: sid ?? "new")
+        chatTarget = (cwd, sid)
+        pendingChatName = sid == nil ? name : nil
+        unreadKeys.remove(k)
+        if let owner = projectIndex(owning: cwd), !projects[owner].expanded {
+            projects[owner].expanded = true
+            persistTree()
+        }
+        if activeKey != k, let prev = panes[activeKey] { prev.noteDetached() }
+        activeKey = k
+        activeSessionId = sid ?? ""
+        activeLabel = label
+        activePath = cwd
+        activeMode = options.mode
+        chatActive = true
+        if let sid { refreshSession(cwd: cwd, sid: sid) }
+        chatBackend.ensureStarted(settings: settings)
+        chatHost.show(cwd: cwd, sid: sid, backend: chatBackend)
+        onActiveChanged?()
+        if settings.followSessionBranch { followSessionBranch(cwd: cwd, sid: sid) }
+        onFocusTerminal?()
+    }
+
+    /// 新建图形会话时用户起的名字：页面拿到 session id 后再记下。
+    private var pendingChatName: String?
+
+    private func wireChat() {
+        guard !chatWired else { return }
+        chatWired = true
+        chatHost.onRouteChange = { [weak self] cwd, sid in self?.chatRouteChanged(cwd: cwd, sid: sid) }
+        chatHost.onRetry = { [weak self] in self?.retryChat() }
+        chatHost.onFallback = { [weak self] in self?.fallbackToTerminal() }
+        chatStateObserver = chatBackend.$state.sink { [weak self] _ in
+            // sink 在赋值前触发，下一轮主循环再读状态。
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.chatActive, let t = self.chatTarget else { return }
+                    self.chatHost.show(cwd: t.cwd, sid: t.sid, backend: self.chatBackend)
+                }
+            }
+        }
+    }
+
+    /// 页面路由变化：新建会话拿到 id、或在页面里切到了别的会话 → 同步侧栏。
+    private func chatRouteChanged(cwd: String, sid: String?) {
+        guard chatActive, settings.interactionMode == .chat else { return }
+        chatTarget = (cwd, sid)
+        guard let sid else { return }
+        let k = key(cwd: cwd, sid: sid)
+        guard k != activeKey else { return }
+        if let name = pendingChatName, !name.isEmpty {
+            customTitles[sid] = name
+            activeLabel = name
+        }
+        pendingChatName = nil
+        if !projects.contains(where: { $0.sessions.contains { $0.id == sid } }) {
+            insertNewSession(cwd: cwd, id: sid, title: customTitles[sid])
+        }
+        activeKey = k
+        activeSessionId = sid
+        activePath = cwd
+        refreshSession(cwd: cwd, sid: sid)
+        // 新会话的标题要等首轮对话写入 JSONL 后才读得到。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            self?.refreshSession(cwd: cwd, sid: sid)
+        }
+    }
+
+    func retryChat() {
+        chatBackend.stop()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            self.chatBackend.ensureStarted(settings: self.settings)
+        }
+    }
+
+    /// 切换交互方式：先结束另一种方式下运行中的实例，再生效。返回 false 表示用户取消。
+    @discardableResult
+    func setInteractionMode(_ m: InteractionMode, confirm: Bool = true) -> Bool {
+        guard settings.interactionMode != m else { return true }
+        let running = m == .chat ? panes.count : (chatBackend.isRunning ? 1 : 0)
+        if confirm, running > 0 {
+            let a = NSAlert()
+            a.messageText = "切换到「\(m.label)」"
+            a.informativeText = m == .chat
+                ? "将结束当前 \(panes.count) 个原生终端会话（历史保留，可在图形模式中恢复）。"
+                : "将停止图形聊天服务及其运行中的会话（历史保留，可在终端中恢复）。"
+            a.addButton(withTitle: "切换")
+            a.addButton(withTitle: "取消")
+            guard a.runModal() == .alertFirstButtonReturn else { return false }
+        }
+        if m == .chat {
+            for t in panes.values { t.terminate() }
+            panes.removeAll()
+        } else {
+            chatBackend.stop()
+            chatHost.reset()
+        }
+        runningKeys.removeAll()
+        unreadKeys.removeAll()
+        chatActive = false
+        chatTarget = nil
+        activeKey = ""
+        activeSessionId = ""
+        activeLabel = ""
+        settings.interactionMode = m
+        SettingsStore.save(settings)
+        onActiveChanged?()
+        return true
+    }
+
+    /// 图形服务起不来时回退：切回原生终端并在终端里打开同一会话。
+    func fallbackToTerminal() {
+        let t = chatTarget
+        let label = activeLabel
+        setInteractionMode(.terminal, confirm: false)
+        if let t { open(cwd: t.cwd, sid: t.sid, label: label) }
+    }
+
     /// 新建会话插到所属项目会话列表最前（tree.json 存的也是这个顺序 → 重启后仍在最前）
     private func insertNewSession(cwd: String, id: String, title: String?) {
         guard let i = projectIndex(owning: cwd) else { return }
@@ -497,6 +651,16 @@ final class Store: ObservableObject {
     }
 
     func closeTerminal() {
+        if chatActive {
+            // 关闭聊天面板 ≠ 停止会话：服务里的任务继续跑，再点开即可回到原状态。
+            chatActive = false
+            chatTarget = nil
+            activeKey = ""
+            activeSessionId = ""
+            activeLabel = ""
+            onActiveChanged?()
+            return
+        }
         let k = activeKey
         if !k.isEmpty {
             panes[k]?.terminate()
@@ -514,6 +678,8 @@ final class Store: ObservableObject {
     func terminateAll() {
         for (_, t) in panes { t.terminate() }
         panes.removeAll()
+        chatBackend.stopAndWait()
+        chatActive = false
         runningKeys.removeAll()
         unreadKeys.removeAll()
         activeKey = ""
@@ -524,6 +690,14 @@ final class Store: ObservableObject {
 
     /// 把输入框里的提示词交给当前会话；没有会话（或它已经退出）时在 `projectPath` 里起一个新会话。
     func sendPrompt(_ text: String, projectPath: String?) {
+        if chatActive {
+            // 图形模式的输入区在聊天页里；外壳输入框发来的提示词交给服务转发给正在运行的会话。
+            if let sid = chatTarget?.sid {
+                let backend = chatBackend
+                Task { _ = await backend.sessionControl(sessionId: sid, action: "send_message", extra: ["text": text]) }
+            }
+            return
+        }
         if let terminal = active {
             if terminal.alive {
                 deliver(text, to: terminal, attempt: 0)
@@ -698,6 +872,13 @@ final class Store: ObservableObject {
         if let v = flag("terminal") { next.terminalCollapsed = !v }
         if let v = flag("workbench") { next.thirdPaneVisible = v }
         if let v = number("terminalWidth") { next.terminalWidthPercent = min(max(v, 24), 57) }
+        if let raw = patch["interactionMode"] as? String, let mode = InteractionMode(rawValue: raw),
+           mode != settings.interactionMode {
+            // 切换会结束另一种方式下的会话，单独确认；其余设置照常保存。
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated { _ = self?.setInteractionMode(mode) }
+            }
+        }
         guard next != settings else { return }
         let fontChanged = next.termFontSize != settings.termFontSize
         settings = next
@@ -716,6 +897,18 @@ final class Store: ObservableObject {
 
     func cycleTo(_ target: PermissionMode) {
         guard activeMode != target else { return }
+        if chatActive {
+            // 图形模式走结构化控制请求，不模拟按键。
+            if let sid = chatTarget?.sid {
+                let backend = chatBackend
+                Task { _ = await backend.sessionControl(sessionId: sid, action: "set_permission_mode",
+                                                        extra: ["mode": target.configValue]) }
+            }
+            activeMode = target
+            ClaudeConfig.setMode(target)
+            options.mode = target
+            return
+        }
         // Shift+Tab 连发太快会被 claude 吞掉，逐步间隔 320ms 发。
         if let cur = Self.modeCycle.firstIndex(of: activeMode),
            let dst = Self.modeCycle.firstIndex(of: target) {
@@ -743,6 +936,10 @@ final class Store: ObservableObject {
         options.model = m
         options.effort = ClaudeConfig.effortFor(model: m, in: ClaudeConfig.read())
         ClaudeConfig.setModel(m)
+        if chatActive, let sid = chatTarget?.sid {
+            let backend = chatBackend
+            Task { _ = await backend.sessionControl(sessionId: sid, action: "set_model", extra: ["model": m.rawValue]) }
+        }
         active?.send("/model \(m.rawValue)\n")
     }
 
@@ -944,12 +1141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         shell = ShellView(frame: rect)
         shell.autoresizingMask = [.width, .height]
         window.contentView = shell
-        shell.showTerminal(store.active?.view)
+        shell.showTerminal(store.activeView)
 
         store.onFocusTerminal = { [weak self] in self?.focusTerminalSoon() }
         store.onActiveChanged = { [weak self] in
             guard let self else { return }
-            self.shell.showTerminal(self.store.active?.view)
+            self.shell.showTerminal(self.store.activeView)
         }
 
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
@@ -1076,9 +1273,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func focusTerminalView() {
-        guard let t = store.active else { return }
+        guard let view = store.activeView else { return }
         window.makeKeyAndOrderFront(nil)
-        shell.focusTerminal(t.view)
+        shell.focusTerminal(view)
     }
 
     func focusTerminalSoon() {

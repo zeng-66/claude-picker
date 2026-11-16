@@ -7,6 +7,12 @@
 #   ./scripts/build-app.sh --dmg      # 额外打 dmg
 #   ./scripts/build-app.sh --dev      # 调试包：dist-dev/ClaudePickerDev.app，独立 bundle id 与数据目录，
 #                                     # 不会顶掉正在使用的正式版（调试时一律用它）
+#   ./scripts/build-app.sh --test     # 测试包：dist-test/ClaudePickerTest.app，数据目录同调试包，可与正式版并存
+#   ./scripts/build-app.sh --with-chat  # 打入图形聊天（Swttch backend/webview 产物 + Node 运行时）
+#
+# 图形聊天相关环境变量:
+#   SWTTCH_DIR   上游源码目录，需先构建 backend/dist 与 webview/dist（默认 ~/project/swttch）
+#   NODE_BIN     要打包的 node 可执行文件（默认 PATH 里的 node，再退回 nvm 最新版）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,6 +29,7 @@ DIST="$ROOT/dist"
 
 WANT_ZIP=0
 WANT_DMG=0
+WANT_CHAT=0
 for arg in "$@"; do
   case "$arg" in
     --zip) WANT_ZIP=1 ;;
@@ -33,6 +40,14 @@ for arg in "$@"; do
       BUNDLE_ID="local.zcl.claude-picker.dev"
       DIST="$ROOT/dist-dev"
       ;;
+    --test)
+      APP_NAME="ClaudePickerTest"
+      DISPLAY_NAME="Claude Code Test"
+      # 以 .dev 结尾：沿用调试包的独立数据目录，不碰正式版的 tree.json / settings.json
+      BUNDLE_ID="local.zcl.claude-picker.test.dev"
+      DIST="$ROOT/dist-test"
+      ;;
+    --with-chat) WANT_CHAT=1 ;;
     *) echo "未知参数: $arg" >&2; exit 2 ;;
   esac
 done
@@ -55,6 +70,30 @@ rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp ".build/release/ClaudeDeck" "$CONTENTS/MacOS/$APP_NAME"
 cp -R Web/dist "$CONTENTS/Resources/web"
+
+if [ "$WANT_CHAT" = "1" ]; then
+  echo "    打入图形聊天资源"
+  SWTTCH_DIR="${SWTTCH_DIR:-$HOME/project/swttch}"
+  for f in backend/dist/backend.mjs webview/dist/index.html; do
+    [ -f "$SWTTCH_DIR/$f" ] || { echo "缺少 $SWTTCH_DIR/$f，请先在上游执行 be-build / wv-build" >&2; exit 1; }
+  done
+  if [ -z "${NODE_BIN:-}" ]; then
+    NODE_BIN="$(command -v node || true)"
+    [ -n "$NODE_BIN" ] || NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | sort -V | tail -1)"
+  fi
+  [ -x "$NODE_BIN" ] || { echo "找不到 node，请设置 NODE_BIN" >&2; exit 1; }
+  RES="$CONTENTS/Resources"
+  mkdir -p "$RES/swttch/backend" "$RES/swttch/webview" "$RES/node/bin"
+  # 只拷运行产物，不带 sourcemap 与 node_modules（backend 已由 esbuild 打成单文件）
+  rsync -a --exclude '*.map' "$SWTTCH_DIR/backend/dist" "$RES/swttch/backend/"
+  rsync -a "$SWTTCH_DIR/webview/dist" "$RES/swttch/webview/"
+  cp "$SWTTCH_DIR/LICENSE" "$RES/swttch/LICENSE"
+  ( cd "$SWTTCH_DIR" && git rev-parse HEAD 2>/dev/null ) > "$RES/swttch/UPSTREAM_REVISION" || true
+  cp "$NODE_BIN" "$RES/node/bin/node"
+  NODE_ROOT="$(cd "$(dirname "$NODE_BIN")/.." && pwd)"
+  [ -f "$NODE_ROOT/LICENSE" ] && cp "$NODE_ROOT/LICENSE" "$RES/node/LICENSE"
+  echo "    swttch: $(cat "$RES/swttch/UPSTREAM_REVISION" 2>/dev/null) · node: $("$NODE_BIN" -v)"
+fi
 
 echo "==> 4/7 生成图标"
 python3 scripts/make_icon.py "build/icon" >/dev/null
@@ -110,12 +149,15 @@ PLIST
 SIGN_ID="${SIGN_ID:-ClaudePicker Local Dev}"
 
 echo "==> 6/7 签名（${SIGN_ID}）"
-if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_ID"; then
-	codesign --force --deep --sign "$SIGN_ID" --identifier "$BUNDLE_ID" "$APP"
-else
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_ID"; then
 	echo "    !! 未找到证书 ${SIGN_ID}，退回 ad-hoc 签名（TCC 授权无法跨重建保持）"
-	codesign --force --deep --sign - --identifier "$BUNDLE_ID" "$APP"
+	SIGN_ID="-"
 fi
+# Resources 里的 node 不在 --deep 的扫描范围，先单独签
+if [ -f "$CONTENTS/Resources/node/bin/node" ]; then
+	codesign --force --sign "$SIGN_ID" "$CONTENTS/Resources/node/bin/node"
+fi
+codesign --force --deep --sign "$SIGN_ID" --identifier "$BUNDLE_ID" "$APP"
 codesign --verify --verbose=2 "$APP" 2>&1 | tail -3
 
 echo "==> 7/7 打包"

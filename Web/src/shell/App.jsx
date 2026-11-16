@@ -578,6 +578,8 @@ export default function App() {
   if (!state || !settings) return <div className="app booting" />;
 
   const { sidebar, terminal, workbench } = settings;
+  // 图形聊天模式：第二栏里是 Swttch 自己的输入区，外壳的输入框不再显示。
+  const chatMode = settings.interactionMode === 'chat';
   const terminalWidth = settings.terminalWidth ?? DEFAULT_TERMINAL_WIDTH;
   const runtime = state.runtime;
   const modelLabel =
@@ -930,7 +932,7 @@ export default function App() {
                 )}
               </div>
             )}
-            <div className="terminal-dock">{composer}</div>
+            {!chatMode && <div className="terminal-dock">{composer}</div>}
           </section>
         ) : null}
 
@@ -985,7 +987,17 @@ export default function App() {
         )}
       </div>
       {!terminal &&
-        (floatingMinimized ? (
+        (chatMode ? (
+          <button
+            className={`composer-bubble ${active?.busy ? 'busy' : ''}`}
+            style={{ left: floatingPosition.x, top: floatingPosition.y }}
+            aria-label="恢复第二栏"
+            title="恢复第二栏 ⌘J"
+            onClick={() => updateSettings({ terminal: true })}
+          >
+            <img src={appIcon} alt="" />
+          </button>
+        ) : floatingMinimized ? (
           <button
             ref={floatingRef}
             className={`composer-bubble ${active?.busy ? 'busy' : ''}`}

@@ -18,6 +18,7 @@ order.json
 # 构建产物（Release 包通过 GitHub Releases 分发，不入库）
 dist/
 dist-dev/
+dist-test/
 *.dmg
 *.zip
 

@@ -173,5 +173,19 @@ MainActor.assumeIsolated {
     check(!sent.contains("\u{1b}[5~"), "wheel input does not jump a full page when the app supports mouse reporting")
     check(!session.view.allowMouseReporting, "text selection keeps local mouse handling")
 }
+MainActor.assumeIsolated {
+    // 图形聊天：路由拼装 / 解析与就绪信号解析，不启动 Node。
+    let cwd = "/Users/me/My Project+1"
+    let url = ChatRoute.url(port: 4321, cwd: cwd, sid: "abc-123", pair: "p0")
+    check(url?.path == "/sessions/abc-123", "chat route targets the session")
+    check(ChatRoute.parse(url)?.cwd == cwd, "workingDir survives spaces and plus signs")
+    check(ChatRoute.parse(url)?.sid == "abc-123", "session id parses back")
+    check(ChatRoute.parse(ChatRoute.url(port: 1, cwd: cwd, sid: nil, pair: nil))?.sid == nil, "new-session route has no id")
+    check(url?.query?.contains("is_desktop=1") == true, "embedded host mode hides the page's own top bar")
+    check(ChatRoute.parse(URL(string: "http://127.0.0.1:1/settings/general")) == nil, "non-session routes are ignored")
+    check(ChatBackendManager.parsePortLine("PORT:62465") == 62465, "ready line yields the port")
+    check(ChatBackendManager.parsePortLine("PHASE:boot") == nil, "other startup lines are ignored")
+    check(ChatBackendManager.parsePortLine("PORT:0") == nil, "port zero is not ready")
+}
 if failures > 0 { exit(1) }
 print("Terminal regression checks passed")
