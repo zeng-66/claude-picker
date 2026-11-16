@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lithe · Claude 会话审核原型</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="review"><span><strong>交互审核稿</strong><span class="review-note">模拟会话与终端 · 数据仅保存在当前浏览器</span></span><button id="guide">审核路径</button></header>
+<div class="shell">
+<header class="titlebar"><div class="brand"><span class="logo">L</span><b>Lithe</b><span class="divider"></span><span id="workspace">lm-global-java</span><span class="chevron">⌄</span></div><div class="title-actions"><button id="quotaButton" class="quota"><span class="ring"></span>5h <b id="quotaLabel">32%</b></button><button id="settingsButton" title="Claude 配置">⚙ <span>Claude 配置</span></button></div></header>
+<div class="body"><nav class="rail" aria-label="工具窗"><button id="filesButton" title="项目文件">▤</button><button id="sessionsButton" class="active" title="Claude 会话">✳</button><div class="rail-bottom"><button id="preferencesButton" title="界面偏好">⚙</button></div></nav>
+<aside class="sidebar"><div class="sidebar-heading"><b>Claude 会话</b><div><button id="refresh" title="刷新会话">↻</button><button id="addProject" title="添加项目">＋</button></div></div><div class="search"><span>⌕</span><input id="search" aria-label="搜索项目或会话" placeholder="搜索项目或会话"><kbd>⌘ K</kbd></div><div class="scope"><span>本机历史</span><button id="hiddenButton">管理隐藏项</button></div><div id="tree" class="tree"></div><footer class="sidebar-footer"><button id="importButton">⇥ 导入 ClaudePicker 数据</button><span id="sessionCount"></span></footer></aside>
+<main><div class="tabbar"><button class="editor-tab" id="editorButton">☷ OrderService.java</button><button class="session-tab active" id="terminalButton">✳ <span id="tabTitle"></span></button></div><section class="context"><div><div class="eyebrow" id="projectPath"></div><h1 id="sessionTitle"></h1><p id="sessionSummary"></p></div><button id="newSession" class="primary">＋ 新建会话</button></section><div id="terminalView" class="terminal-area"><div class="terminal-toolbar"><div><span class="live-dot"></span><b>Claude Code</b><span id="runtimeStatus">空闲</span></div><div><button id="finishButton">模拟后台完成</button><button id="closeButton">终止会话</button></div></div><div class="terminal-output" id="output"></div><form id="promptForm" class="prompt"><span>❯</span><input id="prompt" autocomplete="off" aria-label="模拟终端输入" placeholder="输入一条消息，体验终端交互…"><button type="submit">发送 ↵</button></form><div class="terminal-footnote">模拟终端 · 支持 /help、/clear · 切换会话保留运行状态</div></div><section id="editorView" class="editor-view" hidden><div class="code-heading">operation / service / OrderService.java</div><pre><span class="muted">// 在 Lithe 中保留编辑上下文，随时返回 Claude 会话</span>
+<span class="purple">public class</span> OrderService {
+
+    <span class="purple">public</span> OrderDetail <span class="blue">getOrderDetail</span>(Long orderId) {
+        Order order = orderRepository.findById(orderId);
+        <span class="purple">return</span> orderConverter.toDetail(order);
+    }
+}</pre><button id="returnTerminal">返回会话终端</button></section><div class="session-strip" id="runningTabs"></div><footer class="statusbar"><button id="modeButton">◈ <span id="modeLabel">默认权限</span> ⌄</button><button id="modelButton"><span id="modelLabel">Sonnet</span> ⌄</button><button id="effortButton">推理 <span id="effortLabel">Medium</span> ⌄</button><button id="fastButton">ϟ Fast <span id="fastLabel">关闭</span></button><span class="status-spacer"></span><span id="appliedState">当前会话已应用</span></footer></main></div>
+</div>
+<div id="overlay" class="overlay" hidden><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle"><header><div><span class="eyebrow" id="dialogEyebrow">CLAUDE WORKSPACE</span><h2 id="dialogTitle"></h2></div><button id="dismiss" aria-label="关闭弹窗">×</button></header><div id="dialogBody"></div></section></div><div id="toast" role="status" hidden></div>
+<script src="app.js"></script>
+</body></html>
