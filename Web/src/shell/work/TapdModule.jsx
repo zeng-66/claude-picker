@@ -65,10 +65,11 @@ export default function TapdModule({
   onOpenSettings,
   onOpenWork,
   onWorkCreated,
+  query = '',
+  submitRef,
 }) {
   const enabled = config?.settings?.enabled === true;
   const [scope, setScope] = useStored('tapdScope', '待办');
-  const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [showFilters, setShowFilters] = useState(false);
@@ -101,7 +102,9 @@ export default function TapdModule({
       )
         .then((result) => {
           if (token !== listToken.current) return;
-          setList((current) => (page > 1 && current ? { ...result, items: [...current.items, ...result.items] } : result));
+          setList((current) =>
+            page > 1 && current ? { ...result, items: [...current.items, ...result.items] } : { ...result, query: idQuery },
+          );
           setListError(null);
         })
         .catch((cause) => {
@@ -118,6 +121,24 @@ export default function TapdModule({
     setList(null);
     load(1);
   }, [enabled, remote, load]);
+
+  // 第一栏搜索框：输入即筛选；纯数字回车按编号向 TAPD 查询；离开编号查询时回到列表。
+  useEffect(() => {
+    if (!submitRef) return undefined;
+    submitRef.current = (value) => {
+      const text = String(value ?? '').trim();
+      if (remote && /^\d+$/.test(text)) {
+        setSelected(null);
+        load(1, text);
+      }
+    };
+    return () => {
+      submitRef.current = null;
+    };
+  }, [remote, load]);
+  useEffect(() => {
+    if (remote && list?.byId && trimmed !== list.query) load(1);
+  }, [trimmed]);
 
   // 今天到期的待办：桌宠每天提醒一次（deadline）。
   useEffect(() => {
@@ -276,20 +297,6 @@ export default function TapdModule({
               </button>
             </div>
           </div>
-          <div className="tapd-search">
-            <input
-              aria-label="搜索 TAPD 任务"
-              placeholder={remote ? '搜索任务名称或 ID，输入编号后回车按编号查询' : '搜索任务名称或 ID'}
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                if (remote && list?.byId) load(1); // 离开编号查询，回到列表
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.nativeEvent.isComposing && numeric && remote) load(1, trimmed);
-              }}
-            />
-          </div>
           {showFilters && (
             <div className="module-filters">
               <select aria-label="TAPD 任务状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
@@ -446,11 +453,10 @@ export default function TapdModule({
                         ? '没有你创建的需求或缺陷。'
                         : '当前没有分配给你的待办。'}
               </p>
-              {(trimmed || statusFilter || priorityFilter) && (
+              {(statusFilter || priorityFilter) && (
                 <button
                   className="link-button"
                   onClick={() => {
-                    setQuery('');
                     setStatusFilter('');
                     setPriorityFilter('');
                   }}

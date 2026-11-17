@@ -144,6 +144,9 @@ export default function App() {
   const [workModal, setWorkModal] = useState(null);
   const [tapdFocus, setTapdFocus] = useState(null);
   const [workFocus, setWorkFocus] = useState(null);
+  // TAPD / Work 第一栏的搜索框内容（不持久化）。
+  const [moduleQuery, setModuleQuery] = useState({ tapd: '', works: '' });
+  const tapdSubmit = useRef(null);
   const layoutApplied = useRef(false);
   const selectedWork = workSnap.works.find((item) => item.id === selectedWorkId) ?? null;
 
@@ -1144,6 +1147,8 @@ export default function App() {
           runtime={state.runtime}
           notify={notify}
           focusRef={tapdFocus}
+          query={moduleQuery.tapd}
+          submitRef={tapdSubmit}
           onOpenSettings={() => setModal({ kind: 'settings', page: 'tapd' })}
           onOpenWork={openWork}
           onWorkCreated={(work) => {
@@ -1170,6 +1175,7 @@ export default function App() {
             onExport={(work) => setWorkModal({ kind: 'export', workId: work.id })}
             category={sections.works ?? 'all'}
             focusId={workFocus}
+            query={moduleQuery.works}
           />
         </main>
       );
@@ -1333,6 +1339,24 @@ export default function App() {
             terminalVisible={terminalVisible}
             onTerminal={restoreTerminal}
             branchControls={page === 'git' ? branchPicker : null}
+            search={
+              page === 'tapd'
+                ? {
+                    label: '搜索 TAPD 任务',
+                    placeholder: '搜索任务名称或 ID，编号回车查询',
+                    value: moduleQuery.tapd,
+                    onChange: (value) => setModuleQuery((current) => ({ ...current, tapd: value })),
+                    onSubmit: (value) => tapdSubmit.current?.(value),
+                  }
+                : page === 'works'
+                  ? {
+                      label: '搜索 Work',
+                      placeholder: '搜索名称、编号或 TAPD ID',
+                      value: moduleQuery.works,
+                      onChange: (value) => setModuleQuery((current) => ({ ...current, works: value })),
+                    }
+                  : null
+            }
           />
         )}
         {sidebar && (

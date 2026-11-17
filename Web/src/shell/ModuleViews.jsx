@@ -10,6 +10,7 @@ import {
   Folder,
   Gear,
   GitBranch,
+  MagnifyingGlass,
   GitDiff,
   ListChecks,
   SidebarSimple,
@@ -176,6 +177,7 @@ export function ModuleSidebar({
   terminalVisible,
   onTerminal,
   branchControls,
+  search,
 }) {
   const label = PAGE_LABELS[page] ?? 'ClaudePicker';
   return (
@@ -192,6 +194,26 @@ export function ModuleSidebar({
           {!terminalVisible && <IconButton icon={Terminal} label="展开终端 ⌘J" onClick={onTerminal} />}
         </div>
       </div>
+      {!collapsed && search && (
+        <div className="module-branch-controls">
+          <label className="search sidebar-branch-search module-search-box">
+            <MagnifyingGlass size={13} />
+            <input
+              aria-label={search.label}
+              placeholder={search.placeholder}
+              value={search.value}
+              onChange={(event) => search.onChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && search.value) {
+                  event.stopPropagation();
+                  search.onChange('');
+                }
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing) search.onSubmit?.(search.value);
+              }}
+            />
+          </label>
+        </div>
+      )}
       {!collapsed && branchControls && <div className="module-branch-controls">{branchControls}</div>}
       <nav aria-label={`${label}分类`}>
         {items.map(([id, text, Icon]) => (

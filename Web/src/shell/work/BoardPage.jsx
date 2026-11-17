@@ -191,7 +191,7 @@ function WorkCard({ work, onOpen, notify, onExport, focused = false }) {
   );
 }
 
-export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onOpenTapd, onExport, category = 'all', focusId = null }) {
+export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onOpenTapd, onExport, category = 'all', focusId = null, query = '' }) {
   // 刚从 TAPD 创建的 Work：滚动到它并短暂高亮。
   useEffect(() => {
     if (!focusId) return;
@@ -205,7 +205,14 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
   const [showEnded, setShowEnded] = useStored('boardEnded', false);
   const [statusFilter, setStatusFilter] = useState('');
 
-  const all = snapshot.works;
+  // 第一栏搜索框：按名称、编号、目标、TAPD 编号筛选。
+  const needle = query.trim().toLowerCase();
+  const matches = (work) =>
+    !needle ||
+    [work.title, work.displayId, work.objective, ...(work.tapdRefs ?? []).flatMap((ref) => [ref.entityId, shortId(ref.entityId)])]
+      .filter(Boolean)
+      .some((text) => String(text).toLowerCase().includes(needle));
+  const all = snapshot.works.filter(matches);
   const scoped = all.filter((work) => (!projectId || work.projectId === projectId) && (showEnded || !work.archived));
   const active = scoped.filter((work) => !ENDED.includes(work.status) && !work.archived);
   const attention = scoped.filter(needsAttention);
