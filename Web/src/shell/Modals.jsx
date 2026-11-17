@@ -1,4 +1,4 @@
-// 弹窗：模型上下文 / MCP 服务 / 添加目录 / 新建会话 / 界面设置。
+// 弹窗：模型上下文 / MCP 服务 / 添加目录 / 新建会话 / 重命名会话 / 界面设置。
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ArrowsClockwise,
@@ -534,7 +534,7 @@ export function SessionModal({
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
   const worktree = mode === 'worktree';
-  const ready = Boolean(title.trim()) && (!worktree || Boolean(target.trim())) && !creating;
+  const ready = (!worktree || Boolean(target.trim())) && !creating;
 
   async function create() {
     if (!ready) return;
@@ -545,7 +545,7 @@ export function SessionModal({
         'session.create',
         {
           projectPath: project.path,
-          title: title.trim(),
+          ...(title.trim() ? { title: title.trim() } : {}),
           mode,
           ...(worktree ? { branch: target.trim() } : {}),
         },
@@ -564,10 +564,10 @@ export function SessionModal({
     <ModalFrame title="新建会话" onClose={onClose}>
       <p className="modal-description">在 {project.title} 中开始新的工作。</p>
       <label className="field">
-        会话名称
+        会话名称（可选）
         <input
           autoFocus
-          placeholder="例如：优化订单列表"
+          placeholder="留空则根据对话内容自动生成，之后可重命名"
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           onKeyDown={(event) => {
@@ -624,6 +624,65 @@ export function SessionModal({
         <button className="primary" disabled={!ready} onClick={create}>
           <Plus size={15} />
           {creating ? '正在创建…' : '创建会话'}
+        </button>
+      </div>
+    </ModalFrame>
+  );
+}
+
+// ---------- 重命名会话 ----------
+
+export function RenameSessionModal({ session, onClose, notify }) {
+  const [title, setTitle] = useState(session.named ? session.title : '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function save(next) {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await request('app.renameSession', { sessionId: session.id, title: next.trim() });
+      notify(next.trim() ? '会话已重命名' : '已恢复为自动标题');
+      onClose();
+    } catch (cause) {
+      setError(errorText(cause));
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalFrame title="重命名会话" onClose={onClose}>
+      <p className="modal-description">
+        {session.named ? '当前使用自定义名称。' : `当前为自动标题：${session.title}`}
+      </p>
+      <label className="field">
+        会话名称
+        <input
+          autoFocus
+          placeholder="留空则使用根据对话自动生成的标题"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing) save(title);
+          }}
+        />
+      </label>
+      {error && (
+        <div className="pane-note error" role="alert">
+          <Warning size={14} />
+          {error}
+        </div>
+      )}
+      <div className="modal-footer">
+        {session.named && (
+          <button disabled={saving} onClick={() => save('')}>
+            恢复自动标题
+          </button>
+        )}
+        <button onClick={onClose}>取消</button>
+        <button className="primary" disabled={saving} onClick={() => save(title)}>
+          保存
         </button>
       </div>
     </ModalFrame>

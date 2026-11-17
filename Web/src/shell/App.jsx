@@ -36,7 +36,7 @@ import Sidebar from './Sidebar.jsx';
 import Composer from './Composer.jsx';
 import WorkspaceTab from './WorkspaceTab.jsx';
 import { BranchesTab, HistoryTab, MoreTab, WorktreeTab } from './GitPages.jsx';
-import { ContextModal, DirectoryModal, McpModal, SessionModal } from './Modals.jsx';
+import { ContextModal, DirectoryModal, McpModal, RenameSessionModal, SessionModal } from './Modals.jsx';
 import './work/work.css';
 import { needsAttention, useWorks } from './work/useWorks.js';
 import WorkChat from './work/WorkChat.jsx';
@@ -372,7 +372,7 @@ export default function App() {
       project: target,
       session,
       x: Math.min(event.clientX, window.innerWidth - 218),
-      y: Math.min(event.clientY, window.innerHeight - 210),
+      y: Math.min(event.clientY, window.innerHeight - 240),
     });
   }
 
@@ -384,6 +384,7 @@ export default function App() {
       if (!target.expanded) request('app.toggleProject', { path: target.path });
       setModal({ kind: 'session', mode: 'current', projectPath: target.path });
     }
+    if (action === '重命名' && session) setModal({ kind: 'rename', session });
     if (action === '作为 Work 继续' && session) {
       setWorkModal({
         kind: 'new',
@@ -1329,7 +1330,12 @@ export default function App() {
           </div>
           {[
             ['新建对话', false],
-            ...(treeContext.session ? [['作为 Work 继续', false]] : []),
+            ...(treeContext.session
+              ? [
+                  ['重命名', false],
+                  ['作为 Work 继续', false],
+                ]
+              : []),
             [
               '置顶',
               treeContext.session
@@ -1425,6 +1431,9 @@ export default function App() {
             setEpoch((value) => value + 1);
           }}
         />
+      )}
+      {modal?.kind === 'rename' && (
+        <RenameSessionModal session={modal.session} notify={notify} onClose={() => setModal(null)} />
       )}
       {modal?.kind === 'settings' && (
         <SettingsModal

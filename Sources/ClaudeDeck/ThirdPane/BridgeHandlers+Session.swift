@@ -34,15 +34,14 @@ enum SessionHandlers: BridgeModule {
             }
             return .handled(NSNull())
 
-        // 新建会话。`mode == "worktree"` 时先在 `<项目>/.worktrees/<分支>` 建好工作树（后台线程，
+        // 新建会话。`title` 可选；`mode == "worktree"` 时先在 `<项目>/.worktrees/<分支>` 建好工作树（后台线程，
         // 检出大仓库可能要几秒），成功后才起会话 —— 工作树没建成就不会留下一条空会话。
         case "session.create":
             let projectPath = try BridgeSupport.projectPath(dict)
-            let title = try BridgeSupport.string(dict, "title").trimmingCharacters(in: .whitespacesAndNewlines)
+            // 名称可留空：留空时不传 `--name`，标题等首轮对话后由 Claude 的 ai-title / summary 回填。
+            let title = (BridgeSupport.optionalString(dict, "title") ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let mode = BridgeSupport.optionalString(dict, "mode") ?? "current"
-            guard !title.isEmpty else {
-                throw GitError.commandFailed("会话名称不能为空", recoverable: true)
-            }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: projectPath, isDirectory: &isDirectory),
                   isDirectory.boolValue else {
@@ -63,7 +62,8 @@ enum SessionHandlers: BridgeModule {
             let workingDirectory = cwd
             let sessionId = try BridgeSupport.onMain {
                 try AppHandlers.delegate().store
-                    .open(cwd: workingDirectory, sid: nil, label: title, name: title)
+                    .open(cwd: workingDirectory, sid: nil, label: title.isEmpty ? "新建会话" : title,
+                          name: title.isEmpty ? nil : title)
             }
             var result: [String: Any] = ["sessionId": sessionId, "cwd": cwd, "mode": mode]
             if let branch { result["branch"] = branch }

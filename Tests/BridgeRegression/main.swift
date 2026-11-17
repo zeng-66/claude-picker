@@ -243,6 +243,21 @@ MainActor.assumeIsolated {
     expect(store.projects[1].sessions.first?.title == "桥测试会话", "新会话应使用用户起的名字")
     expect(store.activeSessionId == sid, "新会话应成为当前会话")
 
+    // 新建会话：名称留空 → 先显示占位标题，之后由对话总结回填；可重命名 / 恢复自动标题
+    let untitled = ok("session.create", ["projectPath": repo, "mode": "current"]) as? [String: Any]
+    let untitledId = untitled?["sessionId"] as? String ?? ""
+    expect(store.projects[1].sessions.first?.id == untitledId, "未命名会话也应插入")
+    expect(store.projects[1].sessions.first?.title == "新建会话", "未命名会话应显示占位标题")
+    _ = ok("app.renameSession", ["sessionId": untitledId, "title": "  改过的名字 "])
+    expect(store.projects[1].sessions.first?.title == "改过的名字", "app.renameSession 应改名")
+    let named = ((ok("app.state") as? [String: Any])?["projects"] as? [[String: Any]])?[1]["sessions"] as? [[String: Any]]
+    expect(named?.first?["named"] as? Bool == true, "改名后快照应标记 named")
+    _ = ok("app.renameSession", ["sessionId": untitledId, "title": ""])
+    expect(store.projects[1].sessions.first?.title == "新建会话", "清空名称应恢复自动标题")
+    let (_, missing) = call("app.renameSession", ["sessionId": "nope", "title": "x"])
+    expect(missing?.hasPrefix("COMMAND_FAILED") == true, "不存在的会话应报错")
+    _ = ok("app.remove", ["projectPath": repo, "sessionId": untitledId])
+
     // 新建会话：独立工作树（建在 .worktrees 下，归属到项目名下）
     let wt = ok("session.create", ["projectPath": repo, "title": "工作树会话", "mode": "worktree",
                                    "branch": "feature/bridge"]) as? [String: Any]

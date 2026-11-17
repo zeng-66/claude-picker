@@ -10,7 +10,7 @@ import Foundation
 enum AppHandlers: BridgeModule {
     private static let methods: Set<String> = [
         "app.state", "app.layout", "app.settings", "app.runtime",
-        "app.toggleProject", "app.toggleShowAll", "app.pin", "app.remove", "app.revealInFinder",
+        "app.toggleProject", "app.toggleShowAll", "app.pin", "app.remove", "app.renameSession", "app.revealInFinder",
         "app.moveProject", "app.moveSession", "app.addDirectory", "app.pickDirectory",
         "app.prompt", "app.command", "app.context", "app.revealBranchSessions",
     ]
@@ -83,6 +83,14 @@ enum AppHandlers: BridgeModule {
         case "app.remove":
             store.remove(projectPath: try BridgeSupport.string(dict, "projectPath"),
                          sessionId: BridgeSupport.optionalString(dict, "sessionId"))
+            return nil
+
+        // 重命名会话；`title` 为空表示恢复成 Claude 根据对话生成的标题。
+        case "app.renameSession":
+            let sessionId = try BridgeSupport.string(dict, "sessionId")
+            guard store.renameSession(id: sessionId, title: BridgeSupport.optionalString(dict, "title") ?? "") else {
+                throw GitError.commandFailed("列表里没有这个会话：\(sessionId)", recoverable: false)
+            }
             return nil
 
         case "app.revealInFinder":

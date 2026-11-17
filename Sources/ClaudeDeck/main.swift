@@ -141,6 +141,7 @@ final class Store: ObservableObject {
                     return [
                         "id": session.id,
                         "title": session.title,
+                        "named": customTitles[session.id] != nil,
                         "cwd": session.cwd,
                         "time": relativeText(session.date),
                         "running": runningKeys.contains(mark),
@@ -454,6 +455,7 @@ final class Store: ObservableObject {
                     } else {
                         self.runningKeys.remove(k)
                         self.refreshSession(cwd: cwd, sid: sessionId)
+                        self.scheduleTitleRefresh(cwd: cwd, sid: sessionId)
                         if self.activeKey != k, t?.awayOutput == true {
                             self.unreadKeys.insert(k)
                         }
@@ -564,6 +566,42 @@ final class Store: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
             self?.refreshSession(cwd: cwd, sid: sid)
         }
+        scheduleTitleRefresh(cwd: cwd, sid: sid)
+    }
+
+    /// 没起名字的会话：Claude 的 ai-title 在一轮对话结束后异步写入 JSONL，稍后再读几次把标题回填上。
+    private func scheduleTitleRefresh(cwd: String, sid: String) {
+        guard customTitles[sid] == nil, session(id: sid)?.summary == nil else { return }
+        for delay in [15.0, 45.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.customTitles[sid] == nil else { return }
+                self.refreshSession(cwd: cwd, sid: sid)
+            }
+        }
+    }
+
+    /// 重命名会话。`title` 为空 = 去掉自定义名字，回到 Claude 根据对话生成的标题。
+    @discardableResult
+    func renameSession(id: String, title: String) -> Bool {
+        guard let p = projects.firstIndex(where: { $0.sessions.contains { $0.id == id } }),
+              let s = sessionIndex(p, id: id) else { return false }
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = projects[p].sessions[s]
+        let display: String
+        if name.isEmpty {
+            customTitles.removeValue(forKey: id)
+            let parsed = current.fileURL.flatMap { SessionScanner.parse($0) }
+            display = parsed?.title ?? current.summary ?? "新建会话"
+        } else {
+            customTitles[id] = name
+            display = name
+        }
+        projects[p].sessions[s] = Session(id: id, cwd: current.cwd, title: display, summary: current.summary,
+                                          date: current.date, fileURL: current.fileURL)
+        if activeSessionId == id { activeLabel = display }
+        persistTree()
+        if name.isEmpty { refreshSession(cwd: current.cwd, sid: id) }
+        return true
     }
 
     func retryChat() {

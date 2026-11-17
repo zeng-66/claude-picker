@@ -316,6 +316,24 @@ const handlers = {
     push();
     return null;
   },
+  'app.renameSession': ({ sessionId, title }) => {
+    for (const p of db.projects) {
+      const s = p.sessions.find((item) => item.id === sessionId);
+      if (!s) continue;
+      if (title.trim()) {
+        s.autoTitle ??= s.title;
+        s.title = title.trim();
+        s.named = true;
+      } else {
+        s.title = s.autoTitle ?? s.title;
+        s.named = false;
+      }
+      if (db.active?.sessionId === sessionId) db.active.label = s.title;
+      push();
+      return null;
+    }
+    throw fail('COMMAND_FAILED', `列表里没有这个会话：${sessionId}`);
+  },
   'app.revealInFinder': () => null,
   'app.moveProject': ({ from, to }) => {
     const a = db.projects.findIndex((item) => item.path === from);
@@ -414,9 +432,10 @@ const handlers = {
       r.worktrees.push({ path: cwd, head: 'a84c2e1', branch });
     }
     const id = `demo-new-${++seq}`;
-    p.sessions.unshift({ id, title, cwd, time: '刚刚', running: false, unread: false });
+    const label = title || '新建会话';
+    p.sessions.unshift({ id, title: label, named: Boolean(title), cwd, time: '刚刚', running: false, unread: false });
     p.expanded = true;
-    db.active = { sessionId: id, cwd, projectPath, label: title, busy: false };
+    db.active = { sessionId: id, cwd, projectPath, label, busy: false };
     push();
     return { sessionId: id, cwd };
   },
