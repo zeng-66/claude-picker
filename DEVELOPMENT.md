@@ -133,7 +133,7 @@ Windows 桌面宿主位于 `Desktop/`，复用 `Web/` 的 React 界面，通过�
 
 桌面发行范围、验证与剩余事项见 [DESKTOP_RELEASE.md](docs/DESKTOP_RELEASE.md)。Windows Work、TAPD、企微、图形聊天等服务移植和 Windows 实机验证仍待完成。当前远端尚未发布本轮安装包与清单。
 
-H5 快照及批注入口保存在 [desktop-release-prototype](docs/desktop-release-prototype/README.md)，当前 v002 通过 `./docs/desktop-release-prototype/v002/preview.sh` 启动。模块切换、页签配置和浮窗缩放的交互与验收见 [v002 开发说明](docs/desktop-release-prototype/v002/DEVELOPMENT.md)。各版本目录、来源摘要、变更记录与批注 JSON 共同记录界面修改。
+H5 快照及批注入口保存在 [desktop-release-prototype](docs/desktop-release-prototype/README.md)，当前 v003 通过 `./docs/desktop-release-prototype/v003/preview.sh` 启动。模块切换、页签配置、浮窗缩放与界面清理见 [v003 开发说明](docs/desktop-release-prototype/v003/DEVELOPMENT.md)。Clawd 桌宠的状态、素材、浏览器验证与原生窗口接入规划见 [桌宠开发说明](docs/desktop-release-prototype/v003/DESKTOP_PET.md)。各版本目录、来源摘要、变更记录与批注 JSON 共同记录界面修改。
 
 ## 3. 源码地图（`main.swift`）
 

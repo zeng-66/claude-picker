@@ -142,7 +142,7 @@ python3 scripts/make_icon.py build/icon                  # 只重生成图标
 
 新增 Windows x64 开发安装包和设置中的「版本更新」，更新源指向 main 对应的构建产物。构建方法、当前 Windows 适配范围和发布流程见 [桌面发行说明](docs/DESKTOP_RELEASE.md)。
 
-最新 App 界面的可批注 H5 快照保存在 [desktop-release-prototype](docs/desktop-release-prototype/README.md)。当前 v002 运行 `./docs/desktop-release-prototype/v002/preview.sh` 后打开 <http://127.0.0.1:5200/>，支持模块布局评审、页签配置、悬浮终端缩放及批注导出。交互细节见 [v002 开发说明](docs/desktop-release-prototype/v002/DEVELOPMENT.md)。
+最新 App 界面的可批注 H5 快照保存在 [desktop-release-prototype](docs/desktop-release-prototype/README.md)。当前 v003 运行 `./docs/desktop-release-prototype/v003/preview.sh` 后打开 <http://127.0.0.1:5201/>，支持模块布局、页签配置、悬浮终端和 Clawd 桌宠评审。交互与素材说明见 [v003 开发说明](docs/desktop-release-prototype/v003/DEVELOPMENT.md) 和 [桌宠开发说明](docs/desktop-release-prototype/v003/DESKTOP_PET.md)。
 
 ## 许可
 
