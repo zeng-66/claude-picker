@@ -229,10 +229,10 @@ class DesktopRuntime {
       const flags = create
         ? `--session-id ${quote(id)}`
         : `--resume ${quote(id)}`;
-      const command = `& claude ${flags} --model ${quote(this.runtime.model)} --permission-mode ${quote(this.runtime.mode)}`;
+      const command = `$cli = Get-Command claude -CommandType Application -ErrorAction Stop; & $cli.Source ${flags} --model ${quote(this.runtime.model)} --permission-mode ${quote(this.runtime.mode)}`;
       const terminal = pty.spawn(
         "powershell.exe",
-        ["-NoLogo", "-NoProfile", "-NoExit", "-Command", command],
+        ["-NoLogo", "-NoProfile", "-Command", command],
         {
           name: "xterm-256color",
           cols: 100,
