@@ -11,6 +11,8 @@ enum Bridge {
 
     /// 网页外壳所在的 WebView（`ShellView` 创建时登记）。原生侧主动推事件用。
     @MainActor static weak var liveWebView: WKWebView?
+    /// 桌宠悬浮窗里的 WebView（PetController 创建时登记）。原生事件也同步推给它，桌宠据此显示状态。
+    @MainActor static weak var petWebView: WKWebView?
 
     /// 原生 → 网页的单向事件：`window.dispatchEvent(new CustomEvent(name, {detail}))`。
     /// 还没有 WebView 时直接丢弃，返回 false。
@@ -30,6 +32,7 @@ enum Bridge {
         else { return false }
         let js = "window.dispatchEvent(new CustomEvent(\(nameJSON)[0], { detail: \(json) }))"
         webView.evaluateJavaScript(js, completionHandler: nil)
+        petWebView?.evaluateJavaScript(js, completionHandler: nil)
         return true
     }
 
@@ -92,6 +95,7 @@ enum Bridge {
         SessionHandlers.self,
         WorkHandlers.self,
         UpdateHandlers.self,
+        PetHandlers.self,
     ]
 
     /// 起子进程、读写文件的方法放到后台线程：fetch / pull / push、MCP 健康检查、建 worktree

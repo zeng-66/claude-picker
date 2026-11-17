@@ -173,3 +173,91 @@
 .desktop-pet[data-theme='dev-life'] img {
   image-rendering: auto;
 }
+
+/* 头顶提示气泡：当前对话 / 任务进度。 */
+.pet-bubble {
+  position: fixed;
+  z-index: 62;
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  border: 1px solid #c5947566;
+  border-radius: 10px;
+  background: #26272bf2;
+  box-shadow: 0 8px 24px #0007;
+  color: #e6e1dc;
+  animation: pet-bubble-in 160ms ease-out;
+}
+.pet-bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  background: inherit;
+  border-right: 1px solid #c5947566;
+  border-bottom: 1px solid #c5947566;
+  transform: rotate(45deg);
+}
+.pet-bubble.attention {
+  border-color: #e2a05c;
+}
+.pet-bubble.error {
+  border-color: #d66d6d;
+}
+.pet-bubble.done {
+  border-color: #8eb58a;
+}
+.pet-bubble-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: 12px/1.45 -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+.pet-bubble-body strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pet-bubble-body span {
+  color: #a9a6a2;
+  font-size: 11px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.pet-bubble-close {
+  flex: 0 0 auto;
+  margin: 6px 6px 0 0;
+  padding: 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8f8c88;
+  cursor: pointer;
+}
+.pet-bubble-close:hover {
+  background: #ffffff12;
+  color: #e6e1dc;
+}
+@keyframes pet-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+/* 桌面悬浮窗：整个窗口就是桌宠，透明背景。 */
+.desktop-pet-layer.desktop .desktop-pet img {
+  filter: drop-shadow(0 4px 3px #0005);
+}

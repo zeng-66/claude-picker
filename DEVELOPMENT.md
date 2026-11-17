@@ -826,3 +826,11 @@ screencapture -x -o -l <wid> /tmp/cp.png
 
 待验证：原生窗口内的鼠标交互（悬浮终端承载真实终端时的拖动与缩放、桌宠盖在终端上时的点击）未做实机操作；TAPD 评论与流转尚未在真实工作项上写入（需要用户提供可修改的测试工作项 ID）。
 
+### 2026-11-17 桌宠 P2：桌面悬浮窗
+
+macOS 上桌宠改为整个桌面可见的透明悬浮窗（`Sources/ClaudeDeck/ThirdPane/PetPanel.swift`：`PetController`、`PetPanel`、`PetHandlers`），设计与交互见 [docs/ui-refactor-v003.md §16](docs/ui-refactor-v003.md)。网页侧入口 `Web/src/main.jsx`（`?pet=desktop` 只加载 `pet/PetWindow.jsx`），`DesktopPet` 增加 `desktop` 形态与头顶提示气泡，`usePetSignals` 输出状态提示（Work 编号、标题、进度说明、完成的会话）。`Bridge.emit` 同时推给 `Bridge.petWebView`。设置新增 `pet.desktopX / desktopY`。
+
+同时修正：TAPD 缺陷列表与详情的状态显示内部键（new / status_2 …），改为按项目状态字段翻成显示名。
+
+验证：`swift build`、`vite build` 通过；Work 回归 191 项、会话 / 终端 / 桥接回归通过；无头 Chrome 检查桌宠页面与窗口内气泡；开发包启动后用 CGWindowList 确认悬浮窗在 floating 层级显示于其它 App 之上、背景透明，主窗口不再显示窗口内桌宠。透明区域点击穿透、拖动跨屏、全屏 App 旁显示需要实机操作确认。
+

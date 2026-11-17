@@ -563,6 +563,17 @@ export default function App() {
   toggles.current = {
     newSession: () => setModal({ kind: 'session', mode: 'current', projectPath: workbenchPath }),
     toggleTerminal: () => (terminalVisibleRef.current ? updateSettings({ terminal: false }) : restoreTerminal()),
+    // 桌面桌宠悬浮窗的操作（原生先把主窗口带到前台）。
+    petClick: () => {
+      if (terminalVisibleRef.current) request('app.command', { name: 'focusTerminal' }).catch(() => {});
+      else setConsoleOpen(true);
+    },
+    openConsole: () => {
+      if (terminalVisibleRef.current) updateSettings({ terminal: false });
+      setConsoleOpen(true);
+    },
+    restoreTerminal: () => restoreTerminal(),
+    openPetSettings: () => setModal({ kind: 'settings', page: 'pet' }),
     page1: () => selectPageAt(0),
     page2: () => selectPageAt(1),
     page3: () => selectPageAt(2),
@@ -745,7 +756,9 @@ export default function App() {
   // 原生终端（非图形聊天）：终端下方挂运行参数条。
   const runtimeBar = <RuntimeBar runtime={state.runtime} runtimeMenu={runtimeMenu} onRuntimeMenu={setRuntimeMenu} />;
   const consoleAllowed = !terminalVisible && !(page === 'workspace' && selectedWork && !terminal);
-  const petEnabled = settings.pet?.enabled !== false;
+  const petOn = settings.pet?.enabled !== false;
+  // macOS 原生由桌面悬浮窗显示桌宠（state.desktopPet），主窗口里不再画一份。
+  const petEnabled = petOn && !state.desktopPet;
   const consoleTerminal =
     active && window.claudeDesktop ? (
       <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} />
@@ -1481,7 +1494,7 @@ export default function App() {
           }}
         />
       )}
-      {consoleAllowed && !consoleOpen && !petEnabled && (
+      {consoleAllowed && !consoleOpen && !petOn && (
         <ConsoleBubble busy={active?.busy} onOpen={() => setConsoleOpen(true)} />
       )}
       {petEnabled && (
@@ -1496,6 +1509,7 @@ export default function App() {
           }}
           onOpenSession={restoreTerminal}
           onSettings={() => setModal({ kind: 'settings', page: 'pet' })}
+          onOpenTarget={(target) => (target?.displayId ? openWorkByDisplayId(target.displayId) : restoreTerminal())}
         />
       )}
       {treeContext && (

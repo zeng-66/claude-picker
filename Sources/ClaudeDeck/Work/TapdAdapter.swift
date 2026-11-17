@@ -206,9 +206,14 @@ enum TapdAdapter {
                 let bugs = unwrap(try run(bugArgs, cli: cli), "Bug")
                 if stories.count == pageSize || bugs.count == pageSize { hasMore = true }
                 let iterations = iterationNames(workspace: workspace, ids: (stories + bugs).compactMap { $0["iteration_id"]?.text }, cli: cli)
+                // 缺陷没有 v_status：用项目的状态字段把内部键（new / status_2 …）翻成显示名。
+                let bugStatuses = bugs.isEmpty ? [:] : statusNames(core, workspaceId: workspace, entityType: "bug")
                 func withIteration(_ value: JSONValue?) -> JSONValue? {
                     guard case .object(var dict)? = value else { return value }
                     if let id = dict["iterationId"]?.text { dict["iterationName"] = .str(iterations[id]) }
+                    if dict["type"]?.stringValue == "bug", let raw = dict["rawStatus"]?.text, let label = bugStatuses[raw] {
+                        dict["status"] = .string(label)
+                    }
                     return .object(dict)
                 }
                 items += stories.compactMap { withIteration(summary($0, type: "story", workspaceName: names[workspace])) }
@@ -274,7 +279,11 @@ enum TapdAdapter {
         let descriptionText = htmlToText(descriptionHTML)
         let title = item[entity == "bug" ? "title" : "name"]?.text ?? ""
         let modified = item["modified"]?.text
-        let status = item["v_status"]?.text ?? item["status"]?.text
+        var status = item["v_status"]?.text ?? item["status"]?.text
+        if entity == "bug", let raw = item["status"]?.text,
+           let label = statusNames(core, workspaceId: ref.workspaceId, entityType: "bug")[raw] {
+            status = label
+        }
         let imageCount = descriptionHTML.components(separatedBy: "<img").count - 1
 
         var iteration: JSONValue = .null
@@ -484,6 +493,14 @@ extension TapdAdapter {
         return out
     }
 
+    /// 状态内部键 → 显示名（读不到字段信息时为空，界面就显示原值）。
+    static func statusNames(_ core: WorkCore, workspaceId: String, entityType: String) -> [String: String] {
+        guard let list = (try? fields(core, workspaceId: workspaceId, entityType: entityType))?["statuses"]?.arrayValue else { return [:] }
+        var out: [String: String] = [:]
+        for item in list { if let key = item["key"]?.text { out[key] = item["label"]?.text ?? key } }
+        return out
+    }
+
     /// 项目成员（处理人候选）。
     static func members(_ core: WorkCore, workspaceId: String) throws -> [String] {
         cacheLock.lock()
@@ -515,7 +532,12 @@ extension TapdAdapter {
             }
             guard !ids.isEmpty else { return .obj(["items": .array([])]) }
             let list = unwrap(try run(["bug", "list", ws, "id=\(ids.joined(separator: ","))", "limit=100"], cli: cli), "Bug")
-            return .obj(["items": .array(list.compactMap { summary($0, type: "bug", workspaceName: nil) })])
+            let names = statusNames(core, workspaceId: ref.workspaceId, entityType: "bug")
+            return .obj(["items": .array(list.compactMap { item -> JSONValue? in
+                guard case .object(var dict)? = summary(item, type: "bug", workspaceName: nil) else { return nil }
+                if let raw = dict["rawStatus"]?.text, let label = names[raw] { dict["status"] = .string(label) }
+                return .object(dict)
+            })])
         case "tcases":
             guard ref.entityType == "story" else { return .obj(["items": .array([])]) }
             let list = rows(try run(["story", "get-tcase", ws, "story_id=\(ref.entityId)"], cli: cli))

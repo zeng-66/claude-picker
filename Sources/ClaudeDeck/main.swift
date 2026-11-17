@@ -210,6 +210,8 @@ final class Store: ObservableObject {
                 "pet": settings.pet.json,
             ] as [String: Any],
             "usage": usageInfo(),
+            // macOS 原生：桌宠在桌面悬浮窗里显示，主窗口不再画窗口内桌宠。
+            "desktopPet": true,
         ]
     }
 
@@ -1089,6 +1091,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// 终端里的用户操作（按键 / 滚轮 / 点击 / 拖拽）监视器：这些操作会让 claude 重绘，
     /// 那段输出不是任务在跑，不能用来驱动会话行转圈。
     private var userInputMonitor: Any?
+    /// 桌面桌宠悬浮窗。
+    private var petController: PetController?
 
     init(store: Store, outPath: String) {
         self.store = store
@@ -1169,6 +1173,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// 布局与弹窗的状态在网页里：原生只把命令转过去。会弹出输入框的命令先把键盘交给网页。
+    /// 桌宠悬浮窗的操作：把主窗口带到前台（最小化了就还原），再把命令交给网页外壳。name 为空只显示主窗口。
+    func petCommand(_ name: String?, _ detail: [String: Any] = [:]) {
+        NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+        guard let name else { return }
+        shell.focusWeb()
+        var payload = detail
+        payload["name"] = name
+        Bridge.emit("claude-picker:command", detail: payload)
+    }
+
     private func sendCommand(_ name: String) {
         if name == "newSession" || name == "openSettings" { shell.focusWeb() }
         Bridge.emit("claude-picker:command", detail: ["name": name])
@@ -1206,6 +1222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         shell.autoresizingMask = [.width, .height]
         window.contentView = shell
         shell.showTerminal(store.activeView)
+        petController = PetController(store: store, app: self)
 
         store.onFocusTerminal = { [weak self] in self?.focusTerminalSoon() }
         store.onActiveChanged = { [weak self] in

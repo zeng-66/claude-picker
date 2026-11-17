@@ -279,6 +279,12 @@ const handlers = {
   'update.check': () => ({ version: '演示版本', platform: '浏览器', state: 'unpublished', preview: true }),
   'app.state': () => snapshot(),
   'app.layout': () => null,
+  'pet.hit': () => null,
+  'pet.move': () => null,
+  'pet.moveEnd': () => null,
+  'pet.click': () => null,
+  'pet.open': () => null,
+  'pet.menu': () => null,
   'app.openURL': ({ url }) => {
     window.open(url, '_blank', 'noopener');
     return null;

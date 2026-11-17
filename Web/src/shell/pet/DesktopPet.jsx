@@ -1,7 +1,11 @@
-// Clawd 桌宠（P1：主窗口内浮层）。docs/ui-refactor-v003.md §9。
-// 显示优先级：一次性反应 > 拖动 / 散步 > 睡眠流程 > 空闲小剧场 > 状态动画。
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowsOut, ChatCircleDots, Gear } from '@phosphor-icons/react';
+// Clawd 桌宠。docs/ui-refactor-v003.md §9。
+// 两种形态共用这一个组件：
+//   - 窗口内浮层（浏览器预览 / Windows）：在主窗口里拖动，网页里画右键菜单；
+//   - 桌面悬浮窗（macOS，desktop=true）：整个窗口就是桌宠，拖动时原生移动窗口，右键弹原生菜单。
+// 显示优先级：一次性反应 > 拖动 / 散步 > 睡眠流程 > 空闲小剧场 > 状态动画。头顶的气泡显示当前对话 / 任务进度。
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ArrowsOut, ChatCircleDots, Gear, X } from '@phosphor-icons/react';
+import { request } from '../bridge.js';
 import { themeOf } from './themes.js';
 import { DEFAULT_PET } from './PetSettings.jsx';
 import './pet.css';
@@ -9,6 +13,7 @@ import './pet.css';
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const MARGIN = 12;
 const TOP = 48;
+const TRANSIENT_TIP_MS = 6000;
 const STATE_LABELS = {
   idle: '准备就绪',
   working: '正在执行',
@@ -21,6 +26,7 @@ const STATE_LABELS = {
   complete: '任务已完成',
 };
 const BADGES = { notification: '•', review: '•', error: '!', complete: '✓' };
+const TIP_TONES = { notification: 'attention', review: 'attention', error: 'error', complete: 'done' };
 
 /// 让外壳重新回报布局：桌宠盖在终端「洞」上时，原生需要知道这块区域归网页。
 export const reportLayoutSoon = () => window.dispatchEvent(new Event('claude-picker:layout'));
@@ -38,28 +44,44 @@ function onceToday(name) {
   return true;
 }
 
-export default function DesktopPet({ settings, onChange, signals, onClick, onOpenConsole, onOpenSession, onSettings }) {
+export default function DesktopPet({
+  settings,
+  onChange,
+  signals,
+  onClick,
+  onOpenConsole,
+  onOpenSession,
+  onSettings,
+  onOpenTarget,
+  desktop = false,
+}) {
   const pet = { ...DEFAULT_PET, ...settings };
   const theme = themeOf(pet.theme);
   const dark = true; // 外壳是深色界面，Dev Life 用深色素材
   const width = pet.size;
   const height = Math.round(pet.size / theme.aspect);
-  const defaultPosition = () => ({
-    x: Math.max(MARGIN, window.innerWidth - width - 40),
-    y: Math.max(TOP, window.innerHeight - height - 30),
-  });
+  const anchored = () => ({ x: Math.round((window.innerWidth - width) / 2), y: window.innerHeight - height - 4 });
+  const defaultPosition = () =>
+    desktop
+      ? anchored()
+      : { x: Math.max(MARGIN, window.innerWidth - width - 40), y: Math.max(TOP, window.innerHeight - height - 30) };
   const [position, setPosition] = useState(() =>
-    pet.x != null && pet.y != null ? { x: pet.x, y: pet.y } : defaultPosition(),
+    !desktop && pet.x != null && pet.y != null ? { x: pet.x, y: pet.y } : defaultPosition(),
   );
   const [menu, setMenu] = useState(false);
   const [overlay, setOverlay] = useState(null); // { clip, key } 一次性反应 / 小剧场 / 作息
   const [motion, setMotion] = useState(null); // 拖动或散步时的动画
   const [sleep, setSleep] = useState(null); // null | 'yawning' | 'sleeping' | 'waking'
+  const [dismissedTip, setDismissedTip] = useState(null);
+  const [transientTip, setTransientTip] = useState(null);
+  const [hover, setHover] = useState(false);
   const overlayTimer = useRef(0);
   const moved = useRef(false);
   const clicks = useRef([]);
   const lastActivity = useRef(Date.now());
   const handled = useRef(new Set());
+  const petRef = useRef(null);
+  const bubbleRef = useRef(null);
 
   const state = signals.state;
   const tier = signals.running >= 3 ? 3 : signals.running >= 2 ? 2 : 1;
@@ -77,10 +99,23 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
   }
   useEffect(() => () => window.clearTimeout(overlayTimer.current), []);
 
-  // 设置里改了位置或尺寸：同步并限制在窗口内。
+  // 提示气泡：需要处理的一直显示到点掉；进行中 / 完成的在变化时显示几秒。
+  const tip = signals.tip;
+  useEffect(() => {
+    if (!tip || tip.persistent) return undefined;
+    setTransientTip(tip.key);
+    const timer = window.setTimeout(() => setTransientTip(null), TRANSIENT_TIP_MS);
+    return () => window.clearTimeout(timer);
+  }, [tip?.key]);
+  const showTip =
+    tip && !menu && !moved.current && (tip.persistent ? dismissedTip !== tip.key : transientTip === tip.key || hover);
+  const hoverOnly = !tip && hover && !menu;
+
+  // 窗口尺寸变化：窗口内形态限位；桌面形态始终贴在窗口底部居中。
   useEffect(() => {
     const fit = () =>
       setPosition((current) => {
+        if (desktop) return anchored();
         const x = clamp(current.x, MARGIN, window.innerWidth - width - MARGIN);
         const y = clamp(current.y, TOP, window.innerHeight - height - MARGIN);
         return x === current.x && y === current.y ? current : { x, y };
@@ -88,20 +123,39 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
     fit();
     window.addEventListener('resize', fit);
     return () => window.removeEventListener('resize', fit);
-  }, [width, height]);
+  }, [width, height, desktop]);
 
   useEffect(() => {
-    reportLayoutSoon();
+    if (!desktop) reportLayoutSoon();
   }, [position.x, position.y, width, height, menu]);
+
+  // 桌面形态：把可点区域（桌宠本体 + 气泡）报给原生，其余透明区域鼠标穿透。
+  useLayoutEffect(() => {
+    if (!desktop) return;
+    const rects = [petRef.current, bubbleRef.current].filter(Boolean).map((node) => {
+      const box = node.getBoundingClientRect();
+      return { x: box.left, y: box.top, w: box.width, h: box.height };
+    });
+    request('pet.hit', { rects }).catch(() => {});
+  });
 
   // 一次性事件（启动问好、Git 冲突、TAPD 流转成功……）。
   useEffect(() => {
     for (const event of signals.events) {
       if (handled.current.has(event.id)) continue;
       handled.current.add(event.id);
+      if (event.name === 'bye' && !desktop) continue;
       play(theme.reaction(event.name, { dark }));
     }
   }, [signals.events]);
+
+  function wake() {
+    setSleep('waking');
+    window.setTimeout(
+      () => setSleep((current) => (current === 'waking' ? null : current)),
+      theme.timings.wakeDuration ?? 1500,
+    );
+  }
 
   // 状态变化算一次活动：叫醒睡着的桌宠。
   useEffect(() => {
@@ -109,6 +163,7 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
     if (sleep === 'sleeping' || sleep === 'yawning') wake();
   }, [state]);
 
+  // 用户活动：窗口内看页面里的鼠标键盘；桌面形态由原生转来整个桌面上的鼠标活动。
   useEffect(() => {
     const touch = () => {
       lastActivity.current = Date.now();
@@ -116,16 +171,13 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
     };
     window.addEventListener('pointermove', touch, { passive: true });
     window.addEventListener('keydown', touch);
+    window.addEventListener('claude-picker:pet-activity', touch);
     return () => {
       window.removeEventListener('pointermove', touch);
       window.removeEventListener('keydown', touch);
+      window.removeEventListener('claude-picker:pet-activity', touch);
     };
   }, [sleep]);
-
-  function wake() {
-    setSleep('waking');
-    window.setTimeout(() => setSleep((current) => (current === 'waking' ? null : current)), theme.timings.wakeDuration ?? 1500);
-  }
 
   // 空闲计时：小剧场、作息、入睡。
   useEffect(() => {
@@ -136,7 +188,10 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
       const sleepAfter = theme.timings.mouseSleepTimeout;
       if (sleepAfter && idleFor > sleepAfter) {
         setSleep('yawning');
-        window.setTimeout(() => setSleep((current) => (current === 'yawning' ? 'sleeping' : current)), theme.timings.yawnDuration ?? 5000);
+        window.setTimeout(
+          () => setSleep((current) => (current === 'yawning' ? 'sleeping' : current)),
+          theme.timings.yawnDuration ?? 5000,
+        );
         return;
       }
       if (!pet.idleShows || idleFor < (theme.timings.mouseIdleTimeout ?? 20000)) return;
@@ -148,11 +203,26 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
     return () => window.clearInterval(timer);
   }, [pet.enabled, pet.idleShows, state, overlay, motion, menu, sleep, theme.id, signals.running]);
 
-  // 空闲散步。
+  // 空闲散步：窗口内移动元素；桌面形态移动整个悬浮窗。
   useEffect(() => {
     if (!pet.enabled || !pet.wander || state !== 'idle' || menu || sleep) return undefined;
     const timer = window.setInterval(() => {
       if (overlay || moved.current) return;
+      if (desktop) {
+        const screenCenter = window.screen.width / 2;
+        const direction = window.screenX + window.innerWidth / 2 > screenCenter ? -1 : 1;
+        setMotion(theme.walk(direction, dark));
+        let step = 0;
+        const walk = window.setInterval(() => {
+          request('pet.move', { dx: direction * 10, dy: 0 }).catch(() => {});
+          if (++step >= 10) {
+            window.clearInterval(walk);
+            request('pet.moveEnd').catch(() => {});
+            setMotion(null);
+          }
+        }, 120);
+        return;
+      }
       const direction = position.x + width / 2 > window.innerWidth / 2 ? -1 : 1;
       setMotion(theme.walk(direction, dark));
       setPosition((current) => ({
@@ -162,9 +232,9 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
       window.setTimeout(() => setMotion(null), 1800);
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [pet.enabled, pet.wander, state, menu, sleep, overlay, position.x, width, theme.id]);
+  }, [pet.enabled, pet.wander, state, menu, sleep, overlay, position.x, width, theme.id, desktop]);
 
-  // 右键菜单：点外面或按 Esc 关闭。
+  // 窗口内右键菜单：点外面或按 Esc 关闭。
   useEffect(() => {
     if (!menu) return undefined;
     const close = (event) => {
@@ -178,18 +248,35 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
     if (event.button !== 0) return;
     const handle = event.currentTarget;
     const start = { x: event.clientX, y: event.clientY, position };
+    let last = { x: event.screenX, y: event.screenY };
+    let pending = { dx: 0, dy: 0 };
+    let frame = 0;
     moved.current = false;
     handle.setPointerCapture(event.pointerId);
+    const flush = () => {
+      frame = 0;
+      if (!pending.dx && !pending.dy) return;
+      request('pet.move', pending).catch(() => {});
+      pending = { dx: 0, dy: 0 };
+    };
     handle.onpointermove = (pointer) => {
       const dx = pointer.clientX - start.x;
       const dy = pointer.clientY - start.y;
-      if (!moved.current && Math.hypot(dx, dy) < 5) return;
+      if (!moved.current && Math.hypot(pointer.screenX - last.x, pointer.screenY - last.y) < 5 && Math.hypot(dx, dy) < 5)
+        return;
       if (!moved.current) {
         setMenu(false);
         setSleep(null);
         setMotion(theme.reaction('drag', { dark }));
       }
       moved.current = true;
+      if (desktop) {
+        // 窗口跟着鼠标走：按屏幕坐标增量移动原生窗口，每帧合并一次。
+        pending = { dx: pending.dx + pointer.screenX - last.x, dy: pending.dy + pointer.screenY - last.y };
+        last = { x: pointer.screenX, y: pointer.screenY };
+        if (!frame) frame = window.requestAnimationFrame(flush);
+        return;
+      }
       setPosition({
         x: clamp(start.position.x + dx, MARGIN, window.innerWidth - width - MARGIN),
         y: clamp(start.position.y + dy, TOP, window.innerHeight - height - MARGIN),
@@ -201,10 +288,16 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
       handle.onpointercancel = null;
       if (moved.current) {
         setMotion(null);
-        setPosition((current) => {
-          onChange({ x: Math.round(current.x), y: Math.round(current.y) });
-          return current;
-        });
+        if (desktop) {
+          if (frame) window.cancelAnimationFrame(frame);
+          flush();
+          request('pet.moveEnd').catch(() => {});
+        } else {
+          setPosition((current) => {
+            onChange({ x: Math.round(current.x), y: Math.round(current.y) });
+            return current;
+          });
+        }
       }
       window.setTimeout(() => {
         moved.current = false;
@@ -226,6 +319,11 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
     onClick();
   }
 
+  function openTip() {
+    if (tip?.persistent) setDismissedTip(tip.key);
+    onOpenTarget?.(tip?.target ?? null);
+  }
+
   function run(action) {
     setMenu(false);
     action();
@@ -239,10 +337,33 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
   const popupWidth = Math.min(220, window.innerWidth - 24);
   const popupLeft = clamp(position.x + width / 2 - popupWidth / 2, MARGIN, window.innerWidth - popupWidth - MARGIN);
   const popupTop = Math.max(TOP, position.y - 268);
+  const bubbleWidth = Math.min(desktop ? window.innerWidth - 12 : 260, window.innerWidth - 24);
+  const bubbleLeft = clamp(position.x + width / 2 - bubbleWidth / 2, 6, window.innerWidth - bubbleWidth - 6);
+  // 素材画布上方有留白：气泡压到角色头顶附近。
+  const bubbleBottom = window.innerHeight - position.y - height * (theme.id === 'dev-life' ? 0.32 : 0.05);
 
   return (
-    <div className="desktop-pet-layer">
-      {menu && (
+    <div className={`desktop-pet-layer ${desktop ? 'desktop' : ''}`}>
+      {(showTip || hoverOnly) && (
+        <div
+          ref={bubbleRef}
+          className={`pet-bubble ${TIP_TONES[state] ?? ''}`}
+          data-terminal-overlay
+          style={{ left: bubbleLeft, bottom: bubbleBottom, width: bubbleWidth }}
+          role="status"
+        >
+          <button className="pet-bubble-body" onClick={openTip} title="打开">
+            <strong>{tip?.text ?? STATE_LABELS[state] ?? state}</strong>
+            {tip?.detail && <span>{tip.detail}</span>}
+          </button>
+          {tip?.persistent && (
+            <button className="pet-bubble-close" aria-label="关闭提示" onClick={() => setDismissedTip(tip.key)}>
+              <X size={11} />
+            </button>
+          )}
+        </div>
+      )}
+      {menu && !desktop && (
         <div
           className="pet-context-menu"
           role="menu"
@@ -284,19 +405,23 @@ export default function DesktopPet({ settings, onChange, signals, onClick, onOpe
         </div>
       )}
       <button
+        ref={petRef}
         className={`desktop-pet ${moved.current ? 'dragging' : ''} ${motion && !moved.current ? 'walking' : ''}`}
         data-terminal-overlay
         data-theme={theme.id}
         style={{ left: position.x, top: position.y, width, height }}
         aria-label={`Clawd 桌宠，${STATE_LABELS[state] ?? state}`}
-        title="点击打开悬浮终端 · 拖动移动 · 右键更多操作"
+        title={desktop ? '' : '点击打开悬浮终端 · 拖动移动 · 右键更多操作'}
         onPointerDown={beginDrag}
+        onPointerEnter={() => setHover(true)}
+        onPointerLeave={() => setHover(false)}
         onClick={handleClick}
         onDoubleClick={() => play(theme.reaction('double', { dark }))}
         onContextMenu={(event) => {
           event.preventDefault();
-          setMenu(true);
           play(theme.reaction('right', { dark }));
+          if (desktop) request('pet.menu').catch(() => {});
+          else setMenu(true);
         }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {

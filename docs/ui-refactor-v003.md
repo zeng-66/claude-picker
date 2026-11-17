@@ -454,7 +454,7 @@ showOutput = size.width ≥ min(520, innerWidth-24) && size.height ≥ min(330, 
 | 阶段 | 形态 | 能力 |
 | --- | --- | --- |
 | P1（本次） | 主窗口内的网页浮层 | 只在 ClaudePicker 窗口里显示；主窗口最小化后看不到 |
-| P2（单独排期） | macOS 透明无边框 `NSPanel` | 整个桌面置顶显示，所有桌面空间可见；主窗口最小化后仍显示；贴边「迷你模式」 |
+| P2（2026-11-17 已实现 macOS） | macOS 透明无边框 `NSPanel`（`ThirdPane/PetPanel.swift`） | 整个桌面置顶显示，所有桌面空间与全屏 App 旁可见；主窗口最小化后仍显示；透明区域鼠标穿透；头顶气泡显示对话 / 任务进度。贴边「迷你模式」未做 |
 | P3（再晚一期） | Windows Electron 透明窗口 | 同 P2 |
 
 ### 9.2 主题与素材（Q15 补充：资源包里的动画尽量都用上；Q16 已确认可以打包）
@@ -684,3 +684,20 @@ macOS 的原生菜单快捷键在 `main.swift` 里，需要同步 ⌘J 的新语
 | S7（另排期） | 桌宠 P2 原生窗口 | `DESKTOP_PET.md` 的 5 条验收 |
 
 每个阶段：`cd Web && npm run build`、`swift build`、`./scripts/build-app.sh --dev --with-chat`，在 `ClaudePickerDev.app` 上按 DEVELOPMENT.md §2.7 做桌面验收；完成后同步更新 `DEVELOPMENT.md`、`README.md`。
+
+---
+
+## 16. 桌宠 P2：桌面悬浮窗（2026-11-17 实现）
+
+| 项 | 实现 |
+| --- | --- |
+| 窗口 | `PetController` 创建透明、无边框、不激活 App 的 `NSPanel`：`.floating` 层级，`canJoinAllSpaces + fullScreenAuxiliary`，主窗口最小化 / 切到别的 App 都保持显示；`pet.enabled` 关闭时隐藏，退出 App 时关闭 |
+| 内容 | 独立 WKWebView 加载 `index.html?pet=desktop`（`main.jsx` 按参数只加载 `pet/PetWindow.jsx`），与窗口内桌宠共用 `DesktopPet`、主题与 `usePetSignals`；`Bridge.emit` 同步推给桌宠 WebView，状态与 Work 变化实时生效 |
+| 主窗口 | 快照带 `desktopPet: true` 时，主窗口不再画窗口内桌宠；浏览器预览与 Windows 仍是窗口内桌宠 |
+| 鼠标 | 网页把桌宠本体与气泡的矩形报给 `pet.hit`；原生按鼠标位置切换 `ignoresMouseEvents`，其余透明区域点击穿透到下面的窗口 |
+| 拖动 | 网页按屏幕坐标增量逐帧调用 `pet.move`，原生移动窗口并限制在所在屏幕的可见区域；松开后 `pet.moveEnd` 把位置存进 `settings.json` 的 `pet.desktopX / desktopY`，下次启动恢复（屏幕已断开时回到主屏右下角） |
+| 单击 | `pet.click`：把主窗口带到前台（最小化时还原），第二栏终端可见就聚焦终端，否则打开悬浮终端 |
+| 右键 | 原生菜单：打开当前会话、打开悬浮输入、显示主窗口、挥手、跳一下、桌宠设置…、隐藏桌宠 |
+| 提示气泡 | 待回答 / 执行失败 / 待审阅：一直显示到点掉，点气泡打开对应 Work；执行中 / 规划中 / 深度思考 / 完成：状态变化时显示 6 秒，悬停桌宠时也显示；内容包括 Work 编号、标题、状态说明，多个任务时显示数量与前三个名称 |
+| 活动检测 | 原生把整个桌面上的鼠标活动每 3 秒转给桌宠一次，用于空闲小剧场、打哈欠入睡与叫醒 |
+

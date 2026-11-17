@@ -397,6 +397,9 @@ struct PetSettings: Codable, Equatable {
     var wander = false
     var x: Double?
     var y: Double?
+    /// 桌面悬浮窗左下角（屏幕坐标）。为空表示主屏右下角。
+    var desktopX: Double?
+    var desktopY: Double?
 
     init() {}
 
@@ -410,6 +413,8 @@ struct PetSettings: Codable, Equatable {
         wander = try c.decodeIfPresent(Bool.self, forKey: .wander) ?? d.wander
         x = try c.decodeIfPresent(Double.self, forKey: .x)
         y = try c.decodeIfPresent(Double.self, forKey: .y)
+        desktopX = try c.decodeIfPresent(Double.self, forKey: .desktopX)
+        desktopY = try c.decodeIfPresent(Double.self, forKey: .desktopY)
     }
 
     static let themes = ["dev-life", "codex"]
@@ -426,6 +431,8 @@ struct PetSettings: Codable, Equatable {
         if let v = flag("wander") { next.wander = v }
         if patch.keys.contains("x") { next.x = number("x").map { max(0, $0) } }
         if patch.keys.contains("y") { next.y = number("y").map { max(0, $0) } }
+        if patch.keys.contains("desktopX") { next.desktopX = number("desktopX") }
+        if patch.keys.contains("desktopY") { next.desktopY = number("desktopY") }
         return next
     }
 
