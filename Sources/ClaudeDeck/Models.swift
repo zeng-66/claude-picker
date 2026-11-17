@@ -319,6 +319,11 @@ struct AppSettings: Codable, Equatable {
     var swttchDir: String = ""
     /// node 可执行文件路径，空 = 自动查找
     var nodePath: String = ""
+    /// 默认布局：A 工作空间 / B 任务看板 / C 专注对话
+    var layout: String = "A"
+    /// 工作空间右侧详情栏：是否展开、宽度（290–520）
+    var contextOpen: Bool = true
+    var contextWidth: Double = 330
 
     init() {}
 
@@ -341,6 +346,9 @@ struct AppSettings: Codable, Equatable {
         interactionMode = (try? c.decodeIfPresent(InteractionMode.self, forKey: .interactionMode)) ?? d.interactionMode
         swttchDir = try c.decodeIfPresent(String.self, forKey: .swttchDir) ?? d.swttchDir
         nodePath = try c.decodeIfPresent(String.self, forKey: .nodePath) ?? d.nodePath
+        layout = try c.decodeIfPresent(String.self, forKey: .layout) ?? d.layout
+        contextOpen = try c.decodeIfPresent(Bool.self, forKey: .contextOpen) ?? d.contextOpen
+        contextWidth = try c.decodeIfPresent(Double.self, forKey: .contextWidth) ?? d.contextWidth
     }
 }
 

@@ -639,6 +639,40 @@ const handlers = {
   },
 };
 
+// Work 相关接口在浏览器演示模式下只返回空数据：真实状态只存在于原生侧的数据库里。
+const drafts = new Map();
+Object.assign(handlers, {
+  'work.snapshot': () => ({
+    available: true,
+    owner: true,
+    works: [],
+    projects: [],
+    capacity: { slots: 2, running: 0, queued: 0, waitingStart: 0 },
+    workSessionIds: [],
+  }),
+  'draft.get': ({ scope, key }) => ({ value: drafts.get(`${scope}:${key}`) ?? '' }),
+  'draft.set': ({ scope, key, value }) => {
+    drafts.set(`${scope}:${key}`, value);
+    return { ok: true };
+  },
+  'tapd.settings': () => ({
+    settings: { enabled: false, cliPath: '', workspaces: [], syncOnLaunch: true },
+    prerequisites: { cli: null, endpointSet: false, tokenSet: false },
+  }),
+  'source.overview': () => ({
+    settings: { name: '开发协作助手', enabled: false, autoStart: false, remoteAnswers: false },
+    socket: null,
+    listening: false,
+    lastSeen: null,
+    conversations: [],
+  }),
+  'source.mcpCommand': () => ({ command: 'ClaudePicker', args: ['--source-mcp'], listening: false }),
+  'agent.pack': () => ({ valid: false, configured: false }),
+  'work.create': () => {
+    throw fail('UNAVAILABLE', '浏览器演示模式不能创建 Work，请在应用里使用');
+  },
+});
+
 export function mockRequest(method, params) {
   return new Promise((resolve, reject) => {
     setTimeout(() => {

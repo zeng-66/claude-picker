@@ -4,8 +4,13 @@ import {
   CaretDown,
   CaretRight,
   CaretUp,
+  ChatCircleDots,
   CircleNotch,
+  Cpu,
   Folder,
+  MagnifyingGlass,
+  SquaresFour,
+  Tray,
   Gear,
   House,
   Plus,
@@ -15,6 +20,7 @@ import {
 import appIcon from './clawd-mark.png';
 import { IconButton } from './ui.jsx';
 import { request } from './bridge.js';
+import { needsAttention, statusOf } from './work/useWorks.js';
 
 const VISIBLE_SESSIONS = 5;
 
@@ -34,10 +40,29 @@ export default function Sidebar({
   onSettings,
   onNewSession,
   onFocusTerminal,
+  works = [],
+  workSessionIds = [],
+  capacity,
+  selectedWorkId,
+  page,
+  onPage,
+  onOpenWork,
+  onSearch,
 }) {
   const [dragging, setDragging] = useState(null);
   const projects = state.projects;
   const active = state.active;
+  // 属于 Work 的会话以 Work 的形式出现，不再作为普通会话重复列出。
+  const hiddenSessions = new Set(workSessionIds);
+  const worksByProject = new Map();
+  for (const work of works) {
+    if (work.archived || work.status === 'cancelled') continue;
+    const path = work.project?.path;
+    if (!path) continue;
+    if (!worksByProject.has(path)) worksByProject.set(path, []);
+    worksByProject.get(path).push(work);
+  }
+  const attentionCount = works.filter(needsAttention).length;
 
   const rowCount = projects.reduce((count, project) => {
     if (!project.expanded) return count + 1;
@@ -152,9 +177,28 @@ export default function Sidebar({
           )}
         </div>
       </div>
+      <div className="sidebar-links">
+        <button className={page === 'tapd' ? 'selected' : ''} onClick={() => onPage('tapd')}>
+          <Tray size={15} />
+          <span>我的待办</span>
+        </button>
+        <button className={page === 'works' ? 'selected' : ''} onClick={() => onPage('works')}>
+          <SquaresFour size={15} />
+          <span>Work 中心</span>
+          {attentionCount > 0 && <span className="nav-count">{attentionCount}</span>}
+        </button>
+        <button onClick={onSearch}>
+          <MagnifyingGlass size={15} />
+          <span>搜索</span>
+          <small>⌘K</small>
+        </button>
+      </div>
       <div className="project-list" onKeyDown={navigateTree}>
         {projects.map((project) => {
-          const sessions = project.sessions;
+          const sessions = project.sessions.filter((session) => !hiddenSessions.has(session.id));
+          const projectWorks = (worksByProject.get(project.path) ?? []).filter(
+            (work) => work.status !== 'completed' || work.id === selectedWorkId || work.unread,
+          );
           return (
             <section className="project-group" key={project.path}>
               <button
@@ -179,15 +223,37 @@ export default function Sidebar({
                   <Folder size={15} weight="fill" />
                 )}
                 <strong>{project.title}</strong>
-                <span>{sessions.length || ''}</span>
+                <span>{sessions.length + projectWorks.length || ''}</span>
               </button>
               {project.expanded && (
                 <div className="sessions">
+                  {projectWorks.map((work) => {
+                    const status = statusOf(work);
+                    return (
+                      <button
+                        className={`work-row ${selectedWorkId === work.id ? 'selected' : ''}`}
+                        key={work.id}
+                        title={`${work.displayId} · ${work.title} · ${status.label}`}
+                        onClick={() => onOpenWork(work.id)}
+                      >
+                        <span className={`session-indicator ${status.tone}`}>
+                          {work.status === 'running' ? <CircleNotch size={12} className="spin" /> : <i />}
+                        </span>
+                        <span>
+                          <b>{work.title}</b>
+                          <small>
+                            {work.displayId} · {status.label}
+                          </small>
+                        </span>
+                        {(work.status === 'waiting_user' || work.unread) && <ChatCircleDots size={13} />}
+                      </button>
+                    );
+                  })}
                   {sessions
                     .slice(0, project.showAll ? undefined : VISIBLE_SESSIONS)
                     .map((session) => (
                       <button
-                        className={`session-row ${active?.sessionId === session.id ? 'selected' : ''} ${dragging?.sessionId === session.id ? 'dragging' : ''}`}
+                        className={`session-row ${!selectedWorkId && active?.sessionId === session.id ? 'selected' : ''} ${dragging?.sessionId === session.id ? 'dragging' : ''}`}
                         key={session.id}
                         data-session={session.id}
                         title={session.title}
@@ -239,6 +305,23 @@ export default function Sidebar({
           );
         })}
       </div>
+      {capacity && (
+        <button className="agent-capacity" onClick={() => onPage('works')} title="打开 Work 中心">
+          <div>
+            <Cpu size={13} />
+            <span>执行队列</span>
+            <b>
+              {capacity.running} / {capacity.slots}
+            </b>
+          </div>
+          <div className="capacity-track">
+            <span style={{ width: `${Math.min(100, (capacity.running / Math.max(capacity.slots, 1)) * 100)}%` }} />
+          </div>
+          <small>
+            {capacity.queued} 个排队{capacity.waitingStart ? ` · ${capacity.waitingStart} 个待启动` : ''}
+          </small>
+        </button>
+      )}
       <button className="add-directory" onClick={onAddDirectory}>
         <Plus size={12} />
         添加目录

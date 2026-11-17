@@ -202,6 +202,9 @@ final class Store: ObservableObject {
                 "workbench": settings.thirdPaneVisible,
                 "terminalWidth": settings.terminalWidthPercent,
                 "interactionMode": settings.interactionMode.rawValue,
+                "layout": settings.layout,
+                "contextOpen": settings.contextOpen,
+                "contextWidth": settings.contextWidth,
             ] as [String: Any],
             "usage": usageInfo(),
         ]
@@ -415,6 +418,11 @@ final class Store: ObservableObject {
     /// 打开（或切到）一个会话。`sid == nil` 是新建：`name` 作为会话名，`prompt` 作为首条提示词。
     @discardableResult
     func open(cwd: String, sid: String?, label: String, name: String? = nil, prompt: String? = nil) -> String {
+        // 同一个 CLI 会话只能有一个持有者：Work 执行器正在驱动它时，不再用终端或图形聊天打开。
+        if let sid, SessionOwnership.shared.heldByExecutor(sid) {
+            Bridge.emit("claude-picker:command", detail: ["name": "sessionHeldByWork", "sessionId": sid])
+            return sid
+        }
         if settings.interactionMode == .chat {
             openChat(cwd: cwd, sid: sid, label: label, name: name)
             return sid ?? ""
@@ -432,6 +440,7 @@ final class Store: ObservableObject {
             t.onExit = { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
+                    SessionOwnership.shared.setTerminal(sessionId, held: false)
                     self.runningKeys.remove(k)
                     self.refreshSession(cwd: cwd, sid: sessionId)
                 }
@@ -452,6 +461,7 @@ final class Store: ObservableObject {
                 }
             }
             panes[k] = t
+            SessionOwnership.shared.setTerminal(sessionId, held: true)
         }
         if let newId {
             if let name, !name.isEmpty { customTitles[newId] = name }
@@ -488,6 +498,7 @@ final class Store: ObservableObject {
             runningKeys.remove(key(cwd: cwd, sid: sid))
         }
         let k = key(cwd: cwd, sid: sid ?? "new")
+        if let sid { SessionOwnership.shared.setTerminal(sid, held: true) }
         chatTarget = (cwd, sid)
         pendingChatName = sid == nil ? name : nil
         unreadKeys.remove(k)
@@ -585,6 +596,7 @@ final class Store: ObservableObject {
             chatBackend.stop()
             chatHost.reset()
         }
+        SessionOwnership.shared.clearTerminal()
         runningKeys.removeAll()
         unreadKeys.removeAll()
         chatActive = false
@@ -665,6 +677,7 @@ final class Store: ObservableObject {
         if !k.isEmpty {
             panes[k]?.terminate()
             panes.removeValue(forKey: k)
+            SessionOwnership.shared.setTerminal(activeSessionId, held: false)
             runningKeys.remove(k)
             unreadKeys.remove(k)
         }
@@ -678,6 +691,7 @@ final class Store: ObservableObject {
     func terminateAll() {
         for (_, t) in panes { t.terminate() }
         panes.removeAll()
+        SessionOwnership.shared.clearTerminal()
         chatBackend.stopAndWait()
         chatActive = false
         runningKeys.removeAll()
@@ -872,6 +886,9 @@ final class Store: ObservableObject {
         if let v = flag("terminal") { next.terminalCollapsed = !v }
         if let v = flag("workbench") { next.thirdPaneVisible = v }
         if let v = number("terminalWidth") { next.terminalWidthPercent = min(max(v, 24), 57) }
+        if let v = patch["layout"] as? String, ["A", "B", "C"].contains(v) { next.layout = v }
+        if let v = flag("contextOpen") { next.contextOpen = v }
+        if let v = number("contextWidth") { next.contextWidth = min(max(v, 290), 520) }
         if let raw = patch["interactionMode"] as? String, let mode = InteractionMode(rawValue: raw),
            mode != settings.interactionMode {
             // 切换会结束另一种方式下的会话，单独确认；其余设置照常保存。
@@ -1137,6 +1154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.delegate = self
 
         installMainMenu()
+        WorkRuntime.start()
 
         shell = ShellView(frame: rect)
         shell.autoresizingMask = [.width, .height]
@@ -1356,7 +1374,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.reloadClaudeOptions()
     }
 
+    /// 仍有 Work 在执行时先问一句：退出会停止这些执行（记为已中断，可稍后重试），不会在后台继续。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let active = WorkCore.shared.activeExecutionCount()
+        guard active > 0 else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "还有 \(active) 个 Work 正在执行"
+        alert.informativeText = "退出会停止这些执行，它们会被标记为「已中断」，下次打开后可以检查并重试。已收到的输出和工作树都会保留。"
+        alert.addButton(withTitle: "停止执行并退出")
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    /// `claude-picker://work/WORK-1001`：定位到对应的 Work。链接只用于定位，不携带凭据，也不触发任何批准。
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == Bridge.scheme && url.host == "work" {
+            let displayId = url.lastPathComponent
+            guard displayId.range(of: #"^[A-Za-z]+-\d+$"#, options: .regularExpression) != nil else { continue }
+            window?.makeKeyAndOrderFront(nil)
+            Bridge.emit("claude-picker:command", detail: ["name": "openWork", "displayId": displayId])
+        }
+    }
+
     func applicationWillTerminate(_ n: Notification) {
+        let stuck = WorkCore.shared.shutdown()
+        if !stuck.isEmpty {
+            // 没能在超时内结束的自有进程如实记下来，不假装已经清理干净。
+            NSLog("ClaudePicker: 退出时仍未结束的执行进程 pid=%@", stuck.map(String.init).joined(separator: ","))
+        }
+        WorkRuntime.stop()
         store.terminateAll()
         usageTimer?.invalidate()
         stateTimer?.invalidate()
@@ -1373,6 +1419,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 // MARK: - 启动
 
 let args = parseArgs()
+
+// `ClaudePicker --source-mcp`：作为 MCP stdio 服务运行，把来源侧（WorkBuddy）的工具调用转给正在运行的应用。
+// 这个模式不创建窗口、不打开数据库。
+if CommandLine.arguments.contains("--source-mcp") {
+    SourceMCPBridge.run(directory: AppDataDir.url.appendingPathComponent("work", isDirectory: true))
+}
 
 func buildProjects() -> [Project] {
     let rawMap = SessionScanner.scan()

@@ -11,7 +11,8 @@ let package = Package(
         .executableTarget(
             name: "ClaudeDeck",
             dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
-            path: "Sources/ClaudeDeck"
+            path: "Sources/ClaudeDeck",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         )
     ]
 )

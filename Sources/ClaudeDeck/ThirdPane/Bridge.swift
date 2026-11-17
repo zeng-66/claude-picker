@@ -90,6 +90,7 @@ enum Bridge {
         McpHandlers.self,
         AppHandlers.self,
         SessionHandlers.self,
+        WorkHandlers.self,
     ]
 
     /// 起子进程、读写文件的方法放到后台线程：fetch / pull / push、MCP 健康检查、建 worktree
@@ -97,7 +98,7 @@ enum Bridge {
     /// 留在主线程。
     static func runsInBackground(_ method: String) -> Bool {
         method.hasPrefix("git.") || method.hasPrefix("file.") || method.hasPrefix("mcp.")
-            || method == "session.create"
+            || method == "session.create" || WorkHandlers.handles(method)
     }
 
     static func dispatch(method: String, params: Any?) throws -> BridgeOutcome {
@@ -152,6 +153,8 @@ enum Bridge {
                 envelope = notImplemented(id: id, method: method)
             }
         } catch let error as GitError {
+            envelope = ["id": id, "ok": false, "error": error.jsonObject]
+        } catch let error as WorkError {
             envelope = ["id": id, "ok": false, "error": error.jsonObject]
         } catch {
             envelope = [
