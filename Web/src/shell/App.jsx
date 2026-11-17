@@ -34,6 +34,7 @@ import { errorText, isNative, on, request } from './bridge.js';
 import { IconButton, tildePath, useStored } from './ui.jsx';
 import Sidebar from './Sidebar.jsx';
 import Composer from './Composer.jsx';
+import DesktopTerminal from './DesktopTerminal.jsx';
 import WorkspaceTab from './WorkspaceTab.jsx';
 import { BranchesTab, HistoryTab, MoreTab, WorktreeTab } from './GitPages.jsx';
 import { ContextModal, DirectoryModal, McpModal, RenameSessionModal, SessionModal } from './Modals.jsx';
@@ -511,7 +512,7 @@ export default function App() {
   useEffect(() => {
     const handleKey = (event) => {
       // 原生窗口里这三个快捷键由菜单统一处理（终端有焦点时网页收不到按键）
-      if (!native && (event.metaKey || event.ctrlKey)) {
+      if ((!native || window.claudeDesktop) && (event.metaKey || event.ctrlKey)) {
         const command = { n: 'newSession', j: 'toggleTerminal', b: 'toggleSidebar' }[event.key];
         if (command) {
           event.preventDefault();
@@ -1170,7 +1171,9 @@ export default function App() {
                 onClick={() => updateSettings({ terminal: false })}
               />
             </div>
-            {active && native ? (
+            {active && window.claudeDesktop ? (
+              <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} />
+            ) : active && native ? (
               <div className="terminal-hole" data-terminal-hole />
             ) : (
               <div className="terminal-content">

@@ -1,0 +1,84 @@
+name: Desktop main packages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-main
+  cancel-in-progress: false
+env:
+  VERSION: 1.0.${{ github.run_number }}
+jobs:
+  windows:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --prefix Web
+      - run: npm ci --prefix Desktop
+      - run: node Tests/DesktopRegression/main.cjs
+      - run: node scripts/prepare-desktop-build.cjs
+      - run: npm --prefix Web run build
+      - run: npx --prefix Desktop electron-builder --projectDir Desktop --config electron-builder.cjs --win nsis --x64
+      - name: Verify packaged Windows ConPTY
+        shell: pwsh
+        run: |
+          $env:CLAUDE_PICKER_SMOKE_FILE = Join-Path $env:RUNNER_TEMP 'claude-picker-smoke.txt'
+          $process = Start-Process 'dist-windows/win-unpacked/ClaudePicker.exe' -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Packaged Windows smoke test failed' }
+          if ((Get-Content $env:CLAUDE_PICKER_SMOKE_FILE).Trim() -ne 'CLAUDE_PICKER_PTY_OK') { throw 'ConPTY marker missing' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist-windows/*.exe
+  macos:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: swift --version
+      - run: python3 -m venv /tmp/claude-picker-python
+      - run: /tmp/claude-picker-python/bin/pip install pillow
+      - run: npm ci --prefix Web
+      - run: PATH="/tmp/claude-picker-python/bin:$PATH" ./scripts/build-app.sh --zip
+      - run: mv "dist/ClaudePicker-${VERSION}.zip" "dist/ClaudePicker-${VERSION}-macos-arm64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist/*-macos-arm64.zip
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - run: node scripts/create-release-manifest.cjs release-assets
+      - name: Publish main artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$latest" = "$GITHUB_SHA"
+          if ! gh release view main-latest >/dev/null 2>&1; then
+            gh release create main-latest --target "$GITHUB_SHA" --title "main latest" --notes "Packages built from main."
+          fi
+          gh release upload main-latest release-assets/*.exe release-assets/*.zip --clobber
+          gh release upload main-latest release-assets/manifest.json --clobber

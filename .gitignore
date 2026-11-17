@@ -34,6 +34,9 @@ build/
 # Web 前端工程（T0 毕业产物）
 Web/node_modules/
 Web/dist/
+Desktop/node_modules/
+Desktop/build-info.json
+dist-windows/
 
 # 原型工作目录：代码已毕业到 Web/，这里只保留规格文档，
 # 但本地残留的依赖与构建产物不能入库（原型目录合计 356M）。

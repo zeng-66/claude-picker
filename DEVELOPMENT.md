@@ -125,6 +125,16 @@ Target: arm64-apple-macosx27.2.0
 
 ---
 
+### 2.8 Windows 与 main 版本更新
+
+Windows 桌面宿主位于 `Desktop/`，复用 `Web/` 的 React 界面，通过隔离的 Electron 桥接本地项目、Claude 终端、Git 和设置。Windows x64 开发包使用 `npm --prefix Desktop run dist:win` 构建，输出至 `dist-windows/`，分支对应的渠道、产品名和数据目录由 `scripts/prepare-desktop-build.cjs` 与 `Desktop/electron-builder.cjs` 选择。
+
+设置中的「版本更新」通过 `update.status/check/download/install` 调用原生更新器。更新清单必须对应远端 main 的最新提交，包下载后验证大小与 SHA-256，安装时退出当前应用。macOS 的原生实现位于 `ThirdPane/BridgeHandlers+Update.swift`，Windows 实现位于 `Desktop/updater.cjs`。main 的构建与清单发布由 `.github/workflows/desktop-main.yml` 执行。
+
+桌面发行范围、验证与剩余事项见 [DESKTOP_RELEASE.md](docs/DESKTOP_RELEASE.md)。Windows Work、TAPD、企微、图形聊天等服务移植和 Windows 实机验证仍待完成。当前远端尚未发布本轮安装包与清单。
+
+H5 快照及批注入口保存在 [desktop-release-prototype](docs/desktop-release-prototype/README.md)，通过 `./scripts/preview-desktop-prototype.sh` 启动。保留各版本目录、来源摘要、变更记录与批注 JSON，以支持后续界面修改追踪。
+
 ## 3. 源码地图（`main.swift`）
 
 按行号索引，改代码前先定位。

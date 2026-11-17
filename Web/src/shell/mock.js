@@ -275,6 +275,8 @@ function patchFor(r, path) {
 }
 
 const handlers = {
+  'update.status': () => ({ version: '演示版本', platform: '浏览器', state: 'idle', preview: true }),
+  'update.check': () => ({ version: '演示版本', platform: '浏览器', state: 'unpublished', preview: true }),
   'app.state': () => snapshot(),
   'app.layout': () => null,
   'app.settings': (params) => {

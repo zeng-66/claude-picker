@@ -1,0 +1,27 @@
+{
+  "name": "claude-picker-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ClaudePicker Windows desktop host",
+  "author": "zeng-66",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build:web": "npm --prefix ../Web run build",
+    "dist:win": "node ../scripts/prepare-desktop-build.cjs && npm run build:web && electron-builder --config electron-builder.cjs --win nsis --x64",
+    "pack:win": "node ../scripts/prepare-desktop-build.cjs && npm run build:web && electron-builder --config electron-builder.cjs --win --x64 --dir"
+  },
+  "dependencies": { "node-pty": "1.1.0" },
+  "devDependencies": { "electron": "40.8.0", "electron-builder": "26.18.0" },
+  "build": {
+    "appId": "local.zcl.claude-picker.windows",
+    "productName": "ClaudePicker",
+    "directories": { "output": "../dist-windows" },
+    "files": ["*.cjs", "package.json", "build-info.json"],
+    "extraResources": [{ "from": "../Web/dist", "to": "web" }],
+    "asarUnpack": ["node_modules/node-pty/**"],
+    "npmRebuild": false,
+    "win": { "target": "nsis", "artifactName": "ClaudePicker-${version}-windows-${arch}.${ext}", "signAndEditExecutable": false },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "runAfterFinish": true }
+  }
+}

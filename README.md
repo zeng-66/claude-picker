@@ -138,6 +138,12 @@ python3 scripts/make_icon.py build/icon                  # 只重生成图标
 - 一台机器同时只保留一个内嵌终端（切换会话会终止上一个）。
 - 不支持恢复被隐藏的会话的图形入口，只能改 `tree.json`。
 
+## Windows 与版本更新
+
+新增 Windows x64 开发安装包和设置中的「版本更新」，更新源指向 main 对应的构建产物。构建方法、当前 Windows 适配范围和发布流程见 [桌面发行说明](docs/DESKTOP_RELEASE.md)。
+
+最新 App 界面的可批注 H5 快照保存在 [desktop-release-prototype](docs/desktop-release-prototype/README.md)。运行 `./scripts/preview-desktop-prototype.sh` 后打开 <http://127.0.0.1:5199/?settings=updates>，批注支持导出，后续按 v002、v003 继续保存。
+
 ## 许可
 
 应用代码 MIT。vendored 的 [SwiftTerm](SwiftTerm/) 遵循其自身 MIT 许可，见 [SwiftTerm/LICENSE](SwiftTerm/LICENSE)。

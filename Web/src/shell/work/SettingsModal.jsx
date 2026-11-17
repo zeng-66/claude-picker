@@ -16,11 +16,13 @@ import {
   XCircle,
 } from '@phosphor-icons/react';
 import { errorText, request } from '../bridge.js';
+import VersionUpdates from './VersionUpdates.jsx';
 import { relativeTime } from '../ui.jsx';
 import { confirmAction } from './confirm.jsx';
 import { ModalFrame } from './WorkModals.jsx';
 
 const PAGES = [
+  ['updates', '版本更新', Info],
   ['appearance', '界面与会话', SlidersHorizontal],
   ['tapd', 'TAPD 连接', PlugsConnected],
   ['wecom', '企业微信机器人', ChatCircleDots],
@@ -679,6 +681,7 @@ export default function SettingsModal({ initialPage, settings, capacity, project
           ))}
         </nav>
         <div className="settings-detail">
+          {page === 'updates' && <VersionUpdates />}
           {page === 'appearance' && <Appearance settings={settings} capacity={capacity} onChange={onChange} notify={notify} />}
           {page === 'tapd' && <Tapd projects={projects} notify={notify} onDirty={setDirty} />}
           {page === 'wecom' && <Wecom notify={notify} onDirty={setDirty} onOpenConversations={onOpenConversations} />}

@@ -91,13 +91,14 @@ enum Bridge {
         AppHandlers.self,
         SessionHandlers.self,
         WorkHandlers.self,
+        UpdateHandlers.self,
     ]
 
     /// 起子进程、读写文件的方法放到后台线程：fetch / pull / push、MCP 健康检查、建 worktree
     /// 都可能要几十秒，同步执行会把整个窗口（含终端）冻住。其余方法读写 `@MainActor` 的 Store，
     /// 留在主线程。
     static func runsInBackground(_ method: String) -> Bool {
-        method.hasPrefix("git.") || method.hasPrefix("file.") || method.hasPrefix("mcp.")
+        method.hasPrefix("git.") || method.hasPrefix("file.") || method.hasPrefix("mcp.") || method.hasPrefix("update.")
             || method == "session.create" || WorkHandlers.handles(method)
     }
 
