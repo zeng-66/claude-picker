@@ -13,6 +13,45 @@ import threading
 import queue
 
 args = sys.argv[1:]
+
+# 一次性的结构化理解调用（企业微信机器人用来判断消息意图）：按消息内容给出确定的结果。
+if "--json-schema" in args:
+    prompt = args[-1]
+    message = prompt.split("<message>", 1)[-1].split("</message>", 1)[0].strip()
+    try:
+        index = json.loads(prompt.split("# 项目索引", 1)[1].split("# 上下文", 1)[0])
+    except Exception:
+        index = {"projects": []}
+    try:
+        context = json.loads(prompt.split("# 上下文（这个会话已有的 Work 与待澄清的意图）", 1)[1].split("# 消息", 1)[0])
+    except Exception:
+        context = {"works": [], "openIntents": []}
+    log_path = os.environ.get("FAKE_CLAUDE_LOG")
+    if log_path:
+        with open(log_path, "a") as f:
+            f.write(json.dumps({"event": "intent", "message": message, "tools": args[args.index("--tools") + 1] if "--tools" in args else None}, ensure_ascii=False) + "\n")
+    if isinstance(index, list):
+        index = {"projects": index}
+    elif not isinstance(index, dict):
+        index = {"projects": []}
+    named = [p for p in index.get("projects", []) if isinstance(p, dict) and p.get("name") and p["name"] in message]
+    if "进度" in message:
+        out = {"kind": "chat", "reply": "目前有 %d 个 Work" % len(context.get("works", []))}
+    elif context.get("openIntents") and named:
+        out = {"kind": "clarify_reply", "reply": "好的", "intentId": context["openIntents"][0]["intentId"],
+               "objective": context["openIntents"][0]["objective"], "projectId": named[0]["projectId"],
+               "resolution": "resolved", "evidence": ["回复里写明了 " + named[0]["name"]]}
+    elif len(named) == 1:
+        out = {"kind": "work", "reply": "好的", "objective": message, "title": message[:20],
+               "projectId": named[0]["projectId"], "resolution": "resolved", "evidence": ["消息里写明了 " + named[0]["name"]]}
+    elif "帮我" in message:
+        out = {"kind": "work", "reply": "需要确认项目", "objective": message, "resolution": "needs_clarification",
+               "question": "要在哪个项目里处理？"}
+    else:
+        out = {"kind": "chat", "reply": "你好"}
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "structured_output": out}, ensure_ascii=False))
+    sys.exit(0)
+
 session_id = None
 resume = False
 for i, a in enumerate(args):

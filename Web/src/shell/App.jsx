@@ -33,8 +33,23 @@ import appIcon from './clawd-mark.png';
 import { errorText, isNative, on, request } from './bridge.js';
 import { IconButton, tildePath, useStored } from './ui.jsx';
 import Sidebar from './Sidebar.jsx';
-import Composer from './Composer.jsx';
+import {
+  GIT_SECTIONS,
+  ModuleSidebar,
+  SIDEBAR_DEFAULT,
+  SidebarResizer,
+  WORK_SECTIONS,
+  moveNavigation,
+  normalizeNavigation,
+  tapdSections,
+  useNavigationDrag,
+} from './ModuleViews.jsx';
+import './modules.css';
+import Composer, { RuntimeBar } from './Composer.jsx';
 import DesktopTerminal from './DesktopTerminal.jsx';
+import FloatingConsole, { ConsoleBubble } from './FloatingConsole.jsx';
+import DesktopPet from './pet/DesktopPet.jsx';
+import { petEvent, usePetSignals } from './pet/usePetSignals.js';
 import WorkspaceTab from './WorkspaceTab.jsx';
 import { BranchesTab, HistoryTab, MoreTab, WorktreeTab } from './GitPages.jsx';
 import { ContextModal, DirectoryModal, McpModal, RenameSessionModal, SessionModal } from './Modals.jsx';
@@ -43,7 +58,7 @@ import { needsAttention, useWorks } from './work/useWorks.js';
 import WorkChat from './work/WorkChat.jsx';
 import ContextPanel from './work/ContextPanel.jsx';
 import BoardPage from './work/BoardPage.jsx';
-import TapdPage from './work/TapdPage.jsx';
+import TapdModule from './work/TapdModule.jsx';
 import ReviewTab from './work/ReviewTab.jsx';
 import FloatingWork from './work/FloatingWork.jsx';
 import SettingsModal from './work/SettingsModal.jsx';
@@ -66,6 +81,23 @@ const tabs = [
 ];
 
 const DEFAULT_TERMINAL_WIDTH = 30;
+
+/// Work 第一栏各分类的数量（docs §6.1）。
+export function workSection(work) {
+  if (work.archived || work.status === 'completed' || work.status === 'cancelled') return 'ended';
+  if (work.status === 'failed' || work.status === 'interrupted') return 'trouble';
+  return work.status;
+}
+function countWorkSections(works) {
+  const counts = { all: 0 };
+  for (const work of works) {
+    const section = workSection(work);
+    counts[section] = (counts[section] ?? 0) + 1;
+    if (!work.archived) counts.all += 1;
+  }
+  delete counts.ended;
+  return counts;
+}
 const native = isNative();
 if (native) document.documentElement.classList.add('native');
 
@@ -99,12 +131,19 @@ export default function App() {
 
   // ---------- Work ----------
   const { snapshot: workSnap } = useWorks();
+  const petSignals = usePetSignals(state, workSnap, settings);
   const [page, setPage] = useStored('page', 'workspace');
+  // 模块第一栏的当前分类：TAPD 为 workspace id 或 'all'，Work 为 WORK_SECTIONS 的 id。
+  const [sections, setSections] = useStored('moduleSections', { tapd: 'all', works: 'all' });
+  // 第一栏宽度按模块分别记忆（180–360，默认 248）。
+  const [sidebarWidths, setSidebarWidths] = useStored('sidebarWidths', {});
+  const [tapdConfig, setTapdConfig] = useState(null);
   const [selectedWorkId, setSelectedWorkId] = useStored('selectedWork', null);
   const [contextTab, setContextTab] = useState('context');
   const [reviewFile, setReviewFile] = useState(null);
   const [workModal, setWorkModal] = useState(null);
   const [tapdFocus, setTapdFocus] = useState(null);
+  const [workFocus, setWorkFocus] = useState(null);
   const layoutApplied = useRef(false);
   const selectedWork = workSnap.works.find((item) => item.id === selectedWorkId) ?? null;
 
@@ -112,14 +151,10 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [context, setContext] = useState(null);
 
-  const [floatingMinimized, setFloatingMinimized] = useStored('floatingMinimized', false);
-  const [floatingPosition, setFloatingPosition] = useStored('floatingPosition', {
-    x: Math.max(12, window.innerWidth - 384),
-    y: Math.max(56, window.innerHeight - 218),
-  });
-  const floatingRef = useRef(null);
-  const floatingDragMoved = useRef(false);
+  // 悬浮终端是否展开（收起后只能从桌宠或圆形浮标重新打开）。
+  const [consoleOpen, setConsoleOpen] = useStored('consoleOpen', false);
   const toastTimer = useRef(0);
+  const terminalVisibleRef = useRef(false);
   const lastLayout = useRef('');
 
   // ---------- 原生快照 ----------
@@ -153,6 +188,56 @@ export default function App() {
   const updateSettings = useCallback((patch, persist = true) => {
     setSettings((current) => ({ ...current, ...patch }));
     if (persist) request('app.settings', patch).catch(() => {});
+  }, []);
+
+  // ---------- 顶部页签 ----------
+  const navigation = normalizeNavigation(settings?.navigation);
+  const visiblePages = navigation
+    .filter((item) => item.visible)
+    .map((item) => PAGES.find(([id]) => id === item.id))
+    .filter(Boolean);
+  const visibleKey = visiblePages.map(([id]) => id).join(',');
+  const setNavigation = useCallback(
+    (next) => updateSettings({ navigation: normalizeNavigation(next) }),
+    [updateSettings],
+  );
+  const navigationDrag = useNavigationDrag((from, to) => setNavigation(moveNavigation(navigation, from, to)));
+  /// 让某个页签可见（只有在还有其它页签可见时才改；全部隐藏时保持全部隐藏）。
+  function revealPage(id) {
+    if (!navigation.some((item) => item.visible)) return;
+    if (navigation.find((item) => item.id === id)?.visible) return;
+    setNavigation(navigation.map((item) => (item.id === id ? { ...item, visible: true } : item)));
+  }
+
+  // 当前页签被隐藏：切到剩余顺序里的第一个。全部隐藏时回到工作空间。
+  useEffect(() => {
+    if (!settings) return;
+    if (!visiblePages.some(([id]) => id === page)) setPage(visiblePages[0]?.[0] ?? 'workspace');
+  }, [visibleKey, page, Boolean(settings)]);
+
+  // 刚进入「全部隐藏」：回到工作空间默认两栏（只执行一次）。
+  const allHiddenApplied = useRef(false);
+  useEffect(() => {
+    if (!settings) return;
+    if (visiblePages.length) {
+      allHiddenApplied.current = false;
+      return;
+    }
+    if (allHiddenApplied.current) return;
+    allHiddenApplied.current = true;
+    setPage('workspace');
+    setSelectedWorkId(null);
+    updateSettings({ sidebar: true, terminal: true, workbench: false });
+  }, [visibleKey, Boolean(settings)]);
+
+  // TAPD 第一栏：设置里启用的项目。
+  const loadTapdConfig = useCallback(() => {
+    request('tapd.settings')
+      .then(setTapdConfig)
+      .catch(() => setTapdConfig(null));
+  }, []);
+  useEffect(() => {
+    loadTapdConfig();
   }, []);
 
   // 默认布局 B（任务看板）：启动时先进入 Work 中心。只在启动时应用一次，不改变之后的手动切换。
@@ -284,10 +369,15 @@ export default function App() {
       try {
         await request(method, { projectPath: pathRef.current, ...params }, { timeoutMs: 150000 });
         if (done) notify(done);
+        // 桌宠的 Git 事件反应（docs §9.5）。
+        if (method === 'git.stashSave') petEvent('stash');
+        else if (/cherry/i.test(method)) petEvent('cherry');
+        else if (method === 'git.push' && params?.force) petEvent('forcepush');
         return true;
       } catch (error) {
         notify(errorText(error), true);
         if (error.code === 'MERGE_CONFLICT') {
+          petEvent('conflict');
           setTab('更多');
           setMorePage('合并与冲突');
         }
@@ -302,6 +392,12 @@ export default function App() {
   );
 
   const currentBranch = status?.branch ?? null;
+  const wasDetached = useRef(false);
+  useEffect(() => {
+    const detached = Boolean(status?.detachedHead);
+    if (detached && !wasDetached.current) petEvent('detached_long');
+    wasDetached.current = detached;
+  }, [status?.detachedHead]);
   const isRepository = Boolean(status);
   const notRepository = statusError?.code === 'NOT_A_REPOSITORY';
 
@@ -407,6 +503,7 @@ export default function App() {
 
   function openWork(id) {
     setSelectedWorkId(id);
+    revealPage('workspace');
     setPage('workspace');
     setReviewFile(null);
     if (settings && !settings.terminal) updateSettings({ terminal: true });
@@ -420,6 +517,7 @@ export default function App() {
 
   function openSession(target, session) {
     setSelectedWorkId(null);
+    revealPage('workspace');
     setPage('workspace');
     if (target.path !== workbenchPath) selectProject(target.path);
     if (!settings.terminal) updateSettings({ terminal: true });
@@ -428,6 +526,19 @@ export default function App() {
       cwd: session.cwd,
       sessionId: session.id,
     }).catch((error) => notify(errorText(error), true));
+  }
+
+  /// 回到工作空间并展开第二栏终端（模块侧栏 / 悬浮终端 / 桌宠 / ⌘J 共用）。
+  function restoreTerminal() {
+    setSelectedWorkId(null);
+    revealPage('workspace');
+    setPage('workspace');
+    if (!settings.terminal) updateSettings({ terminal: true });
+  }
+
+  function selectPageAt(index) {
+    const target = visiblePages[index];
+    if (target) setPage(target[0]);
   }
 
   async function sendPrompt() {
@@ -448,7 +559,11 @@ export default function App() {
   const toggles = useRef({});
   toggles.current = {
     newSession: () => setModal({ kind: 'session', mode: 'current', projectPath: workbenchPath }),
-    toggleTerminal: () => updateSettings({ terminal: !settings.terminal }),
+    toggleTerminal: () => (terminalVisibleRef.current ? updateSettings({ terminal: false }) : restoreTerminal()),
+    page1: () => selectPageAt(0),
+    page2: () => selectPageAt(1),
+    page3: () => selectPageAt(2),
+    page4: () => selectPageAt(3),
     toggleSidebar: () => updateSettings({ sidebar: !settings.sidebar }),
     toggleWorkbench: () => updateSettings({ workbench: !settings.workbench }),
     openSettings: () => setModal({ kind: 'settings' }),
@@ -513,7 +628,15 @@ export default function App() {
     const handleKey = (event) => {
       // 原生窗口里这三个快捷键由菜单统一处理（终端有焦点时网页收不到按键）
       if ((!native || window.claudeDesktop) && (event.metaKey || event.ctrlKey)) {
-        const command = { n: 'newSession', j: 'toggleTerminal', b: 'toggleSidebar' }[event.key];
+        const command = {
+          n: 'newSession',
+          j: 'toggleTerminal',
+          b: 'toggleSidebar',
+          1: 'page1',
+          2: 'page2',
+          3: 'page3',
+          4: 'page4',
+        }[event.key];
         if (command) {
           event.preventDefault();
           toggles.current[command]();
@@ -573,62 +696,13 @@ export default function App() {
   });
   useEffect(() => {
     window.addEventListener('resize', reportLayout);
-    return () => window.removeEventListener('resize', reportLayout);
+    // 自己管位置的浮层（悬浮终端、桌宠）移动后发这个事件，原生据此重新摆放终端与可点区域。
+    window.addEventListener('claude-picker:layout', reportLayout);
+    return () => {
+      window.removeEventListener('resize', reportLayout);
+      window.removeEventListener('claude-picker:layout', reportLayout);
+    };
   }, [reportLayout]);
-
-  // ---------- 悬浮输入窗 ----------
-  const terminalOpen = Boolean(settings?.terminal);
-  useEffect(() => {
-    if (terminalOpen) return undefined;
-    const containFloating = () => {
-      const bounds = floatingRef.current?.getBoundingClientRect();
-      if (!bounds) return;
-      setFloatingPosition((position) => {
-        const next = {
-          x: Math.max(12, Math.min(window.innerWidth - bounds.width - 12, position.x)),
-          y: Math.max(52, Math.min(window.innerHeight - bounds.height - 12, position.y)),
-        };
-        return next.x === position.x && next.y === position.y ? position : next;
-      });
-    };
-    containFloating();
-    window.addEventListener('resize', containFloating);
-    return () => window.removeEventListener('resize', containFloating);
-  }, [terminalOpen, floatingMinimized]);
-
-  function dragFloating(event) {
-    if (event.button !== 0) return;
-    const button = event.target.closest('button');
-    if (button && button !== event.currentTarget) return;
-    const handle = event.currentTarget;
-    const panel = floatingRef.current;
-    const start = { ...floatingPosition };
-    const pointerX = event.clientX;
-    const pointerY = event.clientY;
-    floatingDragMoved.current = false;
-    handle.setPointerCapture(event.pointerId);
-    handle.onpointermove = (move) => {
-      const deltaX = move.clientX - pointerX;
-      const deltaY = move.clientY - pointerY;
-      if (Math.hypot(deltaX, deltaY) <= 4 && !floatingDragMoved.current) return;
-      floatingDragMoved.current = true;
-      setRuntimeMenu(null);
-      setFloatingPosition({
-        x: Math.max(12, Math.min(window.innerWidth - panel.offsetWidth - 12, start.x + deltaX)),
-        y: Math.max(52, Math.min(window.innerHeight - panel.offsetHeight - 12, start.y + deltaY)),
-      });
-    };
-    const finish = () => {
-      handle.onpointermove = null;
-      handle.onpointerup = null;
-      handle.onpointercancel = null;
-      window.setTimeout(() => {
-        floatingDragMoved.current = false;
-      }, 0);
-    };
-    handle.onpointerup = finish;
-    handle.onpointercancel = finish;
-  }
 
   function beginResize(event) {
     if (event.button !== 0) return;
@@ -638,12 +712,12 @@ export default function App() {
     let latest = settings.terminalWidth;
     handle.onpointermove = (move) => {
       const rect = body.getBoundingClientRect();
-      const sidebarWidth = settings.sidebar ? 250 : 48;
+      const firstColumn = settings.sidebar ? sidebarWidths[page] || SIDEBAR_DEFAULT : 48;
       latest = Math.max(
         24,
         Math.min(
           57,
-          ((move.clientX - rect.left - sidebarWidth) / (rect.width - sidebarWidth)) * 100,
+          ((move.clientX - rect.left - firstColumn) / (rect.width - firstColumn)) * 100,
         ),
       );
       updateSettings({ terminalWidth: latest }, false);
@@ -661,6 +735,36 @@ export default function App() {
   if (!state || !settings) return <div className="app booting" />;
 
   const { sidebar, terminal, workbench } = settings;
+  const sidebarWidth = sidebarWidths[page] || SIDEBAR_DEFAULT;
+  const terminalVisible = page === 'workspace' && terminal && !selectedWork;
+  terminalVisibleRef.current = terminalVisible;
+  // 悬浮终端：第二栏终端不可见时可用；选中 Work 且收起对话时沿用 FloatingWork。
+  // 原生终端（非图形聊天）：终端下方挂运行参数条。
+  const runtimeBar = <RuntimeBar runtime={state.runtime} runtimeMenu={runtimeMenu} onRuntimeMenu={setRuntimeMenu} />;
+  const consoleAllowed = !terminalVisible && !(page === 'workspace' && selectedWork && !terminal);
+  const petEnabled = settings.pet?.enabled !== false;
+  const consoleTerminal =
+    active && window.claudeDesktop ? (
+      <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} />
+    ) : active && native ? (
+      consoleOpen && consoleAllowed ? <div className="terminal-hole" data-terminal-hole /> : null
+    ) : (
+      <div className="console-placeholder">
+        {active ? `${active.label} · 终端由 ClaudePicker 原生窗口承载，浏览器预览不显示终端内容。` : '还没有打开会话。'}
+      </div>
+    );
+  function openConsoleFromPet() {
+    // 第二栏终端可见时只聚焦它（Q11）；否则打开悬浮终端。
+    if (terminalVisible) {
+      request('app.command', { name: 'focusTerminal' }).catch(() => {});
+      return;
+    }
+    setConsoleOpen(true);
+  }
+  const showTopnav = visiblePages.length > 0 && !(visiblePages.length === 1 && visiblePages[0][0] === 'workspace');
+  const tapdWorkspaces = (tapdConfig?.settings?.enabled ? tapdConfig.settings.workspaces ?? [] : []).filter(
+    (item) => item.enabled !== false,
+  );
   // 图形聊天模式：第二栏里是 Swttch 自己的输入区，外壳的输入框不再显示。
   const chatMode = settings.interactionMode === 'chat';
   const terminalWidth = settings.terminalWidth ?? DEFAULT_TERMINAL_WIDTH;
@@ -695,6 +799,142 @@ export default function App() {
         item.name.toLowerCase().includes(branchFilter.toLowerCase()),
     ),
   }));
+
+  const branchPicker = (
+    <div className="project-menu-wrap">
+      {page === 'git' && (
+        <label className="search sidebar-branch-search">
+          <MagnifyingGlass size={13} />
+          <input
+            aria-label="搜索分支"
+            placeholder="搜索分支…"
+            value={branchFilter}
+            onFocus={() => {
+              setMenu('branch');
+              loadBranches();
+            }}
+            onChange={(event) => {
+              setBranchFilter(event.target.value);
+              setMenu('branch');
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setMenu(null);
+                event.stopPropagation();
+              }
+            }}
+          />
+        </label>
+      )}
+      <button
+        className="branch-picker"
+        aria-label="选择分支"
+        title={project ? `${project.title} · ${tildePath(project.path, state.home)}` : ''}
+        onClick={() => {
+          setMenu(menu === 'branch' ? null : 'branch');
+          setPickedBranch(currentBranch ?? '');
+          if (menu !== 'branch') loadBranches();
+        }}
+        onContextMenu={(event) => openBranchContext(event, currentBranch)}
+      >
+        <GitBranch size={15} />
+        <b>{branchLabel}</b>
+        <CaretDown size={12} />
+      </button>
+      {menu === 'branch' && (
+        <div
+          className="dropdown project-branch-dropdown"
+          role="dialog"
+          aria-label="项目与分支"
+          data-blocking
+        >
+          <div className="branch-project-list">
+            <div className="menu-title">项目</div>
+            {projects.map((item) => (
+              <button
+                key={item.path}
+                className={workbenchPath === item.path ? 'selected' : ''}
+                title={tildePath(item.path, state.home)}
+                onClick={() => {
+                  selectProject(item.path);
+                  setMenu('branch');
+                }}
+              >
+                {item.isHome ? (
+                  <House
+                    size={14}
+                    weight={workbenchPath === item.path ? 'fill' : 'regular'}
+                  />
+                ) : (
+                  <Folder
+                    size={14}
+                    weight={workbenchPath === item.path ? 'fill' : 'regular'}
+                  />
+                )}
+                <span>{item.title}</span>
+              </button>
+            ))}
+          </div>
+          <div className="branch-options">
+            {page !== 'git' && (
+              <label className="search">
+                <MagnifyingGlass size={13} />
+                <input
+                  aria-label="筛选分支"
+                  placeholder="筛选分支…"
+                  value={branchFilter}
+                  onChange={(event) => setBranchFilter(event.target.value)}
+                />
+              </label>
+            )}
+            {notRepository && <div className="pane-note">这个目录不是 Git 仓库</div>}
+            {branchesError && !notRepository && (
+              <div className="pane-note error">{branchesError}</div>
+            )}
+            {!branches && !branchesError && !notRepository && (
+              <div className="pane-note">正在读取分支…</div>
+            )}
+            {branches && !branchesError && !notRepository && branchGroups.every(({ items }) => !items.length) && (
+              <div className="pane-note">没有匹配的分支</div>
+            )}
+            {branches &&
+              branchGroups.map(({ group, items }) => (
+                <div key={group}>
+                  <div className="menu-title">{group}</div>
+                  {items.map((item) => (
+                    <button
+                      key={item.name}
+                      className={`${pickedBranch === item.name ? 'picked' : ''} ${item.isCurrent ? 'current' : ''}`}
+                      disabled={gitBusy}
+                      onClick={() => {
+                        setPickedBranch(item.name);
+                        if (settings.followSessionBranch) revealBranch(item.name);
+                      }}
+                      onDoubleClick={() => checkoutBranch(item.name)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          checkoutBranch(item.name);
+                        }
+                      }}
+                      onContextMenu={(event) => {
+                        setPickedBranch(item.name);
+                        openBranchContext(event, item.name);
+                      }}
+                    >
+                      <GitBranch size={14} />
+                      <span>{item.name}</span>
+                      {item.isCurrent && <Check size={13} />}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            <div className="branch-picker-hint">双击签出 · 右键更多操作</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   function renderWorkbench() {
     if (!project)
@@ -774,6 +1014,7 @@ export default function App() {
   }
 
   const attentionCount = workSnap.works.filter(needsAttention).length;
+  const workSectionCounts = countWorkSections(workSnap.works);
   const showGitHeader = (page === 'workspace' && !selectedWork && workbench) || (page === 'git' && !selectedWork);
   const contextOpen = settings.contextOpen !== false;
   const contextWidth = settings.contextWidth ?? 330;
@@ -895,17 +1136,24 @@ export default function App() {
   function renderMain(legacy) {
     if (page === 'tapd')
       return (
-        <main className="main-page">
-          <TapdPage
-            projects={projects}
-            runtime={state.runtime}
-            notify={notify}
-            focusRef={tapdFocus}
-            onOpenSettings={() => setModal({ kind: 'settings', page: 'tapd' })}
-            onOpenWork={openWork}
-            onWorkCreated={(work) => openWork(work.id)}
-          />
-        </main>
+        <TapdModule
+          workspace={sections.tapd ?? 'all'}
+          workspaces={tapdWorkspaces}
+          config={tapdConfig}
+          projects={projects}
+          runtime={state.runtime}
+          notify={notify}
+          focusRef={tapdFocus}
+          onOpenSettings={() => setModal({ kind: 'settings', page: 'tapd' })}
+          onOpenWork={openWork}
+          onWorkCreated={(work) => {
+            // 创建任务后进入 Work 中心「全部 Work」，并定位到新卡片（docs §5.4）。
+            setSections((current) => ({ ...current, works: 'all' }));
+            revealPage('works');
+            setPage('works');
+            setWorkFocus(work.id);
+          }}
+        />
       );
     if (page === 'works')
       return (
@@ -915,8 +1163,13 @@ export default function App() {
             notify={notify}
             onOpenWork={(work) => openWork(work.id)}
             onNewWork={() => setWorkModal({ kind: 'new' })}
-            onOpenTapd={() => setPage('tapd')}
+            onOpenTapd={() => {
+              revealPage('tapd');
+              setPage('tapd');
+            }}
             onExport={(work) => setWorkModal({ kind: 'export', workId: work.id })}
+            category={sections.works ?? 'all'}
+            focusId={workFocus}
           />
         </main>
       );
@@ -942,8 +1195,10 @@ export default function App() {
 
   return (
     <div
-      className={`app ${settings.density === 'compact' ? 'compact' : ''}`}
+      data-module={page}
+      className={`app module-shell ${sidebar ? '' : 'module-sidebar-collapsed'} ${settings.density === 'compact' ? 'compact' : ''}`}
       style={{
+        '--first-sidebar-width': `${sidebarWidth}px`,
         '--app-scale': settings.appFontSize / 12,
         '--terminal-font-size': `${settings.termFontSize}px`,
       }}
@@ -960,126 +1215,35 @@ export default function App() {
             )}
           </div>
         </div>
-        <nav className="topnav" aria-label="工作台导航">
-          {PAGES.map(([id, label, Icon]) => (
-            <button
-              key={id}
-              className={page === id ? 'active' : ''}
-              title={id === 'git' && selectedWork ? `${selectedWork.displayId} 的变更审阅` : label}
-              onClick={() => setPage(id)}
-            >
-              <Icon size={15} />
-              <span className="nav-label">{label}</span>
-              {id === 'works' && attentionCount > 0 && <span className="nav-count">{attentionCount}</span>}
-            </button>
-          ))}
-        </nav>
+        {showTopnav && (
+          <nav className="topnav" aria-label="工作台导航">
+            {visiblePages.map(([id, label, Icon], index) => (
+              <button
+                key={id}
+                data-navigation-id={id}
+                data-navigation-group="top"
+                aria-label={label}
+                className={page === id ? 'active' : ''}
+                title={
+                  id === 'git' && selectedWork
+                    ? `${selectedWork.displayId} 的变更审阅`
+                    : `${label}${index < 4 ? ` ⌘${index + 1}` : ''} · 拖动排序`
+                }
+                onPointerDown={navigationDrag.beginDrag}
+                onClick={() => {
+                  if (!navigationDrag.wasDragged()) setPage(id);
+                }}
+              >
+                <Icon size={15} />
+                <span className="nav-label">{label}</span>
+                {id === 'works' && attentionCount > 0 && <span className="nav-count">{attentionCount}</span>}
+              </button>
+            ))}
+          </nav>
+        )}
         {showGitHeader ? (
           <div className="workbench-header">
-            <div className="project-menu-wrap">
-              <button
-                className="branch-picker"
-                aria-label="选择分支"
-                title={project ? `${project.title} · ${tildePath(project.path, state.home)}` : ''}
-                onClick={() => {
-                  setMenu(menu === 'branch' ? null : 'branch');
-                  setPickedBranch(currentBranch ?? '');
-                  if (menu !== 'branch') loadBranches();
-                }}
-                onContextMenu={(event) => openBranchContext(event, currentBranch)}
-              >
-                <GitBranch size={15} />
-                <b>{branchLabel}</b>
-                <CaretDown size={12} />
-              </button>
-              {menu === 'branch' && (
-                <div
-                  className="dropdown project-branch-dropdown"
-                  role="dialog"
-                  aria-label="项目与分支"
-                  data-blocking
-                >
-                  <div className="branch-project-list">
-                    <div className="menu-title">项目</div>
-                    {projects.map((item) => (
-                      <button
-                        key={item.path}
-                        className={workbenchPath === item.path ? 'selected' : ''}
-                        title={tildePath(item.path, state.home)}
-                        onClick={() => {
-                          selectProject(item.path);
-                          setMenu('branch');
-                        }}
-                      >
-                        {item.isHome ? (
-                          <House
-                            size={14}
-                            weight={workbenchPath === item.path ? 'fill' : 'regular'}
-                          />
-                        ) : (
-                          <Folder
-                            size={14}
-                            weight={workbenchPath === item.path ? 'fill' : 'regular'}
-                          />
-                        )}
-                        <span>{item.title}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="branch-options">
-                    <label className="search">
-                      <MagnifyingGlass size={13} />
-                      <input
-                        aria-label="筛选分支"
-                        placeholder="筛选分支…"
-                        value={branchFilter}
-                        onChange={(event) => setBranchFilter(event.target.value)}
-                      />
-                    </label>
-                    {notRepository && <div className="pane-note">这个目录不是 Git 仓库</div>}
-                    {branchesError && !notRepository && (
-                      <div className="pane-note error">{branchesError}</div>
-                    )}
-                    {!branches && !branchesError && !notRepository && (
-                      <div className="pane-note">正在读取分支…</div>
-                    )}
-                    {branches &&
-                      branchGroups.map(({ group, items }) => (
-                        <div key={group}>
-                          <div className="menu-title">{group}</div>
-                          {items.map((item) => (
-                            <button
-                              key={item.name}
-                              className={`${pickedBranch === item.name ? 'picked' : ''} ${item.isCurrent ? 'current' : ''}`}
-                              disabled={gitBusy}
-                              onClick={() => {
-                                setPickedBranch(item.name);
-                                if (settings.followSessionBranch) revealBranch(item.name);
-                              }}
-                              onDoubleClick={() => checkoutBranch(item.name)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  event.preventDefault();
-                                  checkoutBranch(item.name);
-                                }
-                              }}
-                              onContextMenu={(event) => {
-                                setPickedBranch(item.name);
-                                openBranchContext(event, item.name);
-                              }}
-                            >
-                              <GitBranch size={14} />
-                              <span>{item.name}</span>
-                              {item.isCurrent && <Check size={13} />}
-                            </button>
-                          ))}
-                        </div>
-                      ))}
-                    <div className="branch-picker-hint">双击签出 · 右键更多操作</div>
-                  </div>
-                </div>
-              )}
-            </div>
+            {page !== 'git' && branchPicker}
             <nav className="git-nav">
               {tabs.map(([name, Icon]) => (
                 <button
@@ -1105,11 +1269,13 @@ export default function App() {
                 }}
               />
             </nav>
-            <IconButton
-              icon={Minus}
-              label="收起工作台 ⌘\"
-              onClick={() => updateSettings({ workbench: false })}
-            />
+            {page === 'workspace' && (
+              <IconButton
+                icon={Minus}
+                label="收起工作台 ⌘\"
+                onClick={() => updateSettings({ workbench: false })}
+              />
+            )}
           </div>
         ) : (
           <div className="titlebar-fill" data-drag-region />
@@ -1122,33 +1288,59 @@ export default function App() {
         </div>
       </header>
       <div className="layout">
-        <Sidebar
-          state={state}
-          open={sidebar}
-          terminalOpen={terminal}
-          workbenchPath={workbenchPath}
-          treeCursor={treeCursor}
-          onCursor={setTreeCursor}
-          onToggleSidebar={() => updateSettings({ sidebar: !sidebar })}
-          onExpandTerminal={() => updateSettings({ terminal: true })}
-          onSelectProject={selectProject}
-          onOpenSession={openSession}
-          onTreeContext={openTreeContext}
-          onAddDirectory={() => setModal({ kind: 'directory' })}
-          onSettings={() => setModal({ kind: 'settings' })}
-          onNewSession={() =>
-            setModal({ kind: 'session', mode: 'current', projectPath: workbenchPath })
-          }
-          onFocusTerminal={() => request('app.command', { name: 'focusTerminal' })}
-          works={workSnap.works}
-          workSessionIds={workSnap.workSessionIds}
-          capacity={workSnap.capacity}
-          selectedWorkId={page === 'workspace' || page === 'git' ? selectedWorkId : null}
-          page={page}
-          onPage={setPage}
-          onOpenWork={openWork}
-          onSearch={() => setWorkModal({ kind: 'search' })}
-        />
+        {page === 'workspace' ? (
+          <Sidebar
+            state={state}
+            open={sidebar}
+            terminalOpen={terminal}
+            workbenchPath={workbenchPath}
+            treeCursor={treeCursor}
+            onCursor={setTreeCursor}
+            onToggleSidebar={() => updateSettings({ sidebar: !sidebar })}
+            onExpandTerminal={() => updateSettings({ terminal: true })}
+            onSelectProject={selectProject}
+            onOpenSession={openSession}
+            onTreeContext={openTreeContext}
+            onAddDirectory={() => setModal({ kind: 'directory' })}
+            onSettings={() => setModal({ kind: 'settings' })}
+            onNewSession={() =>
+              setModal({ kind: 'session', mode: 'current', projectPath: workbenchPath })
+            }
+            onFocusTerminal={() => request('app.command', { name: 'focusTerminal' })}
+            works={workSnap.works}
+            workSessionIds={workSnap.workSessionIds}
+            selectedWorkId={page === 'workspace' || page === 'git' ? selectedWorkId : null}
+            onOpenWork={openWork}
+            onSearch={() => setWorkModal({ kind: 'search' })}
+          />
+        ) : (
+          <ModuleSidebar
+            page={page}
+            items={
+              page === 'tapd' ? tapdSections(tapdWorkspaces) : page === 'works' ? WORK_SECTIONS : GIT_SECTIONS
+            }
+            section={page === 'git' ? tab : sections[page] ?? 'all'}
+            counts={page === 'works' ? workSectionCounts : {}}
+            collapsed={!sidebar}
+            onToggle={() => updateSettings({ sidebar: !sidebar })}
+            onSection={(section) => {
+              if (page === 'git') {
+                setTab(section);
+                setMorePage(null);
+              } else setSections((current) => ({ ...current, [page]: section }));
+            }}
+            onSettings={() => setModal({ kind: 'settings' })}
+            terminalVisible={terminalVisible}
+            onTerminal={restoreTerminal}
+            branchControls={page === 'git' ? branchPicker : null}
+          />
+        )}
+        {sidebar && (
+          <SidebarResizer
+            width={sidebarWidth}
+            onChange={(value) => setSidebarWidths((current) => ({ ...current, [page]: value }))}
+          />
+        )}
 
         {renderMain(
           <>
@@ -1199,7 +1391,8 @@ export default function App() {
                 )}
               </div>
             )}
-            {!chatMode && <div className="terminal-dock">{composer}</div>}
+            {!chatMode && !native && !window.claudeDesktop && <div className="terminal-dock">{composer}</div>}
+            {!chatMode && (native || window.claudeDesktop) && runtimeBar}
           </section>
         ) : null}
 
@@ -1242,84 +1435,45 @@ export default function App() {
             )}
             {renderWorkbench()}
           </main>
-        ) : (
-          <div className="workbench-rail">
-            <IconButton
-              icon={Code}
-              label="展开工作台 ⌘\"
-              onClick={() => updateSettings({ workbench: true })}
-            />
-            <span>工作台</span>
-          </div>
-        )}
+        ) : null}
           </>,
         )}
       </div>
       {page === 'workspace' && selectedWork && !terminal && (
         <FloatingWork work={selectedWork} onRestore={() => updateSettings({ terminal: true })} />
       )}
-      {page === 'workspace' &&
-        !selectedWork &&
-        !terminal &&
-        (chatMode ? (
-          <button
-            className={`composer-bubble ${active?.busy ? 'busy' : ''}`}
-            style={{ left: floatingPosition.x, top: floatingPosition.y }}
-            aria-label="恢复第二栏"
-            title="恢复第二栏 ⌘J"
-            onClick={() => updateSettings({ terminal: true })}
-          >
-            <img src={appIcon} alt="" />
-          </button>
-        ) : floatingMinimized ? (
-          <button
-            ref={floatingRef}
-            className={`composer-bubble ${active?.busy ? 'busy' : ''}`}
-            style={{ left: floatingPosition.x, top: floatingPosition.y }}
-            aria-label="展开悬浮输入框"
-            title="展开输入框 · 拖动可移动"
-            onPointerDown={dragFloating}
-            onClick={() => {
-              if (floatingDragMoved.current) {
-                floatingDragMoved.current = false;
-                return;
-              }
-              setFloatingMinimized(false);
-            }}
-          >
-            <img src={appIcon} alt="" />
-          </button>
-        ) : (
-          <section
-            ref={floatingRef}
-            className={`floating-composer ${floatingPosition.y < 220 ? 'near-top' : ''}`}
-            style={{ left: floatingPosition.x, top: floatingPosition.y }}
-            aria-label="悬浮输入框"
-          >
-            <div className="floating-composer-header" onPointerDown={dragFloating}>
-              <img src={appIcon} alt="" />
-              {active && <span>{active.label}</span>}
-              <small role="status">
-                {active?.busy ? '正在思考…' : active ? '当前会话' : '新对话'}
-              </small>
-              <IconButton
-                icon={Minus}
-                label="缩小为圆形浮标"
-                onClick={() => {
-                  setRuntimeMenu(null);
-                  floatingDragMoved.current = false;
-                  setFloatingMinimized(true);
-                }}
-              />
-              <IconButton
-                icon={Terminal}
-                label="恢复第二栏 ⌘J"
-                onClick={() => updateSettings({ terminal: true })}
-              />
-            </div>
-            {composer}
-          </section>
-        ))}
+      {consoleAllowed && (
+        <FloatingConsole
+          open={consoleOpen}
+          onClose={() => setConsoleOpen(false)}
+          title={active?.label ?? '新对话'}
+          status={active?.busy ? '正在思考…' : active ? '当前会话' : null}
+          composer={composer}
+          terminal={consoleTerminal}
+          footer={!chatMode && (native || window.claudeDesktop) ? runtimeBar : null}
+          onRestore={() => {
+            setConsoleOpen(false);
+            restoreTerminal();
+          }}
+        />
+      )}
+      {consoleAllowed && !consoleOpen && !petEnabled && (
+        <ConsoleBubble busy={active?.busy} onOpen={() => setConsoleOpen(true)} />
+      )}
+      {petEnabled && (
+        <DesktopPet
+          settings={settings.pet}
+          onChange={(patch) => updateSettings({ pet: { ...settings.pet, ...patch } })}
+          signals={petSignals}
+          onClick={openConsoleFromPet}
+          onOpenConsole={() => {
+            if (terminalVisible) updateSettings({ terminal: false });
+            setConsoleOpen(true);
+          }}
+          onOpenSession={restoreTerminal}
+          onSettings={() => setModal({ kind: 'settings', page: 'pet' })}
+        />
+      )}
       {treeContext && (
         <div
           className="branch-context tree-context"
@@ -1446,12 +1600,17 @@ export default function App() {
           projects={projects}
           notify={notify}
           onChange={updateSettings}
+          navigation={navigation}
+          onNavigationChange={setNavigation}
           onOpenMcp={() => setModal({ kind: 'mcp' })}
           onOpenConversations={() => {
             setModal(null);
             setWorkModal({ kind: 'source' });
           }}
-          onClose={() => setModal(null)}
+          onClose={() => {
+            setModal(null);
+            loadTapdConfig();
+          }}
         />
       )}
       {workModal?.kind === 'new' && (

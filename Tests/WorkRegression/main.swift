@@ -1,4 +1,5 @@
 import Foundation
+import Network
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -631,6 +632,223 @@ do {
     check(!FileManager.default.fileExists(atPath: SourceSocketServer.socketURL(directory: socketDir).path), "停止后移除套接字")
 
     for item in wecomWorks() { _ = try? core.cancel(workId: item["id"]?.stringValue ?? "", revision: nil, requestId: nil) }
+}
+
+print("企业微信智能机器人长连接")
+do {
+    // 本机假服务端：按官方 SDK 的帧格式应答认证、心跳、回复与主动推送。
+    final class FakeWecom: @unchecked Sendable {
+        let listener: NWListener
+        let queue = DispatchQueue(label: "fake-wecom")
+        let lock = NSLock()
+        var frames: [JSONValue] = []
+        var connections: [NWConnection] = []
+        var authCode = 0
+        var sendCode = 0
+        var port: UInt16 = 0
+
+        init() throws {
+            let params = NWParameters.tcp
+            let ws = NWProtocolWebSocket.Options()
+            ws.autoReplyPing = true
+            params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
+            listener = try NWListener(using: params, on: .any)
+            let ready = DispatchSemaphore(value: 0)
+            listener.stateUpdateHandler = { state in if case .ready = state { ready.signal() } }
+            listener.newConnectionHandler = { [weak self] connection in
+                guard let self else { return }
+                self.lock.lock(); self.connections.append(connection); self.lock.unlock()
+                connection.start(queue: self.queue)
+                self.receive(connection)
+            }
+            listener.start(queue: queue)
+            _ = ready.wait(timeout: .now() + 5)
+            port = listener.port?.rawValue ?? 0
+        }
+
+        func receive(_ connection: NWConnection) {
+            connection.receiveMessage { [weak self] data, _, _, error in
+                guard let self, error == nil else { return }
+                if let data, let frame = JSONValue.parse(data) { self.handle(frame, connection) }
+                self.receive(connection)
+            }
+        }
+
+        func handle(_ frame: JSONValue, _ connection: NWConnection) {
+            lock.lock(); frames.append(frame); lock.unlock()
+            let reqId = frame["headers"]?["req_id"] ?? .null
+            switch frame["cmd"]?.stringValue {
+            case "aibot_subscribe":
+                send(.obj(["headers": .obj(["req_id": reqId]), "errcode": .int(authCode), "errmsg": .string(authCode == 0 ? "ok" : "invalid secret")]), connection)
+            case "ping", "aibot_respond_msg":
+                send(.obj(["headers": .obj(["req_id": reqId]), "errcode": .int(0), "errmsg": .string("ok")]), connection)
+            case "aibot_send_msg":
+                send(.obj(["headers": .obj(["req_id": reqId]), "errcode": .int(sendCode), "errmsg": .string(sendCode == 0 ? "ok" : "no permission")]), connection)
+            default: break
+            }
+        }
+
+        func send(_ frame: JSONValue, _ connection: NWConnection? = nil) {
+            lock.lock(); let target = connection ?? connections.last; lock.unlock()
+            guard let target else { return }
+            let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+            let context = NWConnection.ContentContext(identifier: "frame", metadata: [meta])
+            target.send(content: Data(frame.serialized().utf8), contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
+        }
+
+        func sent(_ cmd: String) -> [JSONValue] {
+            lock.lock(); defer { lock.unlock() }
+            return frames.filter { $0["cmd"]?.stringValue == cmd }
+        }
+
+        var connectionCount: Int { lock.lock(); defer { lock.unlock() }; return connections.count }
+
+        func push(msgid: String, text: String, user: String = "zhangsan", chat: String? = "group-1") -> String {
+            let reqId = "callback_\(msgid)"
+            var body: [String: JSONValue] = ["msgid": .string(msgid), "aibotid": .string("test-bot"), "msgtype": .string("text"),
+                                             "chattype": .string(chat == nil ? "single" : "group"),
+                                             "from": .obj(["userid": .string(user)]), "text": .obj(["content": .string(text)])]
+            if let chat { body["chatid"] = .string(chat) }
+            send(.obj(["cmd": .string("aibot_msg_callback"), "headers": .obj(["req_id": .string(reqId)]), "body": .object(body)]))
+            return reqId
+        }
+
+        /// 某次回调最终（finish=true）的回复内容。
+        func finalReply(_ reqId: String) -> String? {
+            sent("aibot_respond_msg").last {
+                $0["headers"]?["req_id"]?.stringValue == reqId && $0["body"]?["stream"]?["finish"]?.boolValue == true
+            }?["body"]?["stream"]?["content"]?.stringValue
+        }
+    }
+
+    let fake = try FakeWecom()
+    setenv("CLAUDE_PICKER_WECOM_WS_URL", "ws://127.0.0.1:\(fake.port)", 1)
+    let bot = WecomBot.shared
+    try core.putSetting("robot", .obj(["name": .string("开发协作助手"), "enabled": .bool(true), "botId": .string("test-bot"), "mode": .string("work"),
+                                       "autoStart": .bool(false), "remoteAnswers": .bool(false)]))
+    bot.start(core: core)
+    check(waitUntil(3) { bot.status()["state"]?.stringValue == "disabled" }, "没有 Secret 时不连接", bot.status().serialized())
+    try Keychain.set(.wecomBotSecret, "test-secret")
+    bot.refresh(force: true)
+    check(waitUntil(8) { bot.status()["state"]?.stringValue == "connected" }, "保存 Secret 后连接并认证成功", bot.status().serialized())
+    let subscribe = fake.sent("aibot_subscribe").last
+    check(subscribe?["body"]?["bot_id"]?.stringValue == "test-bot" && subscribe?["body"]?["secret"]?.stringValue == "test-secret",
+          "认证帧带 bot_id 与 secret")
+    check(core.getSetting("robot.status")?["state"]?.stringValue == "connected"
+          && core.getSetting("robot.status")?.serialized().contains("test-secret") == false, "连接状态落库，且不含 Secret")
+    check(Keychain.get(.wecomBotSecret) == "test-secret" && core.getSetting("robot")?.serialized().contains("test-secret") == false,
+          "Secret 只在钥匙串，不进设置")
+
+    let worksBefore = (core.snapshot()["works"]?.arrayValue ?? []).count
+    let idsBefore = Set((core.snapshot()["works"]?.arrayValue ?? []).compactMap { $0["id"]?.stringValue })
+    let first = fake.push(msgid: "bot-m1", text: "@开发协作助手 帮我在 alpha 项目里优化搜索 SCENARIO:edit")
+    check(waitUntil(10) { fake.finalReply(first) != nil }, "收到消息后回复最终结果")
+    let placeholder = fake.sent("aibot_respond_msg").first { $0["headers"]?["req_id"]?.stringValue == first }
+    check(placeholder?["body"]?["stream"]?["finish"]?.boolValue == false, "先回复「正在处理」占位，再给最终结果（同一个 stream）")
+    let created = fake.finalReply(first) ?? ""
+    check(created.contains("已创建 WORK-") && created.contains("alpha"), "明确项目的工作请求创建 Work 并回执", created)
+    let botWork = (core.snapshot()["works"]?.arrayValue ?? []).first { !idsBefore.contains($0["id"]?.stringValue ?? "") }
+    check(botWork?["project"]?["name"]?.stringValue == "alpha" && botWork?["startRequested"]?.boolValue == false,
+          "Work 归到 alpha，默认等待应用内启动")
+    let intentCall = fakeLog().last { $0["event"]?.stringValue == "intent" }
+    check(intentCall?["tools"]?.stringValue == "" && intentCall?["message"]?.stringValue?.hasPrefix("@") == false,
+          "理解消息的调用不带任何工具，且去掉了 @机器人")
+    let verified = try core.read { try $0.db.first("SELECT actor_id, actor_verified FROM input_events WHERE remote_event_id = 'bot-m1'") }
+    check(verified?.text("actor_id") == "zhangsan" && verified?.bool("actor_verified") == true, "机器人回调里的发送人记为已验证")
+
+    let replay = fake.push(msgid: "bot-m1", text: "@开发协作助手 帮我在 alpha 项目里优化搜索 SCENARIO:edit")
+    check(waitUntil(6) { fake.finalReply(replay) != nil }, "重复投递的消息也有回复")
+    check((core.snapshot()["works"]?.arrayValue ?? []).count == worksBefore + 1, "WB-09 同一条消息重放不会再建 Work")
+
+    let chat = fake.push(msgid: "bot-m2", text: "现在进度怎么样")
+    check(waitUntil(10) { fake.finalReply(chat) != nil } && fake.finalReply(chat)?.contains("目前有 1 个 Work") == true,
+          "WB-08 普通问答直接回答，带上本会话 Work 的情况", fake.finalReply(chat) ?? "")
+    check((core.snapshot()["works"]?.arrayValue ?? []).count == worksBefore + 1, "WB-08 问答不产生 Work")
+
+    let vague = fake.push(msgid: "bot-m3", text: "帮我修一下导出", user: "lisi")
+    check(waitUntil(10) { fake.finalReply(vague) != nil } && fake.finalReply(vague)?.contains("哪个项目") == true,
+          "WB-04 项目不明确时在原会话追问", fake.finalReply(vague) ?? "")
+    let wrongPerson = fake.push(msgid: "bot-m4", text: "在 beta 里", user: "wangwu")
+    check(waitUntil(10) { fake.finalReply(wrongPerson) != nil } && fake.finalReply(wrongPerson)?.contains("提出该需求的人") == true,
+          "WB-07 别人的回复不能确定 lisi 的需求", fake.finalReply(wrongPerson) ?? "")
+    let clarified = fake.push(msgid: "bot-m5", text: "在 beta 里", user: "lisi")
+    check(waitUntil(10) { fake.finalReply(clarified)?.contains("已创建") == true }, "WB-06 发起人补充后创建 Work", fake.finalReply(clarified) ?? "")
+
+    // 应用内启动后，状态变化通过 aibot_send_msg 推回原群。
+    let botWorkId = botWork?["id"]?.stringValue ?? ""
+    _ = try core.start(workId: botWorkId, revision: nil, requestId: nil)
+    check(waitUntil(15) { status(core, botWorkId) == "waiting_review" }, "机器人发起的 Work 执行到待审阅")
+    check(waitUntil(10) { fake.sent("aibot_send_msg").contains { $0["body"]?["markdown"]?["content"]?.stringValue?.contains("等待审阅") == true } },
+          "WB-14 状态通知主动推送到原会话")
+    let push = fake.sent("aibot_send_msg").first { $0["body"]?["markdown"]?["content"]?.stringValue?.contains("等待审阅") == true }
+    check(push?["body"]?["chatid"]?.stringValue == "group-1" && push?["body"]?["msgtype"]?.stringValue == "markdown", "推送目标是发起的群")
+    let notice = { () -> DBRow? in
+        (try? core.read { try $0.db.first("SELECT d.status FROM deliveries d WHERE d.work_id = ? AND d.target = 'wecom-notice' AND d.body LIKE '%等待审阅%'",
+                                          [.text(botWorkId)]) }) ?? nil
+    }
+    check(waitUntil(6) { notice()?.text("status") == "sent" }, "WB-15 收到回执后标记已发送", notice()?.text("status") ?? "nil")
+    let mcpClaim = SourceGateway.handle(core, method: "pending_notifications", params: .obj(["limit": .int(50)]))
+    check((mcpClaim["result"]?["notifications"]?.arrayValue ?? []).allSatisfy { !($0["conversation"]?["accountId"]?.stringValue ?? "").hasPrefix("wecom-bot:") },
+          "机器人负责的会话不会再被 WorkBuddy 通道领取（不重复发送）")
+
+    _ = try core.cancel(workId: botWorkId, revision: nil, requestId: nil)
+    check(waitUntil(12) { status(core, botWorkId) == "cancelled" }, "取消机器人发起的 Work")
+
+    // 直接 Claude 对话使用真实双向执行器和模拟企微长连接。
+    try core.putSetting("robot", .obj(["enabled": .bool(true), "botId": .string("test-bot"), "mode": .string("claude")]))
+    let directWorkCount = core.snapshot()["works"]?.arrayValue?.count
+    let spawnsBefore = fakeLog().filter { $0["event"]?.text == "spawn" }.count
+    let hello = fake.push(msgid: "direct-1", text: "你好 Claude")
+    check(waitUntil(10) { fake.finalReply(hello)?.contains("你好 Claude") == true }, "企微直接收到 Claude 回复", fake.finalReply(hello) ?? "")
+    let follow = fake.push(msgid: "direct-2", text: "继续聊")
+    check(waitUntil(10) { fake.finalReply(follow)?.contains("继续聊") == true }, "同一企微会话可以继续对话")
+    check(fakeLog().filter { $0["event"]?.text == "spawn" }.count == spawnsBefore + 1, "连续消息复用同一个 Claude 进程和会话")
+    let replayDirect = fake.push(msgid: "direct-1", text: "你好 Claude")
+    check(waitUntil(6) { fake.finalReply(replayDirect) == fake.finalReply(hello) }, "直接对话重放返回原回复")
+    check(core.snapshot()["works"]?.arrayValue?.count == directWorkCount, "直接聊天和执行不创建 Work")
+    let permission = fake.push(msgid: "direct-3", text: "SCENARIO:permission")
+    check(waitUntil(10) { fake.finalReply(permission)?.contains("回复“允许”或“拒绝”") == true }, "工具权限在原企微会话询问")
+    let deny = fake.push(msgid: "direct-4", text: "拒绝")
+    check(waitUntil(10) { fake.finalReply(deny)?.contains("拒绝") == true }, "企微拒绝准确传回 Claude 工具请求")
+    let question = fake.push(msgid: "direct-5", text: "SCENARIO:question")
+    check(waitUntil(10) { fake.finalReply(question)?.contains("直接回复答案") == true }, "Claude 的问题转发到企微")
+    let answer = fake.push(msgid: "direct-6", text: "方案一")
+    check(waitUntil(10) { fake.finalReply(answer)?.contains("方案一") == true }, "企微回答后 Claude 继续执行", fake.finalReply(answer) ?? "")
+    let other = fake.push(msgid: "direct-7", text: "你好", user: "lisi")
+    check(waitUntil(10) { fake.finalReply(other)?.contains("你好") == true }, "同群其他发送人可独立对话")
+    check(fakeLog().filter { $0["event"]?.text == "spawn" }.count == spawnsBefore + 2, "不同发送人的 Claude 上下文隔离")
+
+    // 被别处的新连接顶替：断开且不自动重连。
+    let connectionsBefore = fake.connectionCount
+    fake.send(.obj(["cmd": .string("aibot_event_callback"), "headers": .obj(["req_id": .string("evt-1")]),
+                    "body": .obj(["msgtype": .string("event"), "event": .obj(["eventtype": .string("disconnected_event")])])]))
+    check(waitUntil(5) { bot.status()["state"]?.stringValue == "kicked" }, "收到 disconnected_event 后标记为被顶替")
+    usleep(2_500_000)
+    check(fake.connectionCount == connectionsBefore && bot.status()["state"]?.stringValue == "kicked", "被顶替后不自动重连")
+
+    // 认证失败：停下来等用户改，不反复重试。
+    fake.authCode = 40001
+    bot.refresh(force: true)
+    check(waitUntil(6) { bot.status()["state"]?.stringValue == "auth_failed" }, "认证失败如实显示", bot.status().serialized())
+    let attempts = fake.sent("aibot_subscribe").count
+    usleep(2_500_000)
+    check(fake.sent("aibot_subscribe").count == attempts, "认证失败后不自动重试")
+
+    // 关闭入口：断开。
+    fake.authCode = 0
+    try core.putSetting("robot", .obj(["name": .string("开发协作助手"), "enabled": .bool(false), "botId": .string("test-bot")]))
+    bot.refresh()
+    check(waitUntil(4) { bot.status()["state"]?.stringValue == "disabled" }, "WB-17 关闭对话入口后断开长连接")
+    bot.stop()
+    fake.listener.cancel()
+
+    // TAPD 令牌：钥匙串优先，且不出现在任何返回值里。
+    try Keychain.set(.tapdToken, "tapd-secret-token")
+    let pre = TapdAdapter.prerequisites(core)
+    check(pre["tokenSource"]?.stringValue == "keychain" && pre.serialized().contains("tapd-secret-token") == false,
+          "TAPD 令牌来自钥匙串，前提检查不回显令牌")
+    Keychain.delete(.tapdToken)
+    check(TapdAdapter.prerequisites(core)["tokenSource"]?.stringValue != "keychain", "清除后不再使用钥匙串里的令牌")
 }
 
 print("状态目录独占与重启恢复")

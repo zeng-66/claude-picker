@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from 'react';
+import { request } from './bridge.js';
 
 export function IconButton({ icon: Icon, label, onClick, active = false, className, ...props }) {
   return (
@@ -87,4 +88,9 @@ export function relativeTime(iso) {
   if (seconds < 86400 * 30) return `${Math.floor(seconds / 86400)} 天前`;
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/// 外部链接一律交给系统浏览器（外壳 WebView 不跳转）。
+export function openExternal(url) {
+  return request('app.openURL', { url }).catch(() => {});
 }

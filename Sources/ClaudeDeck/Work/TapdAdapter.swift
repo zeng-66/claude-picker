@@ -18,9 +18,21 @@ enum TapdAdapter {
 
     // MARK: 配置
 
+    static let defaultEndpoint = "https://api.tapd.cn"
+
     static func settings(_ core: WorkCore) -> JSONValue {
         core.getSetting("tapd") ?? .obj(["enabled": .bool(false), "cliPath": .string(""), "workspaces": .array([]),
-                                         "syncOnLaunch": .bool(true)])
+                                         "syncOnLaunch": .bool(true), "endpoint": .string("")])
+    }
+
+    /// 令牌来源：设置里保存的（钥匙串）优先，其次是登录 shell 的 TAPD_TOKEN。
+    static func credentials(_ core: WorkCore) -> (endpoint: String, token: String?, source: String) {
+        let env = LoginEnv.shared.environment
+        let configured = settings(core)["endpoint"]?.text
+        let endpoint = configured ?? env["TAPD_API_ENDPOINT"].flatMap { $0.isEmpty ? nil : $0 } ?? defaultEndpoint
+        if let token = Keychain.get(.tapdToken) { return (endpoint, token, "keychain") }
+        if let token = env["TAPD_TOKEN"], !token.isEmpty { return (endpoint, token, "env") }
+        return (endpoint, nil, "none")
     }
 
     static func locateCLI(custom: String?) -> String? {
@@ -31,25 +43,32 @@ enum TapdAdapter {
         return LoginEnv.shared.find("tapd-cli", extra: ["\(NSHomeDirectory())/.local/bin/tapd-cli"])
     }
 
-    /// 连接所需条件是否齐备（只报告有 / 无，不回显任何凭据内容）。
-    static func prerequisites(custom: String?) -> JSONValue {
-        let env = LoginEnv.shared.environment
+    /// 连接所需条件是否齐备（只报告有 / 无与来源，不回显任何凭据内容）。
+    static func prerequisites(_ core: WorkCore) -> JSONValue {
+        let creds = credentials(core)
         return .obj([
-            "cli": .str(locateCLI(custom: custom)),
-            "endpointSet": .bool(!(env["TAPD_API_ENDPOINT"] ?? "").isEmpty),
-            "tokenSet": .bool(!(env["TAPD_TOKEN"] ?? "").isEmpty),
+            "cli": .str(locateCLI(custom: settings(core)["cliPath"]?.text)),
+            "endpoint": .string(creds.endpoint),
+            "endpointSet": .bool(true),
+            "tokenSet": .bool(creds.token != nil),
+            "tokenSource": .string(creds.source),
         ])
     }
 
     // MARK: 调用
 
-    private static func run(_ args: [String], cli: String, timeout: TimeInterval = 40, retry: Bool = true) throws -> JSONValue {
-        var env = LoginEnv.shared.environment
-        env["TAPD_CLI_LOG"] = "silent"
+    /// 一次 TAPD 调用要用的可执行文件与环境（令牌只放在子进程环境里）。
+    struct Connection: Sendable {
+        var path: String
+        var env: [String: String]
+    }
+
+    private static func run(_ args: [String], cli: Connection, timeout: TimeInterval = 40, retry: Bool = true) throws -> JSONValue {
+        let env = cli.env
         var attempt = 0
         while true {
             attempt += 1
-            let result = Proc.run(cli, args, env: env, timeout: timeout)
+            let result = Proc.run(cli.path, args, env: env, timeout: timeout)
             if let launch = result.launchError { throw Failure(message: "无法运行 tapd-cli", detail: launch) }
             if result.timedOut {
                 if retry, attempt < 2 { continue }
@@ -72,17 +91,21 @@ enum TapdAdapter {
         }
     }
 
-    private static func requireCLI(_ core: WorkCore) throws -> String {
+    private static func requireCLI(_ core: WorkCore) throws -> Connection {
         let config = settings(core)
         guard let cli = locateCLI(custom: config["cliPath"]?.text) else {
             throw Failure(message: "找不到 tapd-cli", detail: "请安装 tapd-cli，或在 TAPD 连接设置里填写它的路径。")
         }
-        let env = LoginEnv.shared.environment
-        guard !(env["TAPD_API_ENDPOINT"] ?? "").isEmpty, !(env["TAPD_TOKEN"] ?? "").isEmpty else {
-            throw Failure(message: "登录 shell 里没有 TAPD 连接所需的环境变量",
-                          detail: "需要 TAPD_API_ENDPOINT 与 TAPD_TOKEN（在 shell 配置中设置后重启应用）。")
+        let creds = credentials(core)
+        guard creds.token != nil else {
+            throw Failure(message: "还没有 TAPD 个人令牌",
+                          detail: "请在设置的「TAPD 连接」里填写令牌（保存在钥匙串），或在登录 shell 里设置 TAPD_TOKEN。")
         }
-        return cli
+        var env = LoginEnv.shared.environment
+        env["TAPD_CLI_LOG"] = "silent"
+        env["TAPD_API_ENDPOINT"] = creds.endpoint
+        env["TAPD_TOKEN"] = creds.token
+        return Connection(path: cli, env: env)
     }
 
     private static func unwrap(_ items: JSONValue, _ key: String) -> [JSONValue] {
@@ -138,6 +161,8 @@ enum TapdAdapter {
         out["begin"] = .str(item["begin"]?.text)
         out["due"] = .str(item["due"]?.text ?? item["deadline"]?.text)
         out["modified"] = .str(item["modified"]?.text)
+        out["created"] = .str(item["created"]?.text)
+        out["creator"] = .str(item[isBug ? "reporter" : "creator"]?.text)
         out["workspaceName"] = .str(workspaceName)
         return .object(out)
     }
@@ -146,7 +171,7 @@ enum TapdAdapter {
 
     /// 分配给当前用户的需求与缺陷（「我的待办」，不是项目的全部需求）。按 workspace 分页读取。
     /// `query` 全是数字时按编号精确查；否则由界面在已读取的条目里按标题筛选。
-    static func todos(_ core: WorkCore, workspaceIds: [String], page: Int, query: String?) throws -> JSONValue {
+    static func todos(_ core: WorkCore, workspaceIds: [String], page: Int, query: String?, scope: String = "todo") throws -> JSONValue {
         let cli = try requireCLI(core)
         let me = try whoami(core)
         let names = Dictionary(uniqueKeysWithValues: (settings(core)["workspaces"]?.arrayValue ?? []).compactMap { item -> (String, String)? in
@@ -169,6 +194,10 @@ enum TapdAdapter {
                 if let idQuery {
                     storyArgs.append("id=\(idQuery)")
                     bugArgs.append("id=\(idQuery)")
+                } else if scope == "created" {
+                    // 「已创建」：当前用户创建的需求、提交的缺陷。
+                    storyArgs.append("creator=\(me.nick)")
+                    bugArgs.append("reporter=\(me.nick)")
                 } else {
                     storyArgs.append("owner=\(me.nick)")
                     bugArgs.append("current_owner=\(me.nick)")
@@ -176,8 +205,14 @@ enum TapdAdapter {
                 let stories = unwrap(try run(storyArgs, cli: cli), "Story")
                 let bugs = unwrap(try run(bugArgs, cli: cli), "Bug")
                 if stories.count == pageSize || bugs.count == pageSize { hasMore = true }
-                items += stories.compactMap { summary($0, type: "story", workspaceName: names[workspace]) }
-                items += bugs.compactMap { summary($0, type: "bug", workspaceName: names[workspace]) }
+                let iterations = iterationNames(workspace: workspace, ids: (stories + bugs).compactMap { $0["iteration_id"]?.text }, cli: cli)
+                func withIteration(_ value: JSONValue?) -> JSONValue? {
+                    guard case .object(var dict)? = value else { return value }
+                    if let id = dict["iterationId"]?.text { dict["iterationName"] = .str(iterations[id]) }
+                    return .object(dict)
+                }
+                items += stories.compactMap { withIteration(summary($0, type: "story", workspaceName: names[workspace])) }
+                items += bugs.compactMap { withIteration(summary($0, type: "bug", workspaceName: names[workspace])) }
             } catch let failure as Failure {
                 errors.append(.obj(["workspaceId": .string(workspace), "message": .string(failure.message),
                                     "detail": .str(failure.detail)]))
@@ -404,3 +439,164 @@ enum TapdAdapter {
         }
     }
 }
+
+// MARK: - 界面重构（docs/ui-refactor-v003.md §5）：字段、关联列表、评论与状态流转
+
+extension TapdAdapter {
+    /// 列表里的迭代名：每个 workspace 一次批量查询，失败时只是不显示名称。
+    fileprivate static func iterationNames(workspace: String, ids: [String], cli: Connection) -> [String: String] {
+        let unique = Array(Set(ids.filter { $0 != "0" && !$0.isEmpty }))
+        guard !unique.isEmpty else { return [:] }
+        guard let list = try? unwrap(run(["iteration", "list", "workspaceid=\(workspace)", "id=\(unique.joined(separator: ","))",
+                                          "limit=200"], cli: cli), "Iteration") else { return [:] }
+        var out: [String: String] = [:]
+        for item in list { if let id = item["id"]?.text { out[id] = item["name"]?.text } }
+        return out
+    }
+
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var fieldsCache: [String: JSONValue] = [:]
+    nonisolated(unsafe) private static var membersCache: [String: [String]] = [:]
+
+    /// 某类工作项的状态（内部键 → 显示名，按 TAPD 给出的顺序）、缺陷的解决方法、各字段的中文名。按 workspace + 类型缓存到进程结束。
+    static func fields(_ core: WorkCore, workspaceId: String, entityType: String) throws -> JSONValue {
+        let key = "\(workspaceId):\(entityType)"
+        cacheLock.lock()
+        if let cached = fieldsCache[key] { cacheLock.unlock(); return cached }
+        cacheLock.unlock()
+        let entity = entityType == "bug" ? "bug" : "story"
+        let data = try run([entity, "fields", "workspaceid=\(workspaceId)"], cli: try requireCLI(core))
+        func options(_ field: String) -> JSONValue {
+            // options 是对象（键 → 显示名）；JSONSerialization 不保留键序，按显示名排序给出稳定顺序。
+            guard let dict = data[field]?["options"]?.objectValue else { return .array([]) }
+            return .array(dict.sorted { ($0.value.stringValue ?? "") < ($1.value.stringValue ?? "") }.map { key, label in
+                .obj(["key": .string(key), "label": .string(label.stringValue ?? key)])
+            })
+        }
+        var labels: [String: JSONValue] = [:]
+        for (field, value) in data.objectValue ?? [:] {
+            if let label = value["label"]?.text { labels[field] = .string(label) }
+        }
+        let out = JSONValue.obj(["statuses": options("status"),
+                                 "resolutions": entity == "bug" ? options("resolution") : .array([]),
+                                 "labels": .object(labels)])
+        cacheLock.lock(); fieldsCache[key] = out; cacheLock.unlock()
+        return out
+    }
+
+    /// 项目成员（处理人候选）。
+    static func members(_ core: WorkCore, workspaceId: String) throws -> [String] {
+        cacheLock.lock()
+        if let cached = membersCache[workspaceId] { cacheLock.unlock(); return cached }
+        cacheLock.unlock()
+        let list = unwrap(try run(["user", "members", "workspaceid=\(workspaceId)", "limit=500"], cli: try requireCLI(core)),
+                          "UserWorkspace")
+        let names = list.filter { $0["status"]?.text != "0" }.compactMap { $0["user"]?.text }
+        cacheLock.lock(); membersCache[workspaceId] = names; cacheLock.unlock()
+        return names
+    }
+
+    /// 详情页签：子需求 / 关联缺陷 / 测试用例 / 变更历史（只读）。
+    static func related(_ core: WorkCore, ref: TapdRef, kind: String) throws -> JSONValue {
+        let cli = try requireCLI(core)
+        let ws = "workspaceid=\(ref.workspaceId)"
+        func rows(_ data: JSONValue) -> [JSONValue] {
+            (data.arrayValue ?? []).compactMap { row in row.objectValue?.count == 1 ? row.objectValue?.values.first : row }
+        }
+        switch kind {
+        case "children":
+            guard ref.entityType == "story" else { return .obj(["items": .array([])]) }
+            let list = unwrap(try run(["story", "list", ws, "parent_id=\(ref.entityId)", "with_v_status=1", "limit=100"], cli: cli), "Story")
+            return .obj(["items": .array(list.compactMap { summary($0, type: "story", workspaceName: nil) })])
+        case "bugs":
+            var ids: [String] = []
+            if ref.entityType == "story" {
+                ids = rows(try run(["story", "related-bugs", ws, "story_id=\(ref.entityId)"], cli: cli)).compactMap { $0["bug_id"]?.text }
+            }
+            guard !ids.isEmpty else { return .obj(["items": .array([])]) }
+            let list = unwrap(try run(["bug", "list", ws, "id=\(ids.joined(separator: ","))", "limit=100"], cli: cli), "Bug")
+            return .obj(["items": .array(list.compactMap { summary($0, type: "bug", workspaceName: nil) })])
+        case "tcases":
+            guard ref.entityType == "story" else { return .obj(["items": .array([])]) }
+            let list = rows(try run(["story", "get-tcase", ws, "story_id=\(ref.entityId)"], cli: cli))
+            return .obj(["items": .array(list.map { item in
+                .obj(["id": .str(item["tcase_id"]?.text ?? item["id"]?.text), "name": .str(item["name"]?.text ?? item["tcase_name"]?.text),
+                      "status": .str(item["status"]?.text), "result": .str(item["result_status"]?.text)])
+            })])
+        case "changes":
+            let entity = ref.entityType == "bug" ? "bug" : "story"
+            let idKey = entity == "bug" ? "bug_id" : "story_id"
+            let list = rows(try run([entity, "changes", ws, "\(idKey)=\(ref.entityId)", "limit=50", "order=created desc"], cli: cli))
+            let labels = (try? fields(core, workspaceId: ref.workspaceId, entityType: ref.entityType))?["labels"]
+            let statuses = (try? fields(core, workspaceId: ref.workspaceId, entityType: ref.entityType))?["statuses"]?.arrayValue ?? []
+            func statusName(_ key: String) -> String {
+                statuses.first { $0["key"]?.text == key }?["label"]?.text ?? key
+            }
+            return .obj(["items": .array(list.map { item in
+                let fieldChanges = (JSONValue.parse(item["changes"]?.stringValue)?.arrayValue ?? []).prefix(20).map { change -> JSONValue in
+                    let field = change["field"]?.text ?? ""
+                    var before = change["value_before"]?.stringValue ?? ""
+                    var after = change["value_after"]?.stringValue ?? ""
+                    if field == "status" || field == "v_status" { before = statusName(before); after = statusName(after) }
+                    return .obj(["field": .string(labels?[field]?.text ?? field),
+                                 "before": .string(WorkText.clip(htmlToText(before), limit: 200)),
+                                 "after": .string(WorkText.clip(htmlToText(after), limit: 200))])
+                }
+                return .obj(["id": .str(item["id"]?.text), "author": .str(item["creator"]?.text ?? item["author"]?.text),
+                             "created": .str(item["created"]?.text), "summary": .str(item["change_summary"]?.text),
+                             "changes": .array(Array(fieldChanges))])
+            })])
+        default:
+            throw Failure(message: "未知的关联类型")
+        }
+    }
+
+    /// 结果不明（超时、返回无法解析）时的写入结果：交给界面提示「已核对」或「请到 TAPD 确认」。
+    struct WriteOutcome { var confirmed: Bool; var verified: Bool; var commentId: String? }
+
+    /// 发表评论（用户在详情页点击「发表评论」）。不自动重试；超时或无法解析时回读核对，避免重复评论。
+    static func postComment(_ core: WorkCore, ref: TapdRef, body: String) throws -> WriteOutcome {
+        do {
+            let id = try addComment(core, ref: ref, body: body)
+            return WriteOutcome(confirmed: true, verified: false, commentId: id)
+        } catch let failure as Failure where failure.timedOut || failure.message.contains("无法解析") {
+            if let found = try? findComment(core, ref: ref, body: body) {
+                return WriteOutcome(confirmed: true, verified: true, commentId: found)
+            }
+            throw Failure(message: "评论结果不明确，回读也没有找到这条评论", detail: "可以稍后刷新详情核对，确认没有后再重新发表。")
+        }
+    }
+
+    /// 状态流转（用户确认后）。可同时改处理人、缺陷的解决方法。不自动重试；超时时回读状态核对。
+    static func transition(_ core: WorkCore, ref: TapdRef, to status: String, owner: String?, resolution: String?) throws -> WriteOutcome {
+        let cli = try requireCLI(core)
+        let me = try whoami(core)
+        let isBug = ref.entityType == "bug"
+        var args = [isBug ? "bug" : "story", "update", "workspaceid=\(ref.workspaceId)", "id=\(ref.entityId)",
+                    "status=\(status)", "current_user=\(me.nick)"]
+        if let owner, !owner.isEmpty { args.append("\(isBug ? "current_owner" : "owner")=\(owner)") }
+        if isBug, let resolution, !resolution.isEmpty { args.append("resolution=\(resolution)") }
+        do {
+            _ = try run(args, cli: cli, timeout: 45, retry: false)
+            return WriteOutcome(confirmed: true, verified: false, commentId: nil)
+        } catch let failure as Failure where failure.timedOut || failure.message.contains("无法解析") {
+            let entity = isBug ? "bug" : "story"
+            if let item = try? unwrap(run([entity, "list", "workspaceid=\(ref.workspaceId)", "id=\(ref.entityId)", "limit=1"], cli: cli),
+                                      isBug ? "Bug" : "Story").first, item["status"]?.text == status {
+                return WriteOutcome(confirmed: true, verified: true, commentId: nil)
+            }
+            throw Failure(message: "流转结果不明确，回读到的状态没有变化", detail: "可以刷新详情核对后再试。")
+        }
+    }
+
+    /// 写入成功后，在关联的 Work 时间线里留一条记录（Q23）。
+    static func recordOnWorks(_ core: WorkCore, ref: TapdRef, title: String, detail: String) {
+        guard let works = try? core.read({ $0.works(tapdRef: ref) }), !works.isEmpty else { return }
+        _ = try? core.write { store in
+            for work in works {
+                store.addActivity(workId: work.id, runId: nil, kind: "tapd", title: title, detail: detail, actor: "本机用户")
+            }
+        }
+    }
+}
+

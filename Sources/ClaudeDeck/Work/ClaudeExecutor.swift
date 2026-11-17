@@ -39,6 +39,7 @@ struct ExecutorConfig: Sendable {
     var model: String?
     var effort: String?
     var environment: [String: String]
+    var systemPrompt: String? = nil
 }
 
 enum ClaudeLocator {
@@ -90,6 +91,7 @@ final class ClaudeProcess: @unchecked Sendable {
         if let mode = config.permissionMode, !mode.isEmpty { args += ["--permission-mode", mode] }
         if let model = config.model, !model.isEmpty, model != "default" { args += ["--model", model] }
         if let effort = config.effort, !effort.isEmpty { args += ["--effort", effort] }
+        if let prompt = config.systemPrompt { args += ["--append-system-prompt", prompt] }
         return args
     }
 

@@ -5,6 +5,59 @@
 
 ---
 
+## 0. 分支与交付契约
+
+本节是本项目分支用途和交付动作的权威约定，适用于人工开发与 Agent 执行。
+
+### 0.1 分支与 App 对应关系
+
+| 分支 | 用途 | 对应 App |
+|---|---|---|
+| `main` | 正式版 | 正式版 App |
+| `master` | 预发布、功能内测 | 预发布内测 App |
+| `test` | 测试验证 | 测试版 App |
+| `dev` | 日常开发调试 | 开发调试 App |
+| 其他所有分支 | 功能开发、修复与开发调试 | 开发调试 App |
+
+按分支名称确定交付渠道。`codex/*`、`feat/*`、`backup/*` 等分支均归入开发分支。
+
+### 0.2 用户指令与默认交付动作
+
+| 用户指令 | 合并目标 | 必须完成的动作 |
+|---|---|---|
+| 功能内测、内测、预发布 | `master` | 提交当前功能及文档，合并到 `master`，验证、推送目标分支，构建并交付预发布内测 App |
+| 上线、正式发布 | `main` | 提交本次上线范围及文档，合并到 `main`，验证、推送目标分支，构建并交付正式版 App |
+| 打包测试、提交测试、提测 | `test` | 提交当前测试范围及文档，合并到 `test`，验证、推送目标分支，构建并交付测试版 App |
+| 开发、调试 | `dev` 或当前开发分支 | 在开发分支修改、验证并使用开发调试 App |
+
+上述交付指令已经授权本次交付所需的提交、目标分支合并、推送、打包和文档更新，执行时直接推进完整流程。用户明确指定的来源分支、范围、版本和产物格式优先。
+
+### 0.3 执行顺序
+
+1. 核对当前分支、工作区、远端和本次交付范围。将本次功能所需的代码、资源、测试与文档一起纳入提交，并保留其它工作的现场。需要切换分支时可使用独立 worktree。
+2. 更新相关文档，包括受影响的功能文档、`DEVELOPMENT.md` 中的实现与验证说明，以及受影响的 `README.md` 使用说明。交付记录包含来源分支、目标分支、版本、变更摘要、验证结果、产物路径与待处理事项。
+3. 运行与本次变更相关的构建和回归检查，提交本次交付内容，并按仓库已有方式推送来源分支。
+4. 获取远端最新状态，在目标分支上整合远端更新，再合并本次交付来源分支。处理冲突时结合双方业务语义保留所需变更。
+5. 在合并后的目标分支验证、构建对应渠道的 App。将集成阶段产生的修复和文档更新一起提交，推送目标分支，并核对远端提交与交付提交一致。
+6. 根据交付需求安装或发布对应 App，检查实际运行的版本和关键路径。涉及界面与交互的变更，按 §2.7 使用 agent-desktop 执行桌面验收。最终反馈目标分支与提交、推送结果、验证结果、安装包位置和文档更新，明确尚待用户操作的系统授权或验证事项。
+
+完成条件同时包括目标分支已合并并推送、对应 App 已构建交付、文档已同步，以及实际验证结果已记录。遇到远端权限、冲突语义或外部依赖阻塞时，保留已完成结果并报告具体阻塞。
+
+### 0.4 当前构建入口
+
+现有 `scripts/build-app.sh` 提供以下入口。
+
+| 渠道 | 当前构建入口 | App 产物 |
+|---|---|---|
+| 正式版 | `./scripts/build-app.sh` | `dist/ClaudePicker.app` |
+| 开发调试 | `./scripts/build-app.sh --dev` | `dist-dev/ClaudePickerDev.app` |
+| 测试 | `./scripts/build-app.sh --test` | `dist-test/ClaudePickerTest.app` |
+| 预发布内测 | 待补齐预发布构建入口 | 待实现对应渠道产物 |
+
+首次执行功能内测交付时，应将预发布构建入口及其渠道标识纳入本次交付并验证。图形聊天资源使用 `--with-chat`，归档格式按交付需求使用 `--zip` 或 `--dmg`。当前测试包沿用开发包的数据目录，构建事实以脚本和运行验证为准。
+
+---
+
 ## 1. 项目总览
 
 ### 1.1 它解决什么问题
@@ -64,26 +117,28 @@
 
 ```bash
 cd /Users/zcl/project/claude-picker
-./scripts/build-app.sh          # 编译 + 组装 dist/ClaudePicker.app + 图标 + 签名
-pkill -x ClaudePicker; sleep 0.3
-open -a dist/ClaudePicker.app
+./scripts/build-app.sh --dev    # 编译并组装开发调试 App
+open dist-dev/ClaudePickerDev.app
 ```
+
+日常调试使用开发调试 App。更新运行中的 App 后，退出并重新打开对应渠道的实例，再检查实际运行版本。分支合并与渠道选择遵循 §0。
 
 脚本做六件事：`swift build -c release` → 组装 `dist/ClaudePicker.app`（可执行文件从 `.build/release/ClaudeDeck` 复制并改名为 `ClaudePicker`）→ 用 `scripts/make_icon.py` 生成 `AppIcon.icns` → 写 `Info.plist` → `codesign --force --deep --sign -` → 可选 `--zip` / `--dmg`。
 
 环境变量可覆盖打包参数：`VERSION`（默认 1.0.0）、`BUILD_NUMBER`（默认 1）、`MIN_MACOS`（默认 14.0）。
 
-### 2.2 手写四步（脚本不适用时）
+### 2.2 手动更新开发调试包
+
+先通过 `./scripts/build-app.sh --dev` 生成开发调试包。仅更新其可执行文件时，执行以下步骤。
 
 ```bash
 cd /Users/zcl/project/claude-picker
-swift build -c release                                          # 1. 编译
-cp .build/release/ClaudeDeck dist/ClaudePicker.app/Contents/MacOS/ClaudePicker   # 2. 换可执行文件
-codesign --force --deep --sign - dist/ClaudePicker.app          # 3. cp 之后签名必然失效
-pkill -x ClaudePicker; sleep 0.3; open -a dist/ClaudePicker.app # 4. 重启
+swift build -c release
+cp .build/release/ClaudeDeck dist-dev/ClaudePickerDev.app/Contents/MacOS/ClaudePickerDev
+codesign --force --deep --sign - dist-dev/ClaudePickerDev.app
 ```
 
-一次完整 release 构建约 5~9 秒（增量更快）。构建成功会打印 `Build complete! (5.50秒)`。注意二进制产物名是 `ClaudeDeck`，bundle 里的名字是 `ClaudePicker`。
+退出并重新打开 `dist-dev/ClaudePickerDev.app`，检查实际运行版本。涉及前端、资源或包配置变更时，使用完整构建脚本生成对应渠道的 App。
 
 ### 2.3 发布到 GitHub Releases
 
@@ -107,12 +162,12 @@ swift build -c release 2>&1 | tail -20
 ### 2.5 验证部署真的生效
 
 ```bash
-pgrep -x ClaudePicker                        # 拿到 pid
-ls -l dist/ClaudePicker.app/Contents/MacOS/ClaudePicker   # 时间戳应该是刚刚
-codesign -dv dist/ClaudePicker.app 2>&1 | head -3         # 签名状态
+pgrep -x ClaudePickerDev                     # 开发调试包进程
+ls -l dist-dev/ClaudePickerDev.app/Contents/MacOS/ClaudePickerDev   # 时间戳应该是刚刚
+codesign -dv dist-dev/ClaudePickerDev.app 2>&1 | head -3         # 签名状态
 ```
 
-**不要把「编译通过」当成「已生效」**——忘记 cp 或忘记 pkill 都会让你以为改动没起作用。
+**不要把「编译通过」当成「已生效」**——遗漏资源更新或重启会导致实际运行版本落后于构建产物。
 
 ### 2.6 工具链事实
 
@@ -122,6 +177,44 @@ Target: arm64-apple-macosx27.2.0
 ```
 
 只用 CommandLineTools（没有完整 Xcode）。这带来一个硬约束，见 §10 第 1 条。
+
+### 2.7 桌面调试与验收（agent-desktop）
+
+涉及 App 界面、交互、设置、窗口、会话切换或连接状态的开发与修复，优先使用 `agent-desktop` 完成实际界面验证。开始前读取本机 `agent-desktop` 技能和平台说明，按本次改动选择相关操作路径。
+
+#### 执行流程
+
+1. 核对开发分支和交付渠道，按 §2.1 构建开发调试包。涉及图形聊天时加 `--with-chat`。前端迭代可连接 Vite 热更新，Swift 修改后重新编译并重启对应 App。
+2. 检查 `agent-desktop status`，确认辅助功能权限，截图时确认屏幕录制权限。运行 `agent-desktop skills get platform` 读取当前平台规则。需要授权时向用户说明具体权限，由用户完成系统授权，同时继续可执行的构建、日志和回归检查。
+3. 启动对应 App，核对实际运行的包路径和渠道。通过 `snapshot` 或 `find` 定位界面与控件，先读取当前值和错误提示。
+4. 执行本次操作，随后重新读取相关区域，核对界面结果与预期。每次界面变化后使用新快照中的控件引用，异步变化使用 `wait` 等待可判断的条件，参数以命令帮助为准。
+5. 遇到异常时，结合截图、Bridge 返回值、应用日志和持久化状态定位。Swift 崩溃、线程和内部变量使用 Debug 构建与 LLDB 辅助排查。修复后重新执行原始复现路径。
+6. 运行相关回归脚本，记录操作路径、预期结果、实际结果和必要截图。涉及企微等外部渠道时，分别记录连接状态、消息进入 Claude、结果生成和用户端收到回复的验证情况。
+
+#### 常用入口
+
+```bash
+agent-desktop status
+agent-desktop skills get platform
+agent-desktop snapshot --app local.zcl.claude-picker.dev --skeleton -i --compact
+```
+
+需要操作控件时，使用快照返回的完整引用。对命令返回的投递状态进行判断，仅在明确尚未投递且允许安全重试时重试。结果不确定时先重新观察实际状态。
+
+默认使用辅助功能语义操作。需要鼠标、键盘等物理输入时，按技能要求取得用户授权后使用 `--headed`。权限或控件支持受限时，可用当前环境允许的桌面工具继续验证，并如实记录工具及未验证部分。
+
+#### 回归范围与交付记录
+
+| 改动范围 | 验证入口 |
+|---|---|
+| 设置、弹窗、项目与会话切换 | agent-desktop 操作与界面状态核对 |
+| Work、Claude 执行与机器人 | `scripts/test-work.sh`，加受影响的真实交互路径 |
+| Git 与文件操作 | `scripts/test-git.sh`，加受影响的界面路径 |
+| 会话、终端与 Bridge | `scripts/check-session-regressions.sh`，加受影响的切换与输入路径 |
+
+验收时记录构建版本或提交、App 路径、执行路径、验证结果与剩余事项。将编译结果、回归结果和实际界面结果分别记录，系统权限或外部条件未满足的步骤标记为待验证。
+
+当前 `--dev` 使用 Release 编译配置，开发版包名和数据目录由渠道参数选择。测试包共用开发版数据目录，Claude 登录和部分配置也使用本机共享资源，准备测试数据时核对实际作用范围。
 
 ---
 
@@ -305,6 +398,8 @@ exec claude --permission-mode <mode> --model <model> --effort <effort>
 ```
 
 读一次（`Store.init` 时），改一次写一次。`sidebarWidth` 在载入时会被夹紧到 250…560。
+
+界面重构（2026-11-17）新增两个字段，均由网页外壳经 `app.settings` 写入：`navigation`（`[{id, visible}]`，顶部页签顺序与显示，只认 workspace / tapd / works / git，缺的补在后面）与 `pet`（`enabled`、`size` 96/128/160、`theme` dev-life/codex、`idleShows`、`wander`、`x`、`y`）。
 
 ### 5.2 `~/.local/share/claude-picker/tree.json` — 树状态
 
@@ -699,3 +794,35 @@ PY
 /tmp/tools/widonly            # 自建小工具，CGWindowList 过滤 owner
 screencapture -x -o -l <wid> /tmp/cp.png
 ```
+
+
+### 2026-11-17 终端输入与图形聊天边界修复
+
+原生终端（macOS 与 Electron）不再挂载外壳的 terminal-dock 输入框，直接由终端提供输入、选择及滚动交互；终端收起时只提供恢复入口。浏览器演示保留输入框。该调整不替换 main 的终端实现，仅移除外壳额外输入层。
+
+图形聊天修改 Swttch ChatPage：消息滚动区使用 flex 剩余空间并允许缩小，输入/审批区域作为滚动区外的独立兄弟节点，从布局上阻止消息经过输入框后方。移除更新横幅和浏览器通知横幅，保留连接/认证错误提示。改动已保存到 patches/swttch/0002-composer-outside-transcript.patch；上游既有 TranscriptToolRun.tsx 改动未纳入该补丁。
+
+验证：Swttch 布局用例修改前 2 项失败，修复后布局和顶部栏共 9 项通过；Web、v003 与 Swttch 前端生产构建通过，开发版使用 --dev --with-chat 构建。agent-desktop 辅助功能权限仍为 denied，通过 CUA 读取当前开发版确认旧版现场；未重启正在使用中的 App，修正版实际桌面交互尚待重启复验。
+
+### 2026-11-17 界面重构（按 H5 原型 v003）
+
+技术方案与逐个按钮的交互约定见 [docs/ui-refactor-v003.md](docs/ui-refactor-v003.md)，确认记录在其 §14。在当前分支直接开发。
+
+| 模块 | 实现入口 |
+|---|---|
+| 顶部页签（显示、排序、拖拽、⌘1–⌘4）、第一栏切换与宽度 | `Web/src/shell/ModuleViews.jsx`、`App.jsx`、`modules.css`；原生 `AppSettings.navigation`、菜单「显示 → 切换到第 N 个页签」 |
+| 工作空间侧栏 | `Sidebar.jsx`：移除「我的待办」「Work 中心」快捷入口与「执行队列」；第二栏右侧「工作台」竖条移除 |
+| 变更模块 | `App.jsx` 的 `branchPicker`：变更页签下分支搜索与选择器放在第一栏 |
+| TAPD 模块 | `work/TapdModule.jsx`（取代 `TapdPage.jsx`）；原生新增 `tapd.fields`、`tapd.related`、`tapd.comment`、`tapd.transition`，`tapd.todos` 增加 `scope:'created'`、迭代名、创建时间 / 创建人；写操作经 `TapdWriteOnce` 按 requestId 去重、不自动重试、结果不明时回读 |
+| Work 模块 | 沿用 `work/BoardPage.jsx`（用户截图确认），新增 `category` 过滤列与 `focusId` 定位 |
+| 悬浮终端 | `FloatingConsole.jsx`：尺寸达到阈值时渲染 `data-terminal-hole`，原生终端随浮窗移动；浮层自管位置时派发 `claude-picker:layout` 让外壳重新回报布局 |
+| 桌宠 P1 | `pet/`：`themes.js`（Dev Life 读取素材自带 `theme.json`，Codex 像素版同语义映射）、`usePetSignals.js`（会话 + Work 汇总状态与一次性事件）、`DesktopPet.jsx`、`PetSettings.jsx`；素材在 `Web/src/assets/pet/` |
+| 外部链接 | 原生 `app.openURL`（只接受 http / https），网页用 `openExternal()` |
+| 原生终端运行参数条 | `Composer.jsx` 的 `RuntimeBar`：原生终端（macOS / Windows，非图形聊天）下方显示「模式 / 模型 / 推理强度 / 快速模式」快捷下拉，走 `app.runtime`；悬浮终端放大显示真实终端时同样挂在终端下方 |
+
+浏览器预览：`cd Web && npx vite`，地址带 `?demo` 时 mock 提供演示 Work 与 TAPD 数据（不进入应用）。
+
+验证：`vite build`、`swift build` 通过；`scripts/test-work.sh` 191 项、`scripts/test-git.sh`、`scripts/check-session-regressions.sh`（会话 / 终端 / 桥接）全部通过。用无头 Chrome 在 `?demo` 预览上逐项操作：页签拖拽排序、隐藏 / 只留工作空间 / 全部隐藏、第一栏宽度按模块记忆、变更第一栏分支控件、Work 分类计数与单列显示、TAPD 分组表格 / 项目过滤 / 详情 / 评论 / 流转同步列表 / 变更历史 / 创建任务默认名称 / 最近访问、悬浮终端打开 / 展开 / 缩放 / 跨模块保留、桌宠单击 / 右键菜单 / 打开当前会话，均无控制台错误。开发包 `--dev --with-chat` 已构建并启动，截图确认新布局与桌宠渲染。
+
+待验证：原生窗口内的鼠标交互（悬浮终端承载真实终端时的拖动与缩放、桌宠盖在终端上时的点击）未做实机操作；TAPD 评论与流转尚未在真实工作项上写入（需要用户提供可修改的测试工作项 ID）。
+

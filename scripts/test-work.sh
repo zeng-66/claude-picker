@@ -10,6 +10,8 @@ export WORK_TEST_DIR="$test_dir/scratch"
 export FAKE_CLAUDE_LOG="$test_dir/fake-claude.log"
 export FAKE_CLAUDE_STATE="$test_dir/fake-state"
 export CLAUDE_PICKER_CLAUDE_BIN="$test_dir/claude"
+# 凭据走进程内存储，不碰真实钥匙串。
+export CLAUDE_PICKER_KEYCHAIN=memory
 mkdir -p "$WORK_TEST_DIR" "$FAKE_CLAUDE_STATE"
 cp "$repo_dir/Tests/WorkRegression/fake-claude.py" "$CLAUDE_PICKER_CLAUDE_BIN"
 chmod +x "$CLAUDE_PICKER_CLAUDE_BIN"

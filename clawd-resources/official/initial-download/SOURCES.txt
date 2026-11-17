@@ -1,0 +1,8 @@
+Clawd assets downloaded from claude.ai on 2026-11-17.
+Artwork by Anthropic. This ZIP was assembled locally.
+
+https://claude.ai/images/clawd/core/Clawd-Still.png
+https://claude.ai/images/clawd/core/Clawd-Waving.gif
+https://claude.ai/images/clawd/core/Clawd-JumpingHappy.gif
+https://claude.ai/images/clawd/persona/Clawd-Magnifier.gif
+https://claude.ai/images/clawd/persona/Clawd-RacingCar.gif

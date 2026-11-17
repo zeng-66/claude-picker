@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -25 45 45" width="288" height="288">
+  <defs>
+    <style>
+      .bounce { animation: bounce 0.36s infinite; }
+      .step-a, .step-b { animation: step 0.72s infinite step-end; }
+      .step-b { animation-delay: -0.36s; }
+      .puff-a, .puff-b { animation: puff 0.72s infinite ease-out; }
+      .puff-b { animation-delay: -0.36s; }
+      @keyframes bounce {
+        0%, 100% { transform: none; animation-timing-function: ease-out; }
+        50% { transform: translate(0, -1px); animation-timing-function: ease-in; }
+      }
+      @keyframes step { 0% { transform: translate(0, -1px); } 50% { transform: none; } }
+      @keyframes puff { 0% { transform: none; opacity: 0.9; } 100% { transform: translate(-3px, -1px); opacity: 0; } }
+    </style>
+  </defs>
+  <g fill="#CFC8C0"><g class="puff-a"><rect x="1" y="14" width="1" height="1"/></g><g class="puff-b"><rect x="0" y="13" width="1" height="1"/></g></g>
+  <g class="bounce" fill="#D77757">
+    <g class="step-a"><rect x="3" y="11" width="1" height="4"/></g><g class="step-b"><rect x="5" y="11" width="1" height="4"/></g><g class="step-a"><rect x="9" y="11" width="1" height="4"/></g><g class="step-b"><rect x="11" y="11" width="1" height="4"/></g>
+    <rect x="2" y="6" width="11" height="7"/><g class="step-a"><rect x="0" y="9" width="2" height="2"/></g><g class="step-b"><rect x="13" y="9" width="2" height="2"/></g>
+    <g fill="#1a1a1a"><rect x="4" y="9" width="1" height="1"/><rect x="5" y="8" width="1" height="1"/><rect x="6" y="9" width="1" height="1"/><rect x="10" y="9" width="1" height="1"/><rect x="11" y="8" width="1" height="1"/><rect x="12" y="9" width="1" height="1"/></g>
+  </g>
+</svg>

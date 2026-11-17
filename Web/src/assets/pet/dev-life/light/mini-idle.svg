@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-15 -25 45 45" width="288" height="288">
+  <defs>
+    <style>
+      .lid { animation: lid 5.4s infinite step-end; }
+      @keyframes lid { 0% { opacity: 1; } 96.6% { opacity: 0; } }
+      .stretch { transform-origin: 7.5px 15px; animation: stretch 30s infinite; }
+      .arm { animation: arm 30s infinite step-end; }
+      .breath { transform-origin: 7.5px 15px; animation: breath 2.7s infinite ease-in-out; }
+      #eyes-js, #body-js { transition: transform 0.25s ease; }
+      @keyframes stretch {
+        0%, 88%, 100% { transform: none; animation-timing-function: ease-out; }
+        90%, 94% { transform: scaleY(1.08); animation-timing-function: ease-in-out; }
+        96% { transform: none; }
+      }
+      @keyframes arm { 0% { transform: none; } 89.5% { transform: translateY(-2px); } 95% { transform: none; } }
+      @keyframes breath { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(0.965); } }
+    </style>
+  </defs>
+  <g fill="#D77757"><rect x="3" y="11" width="1" height="4"/><rect x="5" y="11" width="1" height="4"/><rect x="9" y="11" width="1" height="4"/><rect x="11" y="11" width="1" height="4"/></g>
+  <g class="stretch">
+    <g id="body-js">
+      <g class="breath" fill="#D77757">
+        <rect x="2" y="6" width="11" height="7"/><g class="arm"><rect x="0" y="9" width="2" height="2"/><rect x="13" y="9" width="2" height="2"/></g>
+        <g id="eyes-js" fill="#1a1a1a"><g class="lid"><rect x="4" y="8" width="1" height="1"/><rect x="10" y="8" width="1" height="1"/></g><rect x="4" y="9" width="1" height="1"/><rect x="10" y="9" width="1" height="1"/></g>
+      </g>
+    </g>
+  </g>
+</svg>

@@ -26,12 +26,12 @@ import { ModalFrame } from "./WorkModals.jsx";
 const PAGES = [
   ["pet", "桌宠", Robot],
   ["navigation", "顶部页签", SlidersHorizontal],
-  ["updates", "版本更新", Info],
   ["appearance", "界面与会话", SlidersHorizontal],
   ["tapd", "TAPD 连接", PlugsConnected],
   ["wecom", "企业微信机器人", ChatCircleDots],
   ["mcp", "MCP 服务", PuzzlePiece],
   ["agent", "智能体能力", Robot],
+  ["updates", "版本更新", Info],
 ];
 
 function Appearance({ settings, capacity, onChange, notify }) {

@@ -19,6 +19,25 @@ import { relativeTime, useStored } from '../ui.jsx';
 import { StatusPill } from './WorkChat.jsx';
 import { confirmAction } from './confirm.jsx';
 import { needsAttention, newId, shortId, statusOf } from './useWorks.js';
+import dancingClawd from '../../assets/clawd-official/dancing.webp';
+
+/// 第一栏分类（docs/ui-refactor-v003.md §6.1）：all 为截图中的完整看板，其它只显示对应的列。
+const CATEGORY_LABELS = {
+  queued: '待执行',
+  running: '执行中',
+  waiting_user: '待回答',
+  waiting_review: '待审阅',
+  trouble: '异常',
+  ended: '已结束',
+};
+const CATEGORY_STATUSES = {
+  queued: ['queued'],
+  running: ['running'],
+  waiting_user: ['waiting_user'],
+  waiting_review: ['waiting_review'],
+  trouble: ['failed', 'interrupted'],
+  ended: ['completed', 'cancelled'],
+};
 
 const COLUMNS = [
   ['queued', '排队中', CircleDashed, 'neutral'],
@@ -125,11 +144,12 @@ function CardMenu({ work, notify, onExport, onClose }) {
   );
 }
 
-function WorkCard({ work, onOpen, notify, onExport }) {
+function WorkCard({ work, onOpen, notify, onExport, focused = false }) {
   const [menu, setMenu] = useState(false);
   return (
     <div
-      className={`task-card ${needsAttention(work) ? 'attention' : ''}`}
+      data-work-id={work.id}
+      className={`task-card ${needsAttention(work) ? 'attention' : ''} ${focused ? 'focused' : ''}`}
       role="button"
       tabIndex={0}
       onClick={() => onOpen(work)}
@@ -171,7 +191,15 @@ function WorkCard({ work, onOpen, notify, onExport }) {
   );
 }
 
-export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onOpenTapd, onExport }) {
+export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onOpenTapd, onExport, category = 'all', focusId = null }) {
+  // 刚从 TAPD 创建的 Work：滚动到它并短暂高亮。
+  useEffect(() => {
+    if (!focusId) return;
+    const timer = window.setTimeout(() => {
+      document.querySelector(`[data-work-id="${focusId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [focusId, snapshot.works.length]);
   const [view, setView] = useStored('boardView', 'board');
   const [projectId, setProjectId] = useStored('boardProject', '');
   const [showEnded, setShowEnded] = useStored('boardEnded', false);
@@ -182,20 +210,40 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
   const active = scoped.filter((work) => !ENDED.includes(work.status) && !work.archived);
   const attention = scoped.filter(needsAttention);
   const trouble = scoped.filter((work) => TROUBLE.includes(work.status) && !work.archived);
-  const ended = scoped.filter((work) => ENDED.includes(work.status) || work.archived);
   const capacity = snapshot.capacity;
   const projects = snapshot.projects.filter((project) => all.some((work) => work.projectId === project.id));
 
-  const listed = scoped.filter(
-    (work) => (showEnded || !ENDED.includes(work.status)) && (!statusFilter || work.status === statusFilter),
+  // 「已结束」分类总是包含已归档的，不受「显示已结束与已归档」开关影响。
+  const endedAll = all.filter(
+    (work) => (!projectId || work.projectId === projectId) && (ENDED.includes(work.status) || work.archived),
   );
+  const inCategory = (work) =>
+    category === 'all' ||
+    (category === 'ended'
+      ? ENDED.includes(work.status) || work.archived
+      : !work.archived && CATEGORY_STATUSES[category]?.includes(work.status));
+  const listed = scoped.filter(
+    (work) =>
+      inCategory(work) &&
+      (category === 'ended' || showEnded || !ENDED.includes(work.status)) &&
+      (!statusFilter || work.status === statusFilter),
+  );
+  const columns = category === 'all' ? COLUMNS : COLUMNS.filter(([value]) => value === category);
+  const showTrouble = category === 'trouble' || (category === 'all' && trouble.length > 0);
+  const showEndedSection = category === 'ended' || (category === 'all' && showEnded);
+  // 有 Work 且全部已结束：空态换成跳舞的 Clawd（§9.9）。
+  const allDone = all.length > 0 && all.every((work) => ENDED.includes(work.status) || work.archived);
+  const boardEmpty =
+    category !== 'ended' &&
+    columns.every(([value]) => !active.some((work) => work.status === value)) &&
+    !(showTrouble && trouble.length);
 
   return (
     <section className="page board-page">
       <div className="page-heading">
         <div>
           <div className="eyebrow">AGENT WORKSPACE</div>
-          <h1>Work 中心</h1>
+          <h1>{category === 'all' ? 'Work 中心' : CATEGORY_LABELS[category]}</h1>
           <p>从需求到交付持续推进，在需要你时找到你。</p>
         </div>
         <div>
@@ -300,8 +348,15 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
 
       {view === 'board' ? (
         <>
-          <div className="kanban" style={{ '--columns': COLUMNS.length + (trouble.length ? 1 : 0) }}>
-            {COLUMNS.map(([value, label, Icon, tone]) => {
+          {allDone && boardEmpty && (
+            <div className="work-all-done">
+              <img src={dancingClawd} alt="" />
+              <p>所有 Work 都已结束。</p>
+            </div>
+          )}
+          {category !== 'ended' && (
+          <div className="kanban" style={{ '--columns': Math.max(1, columns.length + (showTrouble ? 1 : 0)) }}>
+            {columns.map(([value, label, Icon, tone]) => {
               const cards = active.filter((work) => work.status === value);
               return (
                 <section className="kanban-column" key={value} aria-label={label}>
@@ -318,13 +373,13 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
                     )}
                   </div>
                   {cards.map((work) => (
-                    <WorkCard key={work.id} work={work} onOpen={onOpenWork} notify={notify} onExport={onExport} />
+                    <WorkCard key={work.id} work={work} onOpen={onOpenWork} notify={notify} onExport={onExport} focused={work.id === focusId} />
                   ))}
                   {!cards.length && <div className="empty-column">暂无{label}的 Work</div>}
                 </section>
               );
             })}
-            {trouble.length > 0 && (
+            {showTrouble && (
               <section className="kanban-column" aria-label="失败与中断">
                 <div className="column-title">
                   <span className="red">
@@ -334,18 +389,20 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
                   <span className="tiny-count">{trouble.length}</span>
                 </div>
                 {trouble.map((work) => (
-                  <WorkCard key={work.id} work={work} onOpen={onOpenWork} notify={notify} onExport={onExport} />
+                  <WorkCard key={work.id} work={work} onOpen={onOpenWork} notify={notify} onExport={onExport} focused={work.id === focusId} />
                 ))}
+                {!trouble.length && <div className="empty-column">暂无异常的 Work</div>}
               </section>
             )}
           </div>
-          {showEnded && (
+          )}
+          {showEndedSection && (
             <div className="ended-works">
               <h2>已结束与已归档</h2>
-              {ended.length === 0 && <p className="context-empty">没有已结束的 Work。</p>}
+              {endedAll.length === 0 && <p className="context-empty">没有已结束的 Work。</p>}
               <div className="ended-grid">
-                {ended.map((work) => (
-                  <WorkCard key={work.id} work={work} onOpen={onOpenWork} notify={notify} onExport={onExport} />
+                {endedAll.map((work) => (
+                  <WorkCard key={work.id} work={work} onOpen={onOpenWork} notify={notify} onExport={onExport} focused={work.id === focusId} />
                 ))}
               </div>
             </div>
@@ -361,7 +418,15 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
             <span>状态</span>
             <span>更新</span>
           </div>
-          {listed.length === 0 && <p className="context-empty padded">没有符合条件的 Work。</p>}
+          {listed.length === 0 &&
+            (allDone ? (
+              <div className="work-all-done">
+                <img src={dancingClawd} alt="" />
+                <p>所有 Work 都已结束。</p>
+              </div>
+            ) : (
+              <p className="context-empty padded">没有符合条件的 Work。</p>
+            ))}
           {listed.map((work) => (
             <button className="work-table-row" role="row" key={work.id} onClick={() => onOpenWork(work)}>
               <span>{work.displayId}</span>

@@ -206,6 +206,8 @@ final class Store: ObservableObject {
                 "layout": settings.layout,
                 "contextOpen": settings.contextOpen,
                 "contextWidth": settings.contextWidth,
+                "navigation": settings.navigation.map(\.json),
+                "pet": settings.pet.json,
             ] as [String: Any],
             "usage": usageInfo(),
         ]
@@ -927,6 +929,8 @@ final class Store: ObservableObject {
         if let v = patch["layout"] as? String, ["A", "B", "C"].contains(v) { next.layout = v }
         if let v = flag("contextOpen") { next.contextOpen = v }
         if let v = number("contextWidth") { next.contextWidth = min(max(v, 290), 520) }
+        if let v = NavigationItem.parse(patch["navigation"]) { next.navigation = v }
+        if let v = patch["pet"] as? [String: Any] { next.pet = next.pet.merging(v) }
         if let raw = patch["interactionMode"] as? String, let mode = InteractionMode(rawValue: raw),
            mode != settings.interactionMode {
             // 切换会结束另一种方式下的会话，单独确认；其余设置照常保存。
@@ -1139,6 +1143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         addCommand(viewMenu, "收起 / 展开项目侧栏", "toggleSidebar", key: "b")
         addCommand(viewMenu, "收起 / 展开终端", "toggleTerminal", key: "j")
         addCommand(viewMenu, "收起 / 展开工作台", "toggleWorkbench", key: "\\")
+        viewMenu.addItem(.separator())
+        for index in 1...4 {
+            addCommand(viewMenu, "切换到第 \(index) 个页签", "page\(index)", key: "\(index)")
+        }
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
 
@@ -1215,6 +1223,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 case 38: self.sendCommand("toggleTerminal"); return nil     // ⌘J
                 case 45: self.sendCommand("newSession"); return nil         // ⌘N
                 case 42: self.sendCommand("toggleWorkbench"); return nil    // ⌘\
+                case 18: self.sendCommand("page1"); return nil              // ⌘1
+                case 19: self.sendCommand("page2"); return nil              // ⌘2
+                case 20: self.sendCommand("page3"); return nil              // ⌘3
+                case 21: self.sendCommand("page4"); return nil              // ⌘4
                 default: break
                 }
             }

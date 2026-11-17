@@ -182,13 +182,19 @@ enum WorkHandlers: BridgeModule {
         case "tapd.settings":
             if case .object(let patch)? = p["patch"] {
                 var current = TapdAdapter.settings(core).objectValue ?? [:]
-                for (key, value) in patch where ["enabled", "cliPath", "workspaces", "syncOnLaunch"].contains(key) {
+                for (key, value) in patch where ["enabled", "cliPath", "workspaces", "syncOnLaunch", "endpoint"].contains(key) {
                     current[key] = value
                 }
                 try core.putSetting("tapd", .object(current))
             }
             let config = TapdAdapter.settings(core)
-            return .obj(["settings": config, "prerequisites": TapdAdapter.prerequisites(custom: config["cliPath"]?.text)])
+            return .obj(["settings": config, "prerequisites": TapdAdapter.prerequisites(core)])
+        case "tapd.setToken":
+            try Keychain.set(.tapdToken, p["token"]?.stringValue ?? "")
+            return .obj(["prerequisites": TapdAdapter.prerequisites(core)])
+        case "tapd.clearToken":
+            Keychain.delete(.tapdToken)
+            return .obj(["prerequisites": TapdAdapter.prerequisites(core)])
         case "tapd.test":
             do {
                 let me = try TapdAdapter.whoami(core)
@@ -212,8 +218,48 @@ enum WorkHandlers: BridgeModule {
             guard !targets.isEmpty else {
                 throw WorkError.unavailable("还没有选择要显示的 TAPD 项目。请在设置的「TAPD 连接」里勾选。")
             }
-            do { return try TapdAdapter.todos(core, workspaceIds: targets, page: max(p["page"]?.intValue ?? 1, 1), query: p["query"]?.text) }
+            do {
+                return try TapdAdapter.todos(core, workspaceIds: targets, page: max(p["page"]?.intValue ?? 1, 1), query: p["query"]?.text,
+                                             scope: p["scope"]?.text == "created" ? "created" : "todo")
+            } catch let failure as TapdAdapter.Failure { throw failure.workError }
+        case "tapd.fields":
+            guard let ref = TapdRef(json: p["ref"]) else { throw WorkError.invalid("缺少完整的 TAPD 对象标识") }
+            do {
+                var out = try TapdAdapter.fields(core, workspaceId: ref.workspaceId, entityType: ref.entityType).objectValue ?? [:]
+                out["members"] = .array(((try? TapdAdapter.members(core, workspaceId: ref.workspaceId)) ?? []).map { .string($0) })
+                return .object(out)
+            } catch let failure as TapdAdapter.Failure { throw failure.workError }
+        case "tapd.related":
+            guard let ref = TapdRef(json: p["ref"]) else { throw WorkError.invalid("缺少完整的 TAPD 对象标识") }
+            do { return try TapdAdapter.related(core, ref: ref, kind: try text(p, "kind")) }
             catch let failure as TapdAdapter.Failure { throw failure.workError }
+        case "tapd.comment":
+            // 写入 TAPD：同一个 requestId 只执行一次（界面重发或重复点击不会多发一条评论）。
+            guard let ref = TapdRef(json: p["ref"]) else { throw WorkError.invalid("缺少完整的 TAPD 对象标识") }
+            let body = (p["body"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { throw WorkError.invalid("评论内容为空") }
+            return try TapdWriteOnce.run(try text(p, "requestId")) {
+                do {
+                    let outcome = try TapdAdapter.postComment(core, ref: ref, body: body)
+                    TapdAdapter.recordOnWorks(core, ref: ref, title: "已在 TAPD 评论",
+                                              detail: WorkText.clip(body.replacingOccurrences(of: "\n", with: " "), limit: 80))
+                    return .obj(["ok": .bool(true), "verified": .bool(outcome.verified), "commentId": .str(outcome.commentId)])
+                } catch let failure as TapdAdapter.Failure { throw failure.workError }
+            }
+        case "tapd.transition":
+            guard let ref = TapdRef(json: p["ref"]) else { throw WorkError.invalid("缺少完整的 TAPD 对象标识") }
+            let target = try text(p, "to")
+            let owner = p["owner"]?.text
+            return try TapdWriteOnce.run(try text(p, "requestId")) {
+                do {
+                    let outcome = try TapdAdapter.transition(core, ref: ref, to: target, owner: owner, resolution: p["resolution"]?.text)
+                    let from = p["fromLabel"]?.text ?? "—"
+                    let toLabel = p["toLabel"]?.text ?? target
+                    TapdAdapter.recordOnWorks(core, ref: ref, title: "已在 TAPD 流转",
+                                              detail: "\(from) → \(toLabel)" + (owner.map { "（处理人 \($0)）" } ?? ""))
+                    return .obj(["ok": .bool(true), "verified": .bool(outcome.verified)])
+                } catch let failure as TapdAdapter.Failure { throw failure.workError }
+            }
         case "tapd.detail":
             guard let ref = TapdRef(json: p["ref"]) else { throw WorkError.invalid("缺少完整的 TAPD 对象标识") }
             do { return try TapdAdapter.detail(core, ref: ref) }
@@ -289,11 +335,33 @@ enum WorkHandlers: BridgeModule {
                 guard (1...50).contains(trimmed.count) else { throw WorkError.invalid("机器人名称需为 1–50 个字符") }
                 current["name"] = .string(trimmed)
             }
+            if let mode = patch["mode"]?.text {
+                guard ["claude", "work"].contains(mode) else { throw WorkError.invalid("未知的机器人对话模式") }
+                current["mode"] = .string(mode)
+            }
             for key in ["enabled", "autoStart", "remoteAnswers"] {
                 if let value = patch[key]?.boolValue { current[key] = .bool(value) }
             }
+            if let botId = patch["botId"]?.stringValue {
+                let trimmed = botId.trimmingCharacters(in: .whitespacesAndNewlines)
+                current["botId"] = trimmed.isEmpty ? .null : .string(trimmed)
+            }
             try core.putSetting("robot", .object(current))
+            WecomBot.shared.refresh()
             return SourceGateway.settings(core)     // 回读保存后的值
+        case "source.setSecret":
+            try Keychain.set(.wecomBotSecret, p["secret"]?.stringValue ?? "")
+            WecomBot.shared.refresh(force: true)
+            return .obj(["saved": .bool(true)])
+        case "source.clearSecret":
+            Keychain.delete(.wecomBotSecret)
+            WecomBot.shared.refresh()
+            return .obj(["saved": .bool(false)])
+        case "source.botStatus":
+            return WecomBot.shared.status()
+        case "source.reconnect":
+            WecomBot.shared.refresh(force: true)
+            return .obj(["ok": .bool(true)])
         case "source.mcpCommand":
             let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
             return .obj(["command": .string(executable), "args": .array([.string("--source-mcp")]),
@@ -346,10 +414,34 @@ enum WorkRuntime {
             }
         }
         TapdAdapter.registerEffects(core)
+        WecomBot.shared.start(core: core)
         SourceSocketServer.shared.start(core: core, directory: AppDataDir.url.appendingPathComponent("work", isDirectory: true))
     }
 
     static func stop() {
+        WecomBot.shared.stop()
         SourceSocketServer.shared.stop()
     }
 }
+
+/// TAPD 写操作的幂等：同一个 requestId 只真正执行一次，之后直接返回第一次的结果（进程内记忆）。
+enum TapdWriteOnce {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var results: [String: JSONValue] = [:]
+    nonisolated(unsafe) private static var running: Set<String> = []
+
+    static func run(_ requestId: String, _ body: () throws -> JSONValue) throws -> JSONValue {
+        lock.lock()
+        if let done = results[requestId] { lock.unlock(); return done }
+        guard running.insert(requestId).inserted else {
+            lock.unlock()
+            throw WorkError.rejected("这次写入正在进行，请稍候。")
+        }
+        lock.unlock()
+        defer { lock.lock(); running.remove(requestId); lock.unlock() }
+        let result = try body()
+        lock.lock(); results[requestId] = result; lock.unlock()
+        return result
+    }
+}
+

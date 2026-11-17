@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   CaretRight,
+  Cat,
   ChatCircleDots,
   CheckCircle,
   Copy,
@@ -12,6 +13,7 @@ import {
   PuzzlePiece,
   Robot,
   SlidersHorizontal,
+  SquaresFour,
   Warning,
   XCircle,
 } from '@phosphor-icons/react';
@@ -20,14 +22,18 @@ import VersionUpdates from './VersionUpdates.jsx';
 import { relativeTime } from '../ui.jsx';
 import { confirmAction } from './confirm.jsx';
 import { ModalFrame } from './WorkModals.jsx';
+import { NavigationSettings } from '../ModuleViews.jsx';
+import { PetSettings } from '../pet/PetSettings.jsx';
 
 const PAGES = [
-  ['updates', '版本更新', Info],
   ['appearance', '界面与会话', SlidersHorizontal],
+  ['navigation', '顶部页签', SquaresFour],
+  ['pet', '桌宠', Cat],
   ['tapd', 'TAPD 连接', PlugsConnected],
   ['wecom', '企业微信机器人', ChatCircleDots],
   ['mcp', 'MCP 服务', PuzzlePiece],
   ['agent', '智能体能力', Robot],
+  ['updates', '版本更新', Info],
 ];
 
 function Appearance({ settings, capacity, onChange, notify }) {
@@ -161,6 +167,66 @@ function Appearance({ settings, capacity, onChange, notify }) {
   );
 }
 
+function SecretField({ label, saved, placeholder, onSave, onClear, hint }) {
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  async function save() {
+    if (!value.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(value.trim());
+      setValue('');
+    } catch (cause) {
+      setError(errorText(cause)); // 输入保留，便于改正
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="field">
+      {label}
+      <div className="slots-row">
+        <input
+          type="password"
+          autoComplete="off"
+          aria-label={label}
+          style={{ flex: 1 }}
+          placeholder={saved ? '已保存在钥匙串（输入新值可替换）' : placeholder}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing) save();
+          }}
+        />
+        <button disabled={!value.trim() || busy} onClick={save}>
+          {busy ? '保存中…' : saved ? '替换' : '保存'}
+        </button>
+        {saved && onClear && (
+          <button
+            onClick={async () => {
+              if (
+                await confirmAction({
+                  title: `清除${label}？`,
+                  text: '会从钥匙串里删除，之后需要重新填写。',
+                  confirmLabel: '清除',
+                  danger: true,
+                })
+              )
+                onClear();
+            }}
+          >
+            清除
+          </button>
+        )}
+      </div>
+      {hint && <small>{hint}</small>}
+      {error && <small className="field-error">{error}</small>}
+    </div>
+  );
+}
+
 function Tapd({ projects, notify, onDirty }) {
   const [info, setInfo] = useState(null);
   const [form, setForm] = useState(null);
@@ -244,21 +310,51 @@ function Tapd({ projects, notify, onDirty }) {
   return (
     <>
       <h3>TAPD 连接</h3>
-      <p>通过本机的 tapd-cli 读取分配给你的待办。令牌只从登录 shell 的环境变量读取，不会被保存或显示。</p>
+      <p>通过本机的 tapd-cli 读取分配给你的待办。个人令牌保存在 macOS 钥匙串里，不会写进设置文件、日志，也不会再显示出来。</p>
       <div className="prereq-list">
         <div>
           {pre.cli ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
           tapd-cli：{pre.cli ?? '没有找到'}
         </div>
         <div>
-          {pre.endpointSet ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
-          TAPD_API_ENDPOINT：{pre.endpointSet ? '已设置' : '未设置'}
+          {pre.tokenSet ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
+          个人令牌：
+          {pre.tokenSource === 'keychain'
+            ? '已保存在钥匙串'
+            : pre.tokenSource === 'env'
+              ? '使用登录 shell 的 TAPD_TOKEN'
+              : '未设置'}
         </div>
         <div>
-          {pre.tokenSet ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
-          TAPD_TOKEN：{pre.tokenSet ? '已设置' : '未设置'}
+          <CheckCircle size={14} className="green" />
+          API 地址：{pre.endpoint}
         </div>
       </div>
+      <SecretField
+        label="TAPD 个人令牌"
+        saved={pre.tokenSource === 'keychain'}
+        placeholder="在 TAPD「个人设置 → 个人令牌」里生成"
+        hint="保存后优先使用这里的令牌；清除后回到登录 shell 的 TAPD_TOKEN（如果有）。"
+        onSave={async (token) => {
+          const result = await request('tapd.setToken', { token });
+          setInfo((current) => ({ ...current, prerequisites: result.prerequisites }));
+          setTest(null);
+          notify('TAPD 令牌已保存到钥匙串');
+        }}
+        onClear={async () => {
+          const result = await request('tapd.clearToken');
+          setInfo((current) => ({ ...current, prerequisites: result.prerequisites }));
+          setTest(null);
+        }}
+      />
+      <label className="field">
+        API 地址（留空使用 https://api.tapd.cn）
+        <input
+          value={form.endpoint ?? ''}
+          placeholder="https://api.tapd.cn"
+          onChange={(event) => setForm({ ...form, endpoint: event.target.value })}
+        />
+      </label>
       <label className="field">
         tapd-cli 路径（留空自动查找）
         <input
@@ -379,8 +475,18 @@ function Tapd({ projects, notify, onDirty }) {
   );
 }
 
+const BOT_STATE = {
+  connected: ['已连接', 'green'],
+  connecting: ['连接中', 'blue'],
+  auth_failed: ['认证失败', 'red'],
+  kicked: ['已被顶替', 'amber'],
+  error: ['连接中断', 'amber'],
+  disabled: ['未连接', 'neutral'],
+};
+
 function Wecom({ notify, onDirty, onOpenConversations }) {
   const [overview, setOverview] = useState(null);
+  const [bot, setBot] = useState(null);
   const [form, setForm] = useState(null);
   const [command, setCommand] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -397,6 +503,10 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
   useEffect(() => {
     load();
     request('source.mcpCommand').then(setCommand).catch(() => {});
+    const poll = () => request('source.botStatus').then(setBot).catch(() => {});
+    poll();
+    const timer = window.setInterval(poll, 2500);
+    return () => window.clearInterval(timer);
   }, []);
 
   const dirty = Boolean(overview && form && JSON.stringify(form) !== JSON.stringify(overview.settings));
@@ -429,36 +539,50 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
         </div>
         <div>
           <h3>企业微信机器人</h3>
-          <p>由 WorkBuddy 与人交流，把明确的工作请求交给项目里的 Work。</p>
+          <p>直接在企业微信与 Claude 连续对话，处理项目任务。</p>
         </div>
       </div>
       <div className="robot-connection">
         <div>
           <PlugsConnected size={15} />
-          <b>宿主接口</b>
-          <small>{overview.listening ? '本机套接字监听中' : '未监听（数据目录路径过长或无法创建）'}</small>
+          <b>智能机器人长连接</b>
+          <small>{bot?.message ?? (bot?.state === 'connected' ? '收发消息正常' : '保存 Bot ID 与 Secret 并启用后自动连接')}</small>
         </div>
-        <span className={`pill ${overview.listening ? 'green' : 'red'}`}>{overview.listening ? '已就绪' : '不可用'}</span>
-      </div>
-      <div className="robot-connection">
-        <div>
-          <Robot size={15} />
-          <b>WorkBuddy</b>
-          <small>
-            {overview.lastSeen
-              ? `最近一次调用宿主接口：${relativeTime(overview.lastSeen)}`
-              : '尚未收到任何调用。对端的接入方式没有在这台机器上验证过。'}
-          </small>
-        </div>
-        <span className={`pill ${overview.lastSeen ? 'green' : 'neutral'}`}>{overview.lastSeen ? '有过调用' : '未验证'}</span>
+        <span className={`pill ${BOT_STATE[bot?.state]?.[1] ?? 'neutral'}`}>{BOT_STATE[bot?.state]?.[0] ?? '—'}</span>
+        <button
+          disabled={!form.enabled || !form.botId || !bot?.secretSaved}
+          onClick={() => request('source.reconnect').then(() => notify('正在重新连接…'))}
+        >
+          重新连接
+        </button>
       </div>
       <div className="robot-flow">
         <span>企业微信</span>
         <CaretRight size={12} />
-        <span>WorkBuddy</span>
+        <span>{form.name || '机器人'}</span>
         <CaretRight size={12} />
-        <b>项目 / Work</b>
+        <b>{form.mode === 'work' ? '项目 / Work' : 'Claude 连续对话'}</b>
       </div>
+      <label className="field">
+        Bot ID
+        <input
+          value={form.botId ?? ''}
+          autoComplete="off"
+          placeholder="企业微信管理后台 → 智能机器人 → API 模式（长连接）"
+          onChange={(event) => setForm({ ...form, botId: event.target.value })}
+        />
+      </label>
+      <SecretField
+        label="Secret"
+        saved={Boolean(bot?.secretSaved)}
+        placeholder="在同一页点「获取 Secret」"
+        hint="Secret 只保存在钥匙串。一个机器人同一时间只能保持一条长连接：在别处（例如另一台电脑或 WorkBuddy）用同一组凭据连接时，这里会被顶替断开。"
+        onSave={async (secret) => {
+          await request('source.setSecret', { secret });
+          notify('Secret 已保存到钥匙串');
+        }}
+        onClear={() => request('source.clearSecret').then(() => notify('Secret 已清除'))}
+      />
 
       <label className="field">
         机器人名称
@@ -474,7 +598,18 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
         <input type="checkbox" checked={form.enabled === true} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
         启用企业微信对话入口
       </label>
-      <small className="setting-hint">关闭后不再接收新的工作请求；已经创建的 Work 保留，仍在这里查看和控制。</small>
+      <small className="setting-hint">关闭后停止接收企微消息。</small>
+      <label className="field">
+        对话模式
+        <select value={form.mode ?? 'claude'} onChange={(event) => setForm({ ...form, mode: event.target.value })}>
+          <option value="claude">直接连接 Claude</option>
+          <option value="work">创建和跟进 Work</option>
+        </select>
+      </label>
+      {form.mode !== 'work' && (
+        <p>企微消息直接进入 Claude，连续对话保留上下文。可操作已登记项目，工具权限和问题在当前企微对话中确认。</p>
+      )}
+      {form.mode === 'work' && <>
       <div className="static-rule">
         <Info size={14} />
         接收方式（群内 @ / 私聊）由 WorkBuddy 一侧决定，应用不配置也不臆测。
@@ -483,7 +618,7 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
         <input type="checkbox" checked={form.autoStart === true} onChange={(event) => setForm({ ...form, autoStart: event.target.checked })} />
         来源创建的 Work 自动进入执行队列
       </label>
-      <small className="setting-hint">默认关闭：来源消息没有可验证的发送人身份，Work 创建后由你在应用里启动。</small>
+      <small className="setting-hint">默认关闭：群里任何人都能发起请求，Work 创建后由你在应用里启动。</small>
       <label className="check-option">
         <input
           type="checkbox"
@@ -500,7 +635,7 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
       <div className="bot-bubble">
         <small>内建行为，没有需要配置的映射</small>
         <p>
-          WorkBuddy 根据对话和宿主提供的已登记项目索引判断目标项目，宿主再校验项目登记与目录的实际位置。
+          机器人根据对话和已登记的项目索引判断目标项目（由 Claude 理解消息，不带任何工具），应用再校验项目登记与目录的实际位置。
           不配置群聊与项目的固定对应，也不需要手选目录。
         </p>
       </div>
@@ -517,8 +652,13 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
         目标不明确、项目未登记或目录不可用时，回到原对话追问，不猜测
       </div>
 
-      <h4>接入 WorkBuddy</h4>
-      <p>把下面的命令作为 MCP 工具服务添加到 WorkBuddy（stdio）。应用不会替你修改 WorkBuddy 的配置。</p>
+      </>}
+
+      <h4>通过 WorkBuddy 接入（可选）</h4>
+      <p>
+        不用上面的机器人长连接、改由 WorkBuddy 收发时，把下面的命令作为 MCP 工具服务添加到 WorkBuddy（stdio）。
+        {overview.lastSeen ? `最近一次调用：${relativeTime(overview.lastSeen)}。` : '目前还没有收到过调用。'}
+      </p>
       <div className="code-box copy-box">
         <code>{commandLine || '正在读取…'}</code>
         <button
@@ -649,7 +789,19 @@ function Agent({ notify }) {
   );
 }
 
-export default function SettingsModal({ initialPage, settings, capacity, projects, notify, onChange, onOpenMcp, onOpenConversations, onClose }) {
+export default function SettingsModal({
+  initialPage,
+  settings,
+  capacity,
+  projects,
+  notify,
+  onChange,
+  navigation,
+  onNavigationChange,
+  onOpenMcp,
+  onOpenConversations,
+  onClose,
+}) {
   const [page, setPage] = useState(initialPage ?? 'appearance');
   const [dirty, setDirty] = useState(false);
 
@@ -683,6 +835,10 @@ export default function SettingsModal({ initialPage, settings, capacity, project
         <div className="settings-detail">
           {page === 'updates' && <VersionUpdates />}
           {page === 'appearance' && <Appearance settings={settings} capacity={capacity} onChange={onChange} notify={notify} />}
+          {page === 'navigation' && <NavigationSettings navigation={navigation} onChange={onNavigationChange} />}
+          {page === 'pet' && (
+            <PetSettings settings={settings.pet} onChange={(patch) => onChange({ pet: { ...settings.pet, ...patch } })} />
+          )}
           {page === 'tapd' && <Tapd projects={projects} notify={notify} onDirty={setDirty} />}
           {page === 'wecom' && <Wecom notify={notify} onDirty={setDirty} onOpenConversations={onOpenConversations} />}
           {page === 'mcp' && (

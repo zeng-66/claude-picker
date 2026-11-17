@@ -6,11 +6,8 @@ import {
   CaretUp,
   ChatCircleDots,
   CircleNotch,
-  Cpu,
   Folder,
   MagnifyingGlass,
-  SquaresFour,
-  Tray,
   Gear,
   House,
   Plus,
@@ -20,7 +17,7 @@ import {
 import appIcon from './clawd-mark.png';
 import { IconButton } from './ui.jsx';
 import { request } from './bridge.js';
-import { needsAttention, statusOf } from './work/useWorks.js';
+import { statusOf } from './work/useWorks.js';
 
 const VISIBLE_SESSIONS = 5;
 
@@ -42,10 +39,7 @@ export default function Sidebar({
   onFocusTerminal,
   works = [],
   workSessionIds = [],
-  capacity,
   selectedWorkId,
-  page,
-  onPage,
   onOpenWork,
   onSearch,
 }) {
@@ -62,7 +56,6 @@ export default function Sidebar({
     if (!worksByProject.has(path)) worksByProject.set(path, []);
     worksByProject.get(path).push(work);
   }
-  const attentionCount = works.filter(needsAttention).length;
 
   const rowCount = projects.reduce((count, project) => {
     if (!project.expanded) return count + 1;
@@ -178,15 +171,6 @@ export default function Sidebar({
         </div>
       </div>
       <div className="sidebar-links">
-        <button className={page === 'tapd' ? 'selected' : ''} onClick={() => onPage('tapd')}>
-          <Tray size={15} />
-          <span>我的待办</span>
-        </button>
-        <button className={page === 'works' ? 'selected' : ''} onClick={() => onPage('works')}>
-          <SquaresFour size={15} />
-          <span>Work 中心</span>
-          {attentionCount > 0 && <span className="nav-count">{attentionCount}</span>}
-        </button>
         <button onClick={onSearch}>
           <MagnifyingGlass size={15} />
           <span>搜索</span>
@@ -305,23 +289,6 @@ export default function Sidebar({
           );
         })}
       </div>
-      {capacity && (
-        <button className="agent-capacity" onClick={() => onPage('works')} title="打开 Work 中心">
-          <div>
-            <Cpu size={13} />
-            <span>执行队列</span>
-            <b>
-              {capacity.running} / {capacity.slots}
-            </b>
-          </div>
-          <div className="capacity-track">
-            <span style={{ width: `${Math.min(100, (capacity.running / Math.max(capacity.slots, 1)) * 100)}%` }} />
-          </div>
-          <small>
-            {capacity.queued} 个排队{capacity.waitingStart ? ` · ${capacity.waitingStart} 个待启动` : ''}
-          </small>
-        </button>
-      )}
       <button className="add-directory" onClick={onAddDirectory}>
         <Plus size={12} />
         添加目录

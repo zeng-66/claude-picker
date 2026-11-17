@@ -1,7 +1,7 @@
 // 输入区：提示词 + 模式 / 模型 / 推理强度 / 快速模式 / 上下文环 + 发送。
 // 停靠在第二栏底部与悬浮窗共用同一份输入内容。
 import React from 'react';
-import { ArrowUp, Check, Lightning } from '@phosphor-icons/react';
+import { ArrowUp, CaretDown, Check, Lightning } from '@phosphor-icons/react';
 import { request } from './bridge.js';
 
 export function contextNumbers(context) {
@@ -133,3 +133,63 @@ export default function Composer({
     </form>
   );
 }
+
+/// 原生终端下方的快捷设置条：模式 / 模型 / 推理强度 / 快速模式。
+/// 原生终端自己负责输入，不挂外壳输入框，运行参数从这里改（写进 ~/.claude/settings.json 并同步到正在运行的 claude）。
+export function RuntimeBar({ runtime, runtimeMenu, onRuntimeMenu }) {
+  const settings = [
+    { id: 'mode', label: '模式', value: runtime.mode, values: runtime.modes },
+    { id: 'model', label: '模型', value: runtime.model, values: runtime.models },
+    { id: 'effort', label: '推理强度', value: runtime.effort, values: runtime.efforts },
+  ];
+  const labelOf = (setting) => setting.values.find((item) => item.id === setting.value)?.label ?? setting.value;
+  return (
+    <div className="runtime-bar runtime-options" role="toolbar" aria-label="运行参数">
+      {settings.map((setting) => (
+        <div className="runtime-setting" key={setting.id}>
+          <button
+            type="button"
+            className="runtime-bar-item"
+            aria-label={`${setting.label}：${labelOf(setting)}`}
+            aria-expanded={runtimeMenu === setting.id}
+            onClick={() => onRuntimeMenu(runtimeMenu === setting.id ? null : setting.id)}
+          >
+            <span>{setting.label}</span>
+            <b>{labelOf(setting)}</b>
+            <CaretDown size={10} />
+          </button>
+          {runtimeMenu === setting.id && (
+            <div className="runtime-popover" role="menu" aria-label={`选择${setting.label}`}>
+              {setting.values.map((item) => (
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={setting.value === item.id}
+                  key={item.id}
+                  onClick={() => {
+                    request('app.runtime', { key: setting.id, value: item.id });
+                    onRuntimeMenu(null);
+                  }}
+                >
+                  {item.label}
+                  {setting.value === item.id && <Check size={12} />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+      <button
+        type="button"
+        className={`runtime-bar-item ${runtime.fast ? 'fast-on' : ''}`}
+        aria-label={`快速模式${runtime.fast ? '开启' : '关闭'}`}
+        aria-pressed={runtime.fast}
+        onClick={() => request('app.runtime', { key: 'fast', value: !runtime.fast })}
+      >
+        <span>快速模式</span>
+        <b>{runtime.fast ? '开启' : '关闭'}</b>
+      </button>
+    </div>
+  );
+}
+

@@ -4,7 +4,6 @@ import {
   ChatCircleDots,
   Gear,
   Monitor,
-  X,
 } from "@phosphor-icons/react";
 import { useStored } from "./ui.jsx";
 import idle from "../assets/clawd/clawd-idle.gif";
@@ -59,7 +58,9 @@ export function PetSettings({ settings, onChange, onPreviewDesktop }) {
   return (
     <>
       <h3>Clawd 桌宠</h3>
-      <p>用动画显示会话状态，点击查看当前会话，拖动可调整位置。</p>
+      <p>
+        用动画显示会话状态，点击直接打开悬浮窗口，窗口打开后桌宠仍保留，拖动可调整位置。
+      </p>
       <label className="pet-setting-switch">
         <span>显示桌宠</span>
         <input
@@ -119,7 +120,7 @@ export function PetSettings({ settings, onChange, onPreviewDesktop }) {
         预览桌面模式
       </button>
       <p className="setting-hint">
-        桌面模式在浏览器中演示窗口最小化后的桌宠与悬浮输入交互。
+        桌宠独立于主窗口，点击打开悬浮窗口，收起窗口后桌宠继续保留。此处为浏览器内的桌面演示；全桌面悬浮由原生宿主实现。
       </p>
     </>
   );
@@ -148,9 +149,8 @@ export default function DesktopPet({
 }) {
   const [position, setPosition] = useStored("petPosition", {
     x: Math.max(12, window.innerWidth - 178),
-    y: Math.max(52, window.innerHeight - 240),
+    y: Math.max(12, window.innerHeight - 240),
   });
-  const [bubble, setBubble] = useState(false);
   const [menu, setMenu] = useState(false);
   const [action, setAction] = useState(null);
   const [dragging, setDragging] = useState(false);
@@ -176,7 +176,7 @@ export default function DesktopPet({
     const fit = () =>
       setPosition((current) => {
         const x = clamp(current.x, 12, window.innerWidth - settings.size - 12);
-        const y = clamp(current.y, 52, window.innerHeight - height - 64);
+        const y = clamp(current.y, 12, window.innerHeight - height - 12);
         return x === current.x && y === current.y ? current : { x, y };
       });
     fit();
@@ -185,16 +185,15 @@ export default function DesktopPet({
   }, [settings.size, height]);
 
   useEffect(() => {
-    if (!bubble && !menu) return;
+    if (!menu) return;
     const closeOutside = (event) => {
       if (!event.target.closest(".desktop-pet-layer")) {
-        setBubble(false);
         setMenu(false);
       }
     };
     window.addEventListener("pointerdown", closeOutside);
     return () => window.removeEventListener("pointerdown", closeOutside);
-  }, [bubble, menu]);
+  }, [menu]);
 
   useEffect(() => {
     if (
@@ -202,7 +201,6 @@ export default function DesktopPet({
       !settings.wander ||
       state !== "idle" ||
       dragging ||
-      bubble ||
       menu
     )
       return;
@@ -225,7 +223,6 @@ export default function DesktopPet({
     settings.size,
     state,
     dragging,
-    bubble,
     menu,
     position.x,
   ]);
@@ -242,7 +239,6 @@ export default function DesktopPet({
       if (Math.hypot(dx, dy) < 5 && !moved.current) return;
       if (!moved.current) {
         clearTimeout(actionTimer.current);
-        setBubble(false);
         setMenu(false);
         setDragging(true);
       }
@@ -254,7 +250,7 @@ export default function DesktopPet({
           12,
           window.innerWidth - settings.size - 12,
         ),
-        y: clamp(start.position.y + dy, 52, window.innerHeight - height - 64),
+        y: clamp(start.position.y + dy, 12, window.innerHeight - height - 12),
       });
     };
     const finish = () => {
@@ -272,7 +268,6 @@ export default function DesktopPet({
   }
 
   function closeAndRun(operation) {
-    setBubble(false);
     setMenu(false);
     operation();
   }
@@ -283,29 +278,9 @@ export default function DesktopPet({
     12,
     window.innerWidth - popupWidth - 12,
   );
-  const popupTop = Math.max(52, position.y - (menu ? 290 : 128));
+  const popupTop = Math.max(12, position.y - 290);
   return (
     <div className="desktop-pet-layer">
-      {bubble && (
-        <section
-          className={`pet-speech ${state}`}
-          style={{ left: popupLeft, top: popupTop, width: popupWidth }}
-          aria-label="桌宠会话状态"
-        >
-          <header>
-            <span className="pet-status-dot" />
-            <strong>{stateLabels[state]}</strong>
-            <button aria-label="关闭桌宠状态" onClick={() => setBubble(false)}>
-              <X size={12} />
-            </button>
-          </header>
-          <p>{active?.label || "选择会话后开始新的任务"}</p>
-          <div>
-            <button onClick={() => closeAndRun(onOpenSession)}>打开会话</button>
-            <button onClick={() => closeAndRun(onOpenConsole)}>悬浮输入</button>
-          </div>
-        </section>
-      )}
       {menu && (
         <div
           className="pet-context-menu"
@@ -360,26 +335,23 @@ export default function DesktopPet({
           height,
         }}
         aria-label={`Clawd 桌宠，${stateLabels[state]}`}
-        title="点击查看会话 · 拖动移动 · 右键更多操作"
+        title="点击打开窗口 · 拖动移动 · 右键更多操作"
         onPointerDown={beginDrag}
         onClick={() => {
           if (!moved.current) {
             setMenu(false);
-            setBubble(!bubble);
+            onOpenConsole();
           }
         }}
         onDoubleClick={() => {
-          setBubble(false);
           play("jumping", 1000);
         }}
         onContextMenu={(event) => {
           event.preventDefault();
-          setBubble(false);
           setMenu(true);
         }}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
-            setBubble(false);
             setMenu(false);
             event.stopPropagation();
           }

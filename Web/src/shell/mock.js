@@ -279,6 +279,10 @@ const handlers = {
   'update.check': () => ({ version: '演示版本', platform: '浏览器', state: 'unpublished', preview: true }),
   'app.state': () => snapshot(),
   'app.layout': () => null,
+  'app.openURL': ({ url }) => {
+    window.open(url, '_blank', 'noopener');
+    return null;
+  },
   'app.settings': (params) => {
     Object.assign(db.settings, params);
     return null;
@@ -660,15 +664,65 @@ const handlers = {
   },
 };
 
-// Work 相关接口在浏览器演示模式下只返回空数据：真实状态只存在于原生侧的数据库里。
+// Work 相关接口在浏览器演示模式下默认只返回空数据：真实状态只存在于原生侧的数据库里。
+// 地址带 ?demo 时给出几条演示 Work / TAPD 待办，便于检查界面（不会出现在应用里）。
+const demoMode = typeof location !== 'undefined' && new URLSearchParams(location.search).has('demo');
+const demoProject = { id: 'p1', name: 'claude-picker', path: '/Users/demo/project/claude-picker' };
+const demoWorks = demoMode
+  ? [
+      ['queued', '订单解码接口联调', false, [{ workspaceId: '67103358', entityType: 'story', entityId: '1167103358001001001' }]],
+      ['running', 'Windows 桌面运行层适配', true],
+      ['waiting_user', '订单解码需求确认', true],
+      ['waiting_review', '版本更新入口审阅', true],
+      ['failed', '物流渠道映射检查', true],
+      ['completed', 'Git 工作台界面整理', true],
+    ].map(([status, title, startRequested, tapdRefs], index) => ({
+      id: `demo-${index}`,
+      displayId: `WORK-${101 + index}`,
+      title,
+      objective: `演示：${title}`,
+      status,
+      startRequested,
+      archived: false,
+      unread: status === 'failed',
+      revision: 1,
+      projectId: demoProject.id,
+      project: demoProject,
+      tapdRefs: tapdRefs ?? [],
+      origin: tapdRefs ? 'tapd' : 'local',
+      updatedAt: new Date(Date.now() - index * 3600_000).toISOString(),
+    }))
+  : [];
+const demoTapd = demoMode
+  ? [
+      ['67103358', 'story', '1167103358001001001', '订单解码接口联调', 'C2-实现中', 'developing', 'Middle', 'V1.0 订单', '演示用户'],
+      ['67103358', 'story', '1167103358001001002', '设计模板绑定校验', 'A0-待评估', 'status_11', 'High', 'V1.0 设计', '王同学'],
+      ['33349361', 'bug', '1133349361001001003', '订单列表统计条件不一致', '未解决', 'new', 'high', null, '演示用户'],
+    ].map(([workspaceId, type, entityId, title, status, rawStatus, priority, iterationName, creator]) => ({
+      ref: { workspaceId, entityType: type, entityId },
+      shortId: String(Number(entityId.slice(-7))),
+      type,
+      title,
+      status,
+      rawStatus,
+      priority,
+      owner: '演示用户;',
+      iterationName,
+      due: '2026-11-28',
+      created: '2026-11-16 14:55:00',
+      creator,
+      workspaceName: workspaceId === '67103358' ? 'lm-global' : '蓝马',
+    }))
+  : [];
+const demoComments = {};
 const drafts = new Map();
 Object.assign(handlers, {
   'work.snapshot': () => ({
     available: true,
     owner: true,
-    works: [],
-    projects: [],
-    capacity: { slots: 2, running: 0, queued: 0, waitingStart: 0 },
+    works: demoWorks,
+    projects: demoMode ? [demoProject] : [],
+    capacity: { slots: 3, running: demoMode ? 1 : 0, queued: demoMode ? 1 : 0, waitingStart: demoMode ? 1 : 0 },
     workSessionIds: [],
   }),
   'draft.get': ({ scope, key }) => ({ value: drafts.get(`${scope}:${key}`) ?? '' }),
@@ -677,9 +731,72 @@ Object.assign(handlers, {
     return { ok: true };
   },
   'tapd.settings': () => ({
-    settings: { enabled: false, cliPath: '', workspaces: [], syncOnLaunch: true },
-    prerequisites: { cli: null, endpointSet: false, tokenSet: false },
+    settings: demoMode
+      ? {
+          enabled: true,
+          cliPath: '',
+          syncOnLaunch: true,
+          workspaces: [
+            { id: '67103358', name: 'lm-global', enabled: true, projects: [demoProject.path] },
+            { id: '33349361', name: '蓝马', enabled: true, projects: [] },
+          ],
+        }
+      : { enabled: false, cliPath: '', workspaces: [], syncOnLaunch: true },
+    prerequisites: { cli: demoMode ? '/usr/local/bin/tapd-cli' : null, endpointSet: demoMode, tokenSet: demoMode },
   }),
+  'tapd.todos': ({ workspaceId, scope }) => {
+    const items = demoTapd.filter(
+      (item) => (!workspaceId || item.ref.workspaceId === workspaceId) && (scope === 'created' ? item.creator === '演示用户' : true),
+    );
+    return { items, page: 1, hasMore: false, user: { nick: '演示用户', name: '演示用户' }, errors: [], fetchedAt: new Date().toISOString(), byId: false };
+  },
+  'tapd.detail': ({ ref }) => {
+    const item = demoTapd.find((entry) => entry.ref.entityId === ref.entityId);
+    if (!item) throw fail('UNAVAILABLE', 'TAPD 里找不到这个对象');
+    return {
+      ...item,
+      creator: item.creator,
+      begin: null,
+      iteration: item.iterationName ? { id: '1', name: item.iterationName } : null,
+      descriptionText: `使用场景：\n${item.title}的演示描述。\n\n期待的结果：\n完成实现与验证。`,
+      imageCount: 0,
+      attachments: { state: 'listed', items: [] },
+      comments: { state: 'listed', items: demoComments[item.ref.entityId] ?? [] },
+      existingWorks: [],
+      snapshotHash: 'demo',
+      fetchedAt: new Date().toISOString(),
+    };
+  },
+  'tapd.fields': ({ ref }) => ({
+    statuses:
+      ref.entityType === 'bug'
+        ? [['new', '未解决'], ['in_progress', '处理中'], ['resolved', 'D1-已解决'], ['closed', '已关闭']].map(([key, label]) => ({ key, label }))
+        : [['status_11', 'A0-待评估'], ['developing', 'C2-实现中'], ['resolved', 'D1-已实现'], ['status_4', 'D2-测试中']].map(([key, label]) => ({ key, label })),
+    resolutions: ref.entityType === 'bug' ? [{ key: 'fixed', label: '已修改' }, { key: 'ignore', label: '无需解决' }] : [],
+    members: ['演示用户', '王同学', '李同学'],
+    labels: {},
+  }),
+  'tapd.related': ({ kind }) => ({
+    items:
+      kind === 'changes'
+        ? [{ id: 'c1', author: '演示用户', created: '2026-11-17 10:24', summary: 'create_story', changes: [{ field: '优先级', before: '', after: 'Middle' }] }]
+        : [],
+  }),
+  'tapd.comment': ({ ref, body }) => {
+    (demoComments[ref.entityId] ??= []).unshift({ id: String(Date.now()), author: '演示用户', created: '刚刚', text: body });
+    return { ok: true, verified: false };
+  },
+  'tapd.transition': ({ ref, to, toLabel }) => {
+    const item = demoTapd.find((entry) => entry.ref.entityId === ref.entityId);
+    if (item) {
+      item.rawStatus = to;
+      item.status = toLabel ?? to;
+    }
+    return { ok: true, verified: false };
+  },
+  'tapd.import': () => {
+    throw fail('UNAVAILABLE', '浏览器演示模式不能创建 Work，请在应用里使用');
+  },
   'source.overview': () => ({
     settings: { name: '开发协作助手', enabled: false, autoStart: false, remoteAnswers: false },
     socket: null,

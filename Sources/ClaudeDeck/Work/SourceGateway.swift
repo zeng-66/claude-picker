@@ -80,7 +80,7 @@ enum SourceGateway {
         var title: String
     }
 
-    private static func source(_ params: JSONValue, requireMessage: Bool = true) throws -> Source {
+    static func source(_ params: JSONValue, requireMessage: Bool = true) throws -> Source {
         let raw = params["source"] ?? .null
         guard let conversationId = raw["conversationId"]?.text else {
             throw WorkError.invalid("缺少来源会话 ID（source.conversationId）")
@@ -149,7 +149,10 @@ enum SourceGateway {
         return (parsed, project, nil)
     }
 
-    static func submitIntent(_ core: WorkCore, params: JSONValue) throws -> JSONValue {
+    /// `verifiedActor`：发送人身份由平台认证过（企业微信机器人回调里的 from.userid）。
+    /// 只有应用自己的机器人连接会传 true；本机套接字 / MCP 进来的请求一律视为未验证。
+    static func submitIntent(_ core: WorkCore, params: JSONValue, verifiedActor: Bool = false,
+                             via channel: String = "WorkBuddy") throws -> JSONValue {
         let config = settings(core)
         guard config["enabled"]?.boolValue == true else {
             throw WorkError.rejected("企业微信对话入口已关闭，不接收新的工作请求。已创建的 Work 不受影响。")
@@ -174,9 +177,10 @@ enum SourceGateway {
                 let eventId = UUID().uuidString.lowercased()
                 try store.db.run("""
                     INSERT INTO input_events(id, conversation_id, remote_event_id, kind, actor_id, actor_verified, text,
-                        payload_json, created_at) VALUES(?,?,?,?,?,0,?,?,?)
+                        payload_json, created_at) VALUES(?,?,?,?,?,?,?,?,?)
                     """, [.text(eventId), .text(conversationId), .text(src.messageId),
-                          .text(replyTo == nil ? "message" : "clarification_reply"), .text(src.actorId), .text(text),
+                          .text(replyTo == nil ? "message" : "clarification_reply"), .text(src.actorId),
+                          .of(verifiedActor && !src.actorId.isEmpty), .text(text),
                           .text(intentJSON.serialized()), .text(WorkClock.iso())])
                 return (conversationId, eventId, nil)
             }
@@ -268,7 +272,7 @@ enum SourceGateway {
         // 来源事件没有可靠的发送人身份：默认只创建、不授权启动，由应用内的用户启动。
         request.start = config["autoStart"]?.boolValue == true
         request.idempotencyKey = "source:\(conversationId):\(openIntentId ?? src.messageId)"
-        request.actor = "WorkBuddy" + (src.actorId.isEmpty ? "" : "（\(src.actorId)，身份未验证）")
+        request.actor = channel + (src.actorId.isEmpty ? "" : (verifiedActor ? "（\(src.actorId)）" : "（\(src.actorId)，身份未验证）"))
         let created = try core.create(request)
         let workId = created["work"]?["id"]?.stringValue ?? ""
         let displayId = created["work"]?["displayId"]?.stringValue ?? ""
@@ -291,7 +295,7 @@ enum SourceGateway {
                           .text(workId), .text(now), .text(now)])
             }
             store.addActivity(workId: workId, runId: nil, kind: "source", title: "项目判定依据",
-                              detail: intent.evidence.joined(separator: "；"), actor: "WorkBuddy")
+                              detail: intent.evidence.joined(separator: "；"), actor: channel)
             return id
         }
         return try finish(.obj([
@@ -347,22 +351,8 @@ enum SourceGateway {
     private static func pendingNotifications(_ core: WorkCore, params: JSONValue) throws -> JSONValue {
         let limit = min(max(params["limit"]?.intValue ?? 10, 1), 50)
         core.setLastSeen()
-        let rows: [DBRow] = try core.write { store in
-            let rows = try store.db.query("""
-                SELECT d.*, w.display_id, w.title AS work_title, c.remote_conversation_id, c.remote_thread_id, c.account_id
-                FROM deliveries d JOIN works w ON w.id = d.work_id
-                JOIN source_conversations c ON c.id = w.source_conversation_id
-                WHERE d.target IN ('wecom', 'wecom-notice') AND d.status = 'pending' ORDER BY d.created_at LIMIT ?
-                """, [.of(limit)])
-            for row in rows {
-                try store.db.run("""
-                    UPDATE deliveries SET status = 'unknown', attempts = attempts + 1,
-                        error = '已交给 WorkBuddy，尚未收到发送回执', updated_at = ? WHERE id = ?
-                    """, [.text(WorkClock.iso()), .text(row.text("id"))])
-            }
-            return rows
-        }
-        if !rows.isEmpty { core.queue.async { core.notify(.changed) } }
+        // 由应用自己的机器人连接负责的会话不交给 WorkBuddy，避免同一条消息被两边各发一次。
+        let rows = try claimNotifications(core, botOwned: false, limit: limit, note: "已交给 WorkBuddy，尚未收到发送回执")
         return .obj(["notifications": .array(rows.map { row in
             .obj(["id": .string(row.text("id")), "kind": .string(row.text("target") == "wecom" ? "report" : "notice"),
                   "displayId": .string(row.text("display_id")), "title": .string(row.text("work_title")),
@@ -372,6 +362,89 @@ enum SourceGateway {
                                         "threadId": .string(row.text("remote_thread_id"))]),
                   "link": .string("claude-picker://work/\(row.text("display_id"))")])
         })])
+    }
+
+    static let botAccountPrefix = "wecom-bot:"
+
+    /// 领取待发送的通知 / 汇报：在同一个事务里把它们标为「结果未知」，收到回执后再改为已发送或失败。
+    /// 谁领取谁负责发送；`botOwned` 区分应用自己的机器人连接与 WorkBuddy 两条通道，互不重叠。
+    static func claimNotifications(_ core: WorkCore, botOwned: Bool, limit: Int, note: String) throws -> [DBRow] {
+        let rows: [DBRow] = try core.write { store in
+            try store.db.transaction {
+                let rows = try store.db.query("""
+                    SELECT d.*, w.display_id, w.title AS work_title, c.remote_conversation_id, c.remote_thread_id, c.account_id
+                    FROM deliveries d JOIN works w ON w.id = d.work_id
+                    JOIN source_conversations c ON c.id = w.source_conversation_id
+                    WHERE d.target IN ('wecom', 'wecom-notice') AND d.status = 'pending'
+                      AND (c.account_id LIKE ?) = ? ORDER BY d.created_at LIMIT ?
+                    """, [.text(botAccountPrefix + "%"), .of(botOwned), .of(limit)])
+                for row in rows {
+                    try store.db.run("""
+                        UPDATE deliveries SET status = 'unknown', attempts = attempts + 1, error = ?, updated_at = ? WHERE id = ?
+                        """, [.text(note), .text(WorkClock.iso()), .text(row.text("id"))])
+                }
+                return rows
+            }
+        }
+        if !rows.isEmpty { core.queue.async { core.notify(.changed) } }
+        return rows
+    }
+
+    /// 同一条来源消息之前处理过：返回当时的结果（重连后平台重发、或用户重复发送都不会再处理一次）。
+    static func previousResult(_ core: WorkCore, source src: Source) -> JSONValue? {
+        (try? core.read { store -> JSONValue? in
+            guard let conversationId = try conversation(store, source: src, create: false),
+                  let row = try store.db.first("SELECT result_json FROM input_events WHERE conversation_id = ? AND remote_event_id = ?",
+                                               [.text(conversationId), .text(src.messageId)]) else { return nil }
+            return row.json("result_json") ?? .obj(["state": .string("processing")])
+        }) ?? nil
+    }
+
+    /// 普通问答也记一笔（不创建 Work）：便于在来源对话里回看，也用于去重。
+    static func recordChat(_ core: WorkCore, source src: Source, text: String, reply: String, verifiedActor: Bool) {
+        _ = try? core.write { store in
+            try store.db.transaction {
+                guard let conversationId = try conversation(store, source: src, create: true) else { return }
+                try store.db.run("""
+                    INSERT OR IGNORE INTO input_events(id, conversation_id, remote_event_id, kind, actor_id, actor_verified, text,
+                        result_json, created_at) VALUES(?,?,?,'chat',?,?,?,?,?)
+                    """, [.text(UUID().uuidString.lowercased()), .text(conversationId), .text(src.messageId), .text(src.actorId),
+                          .of(verifiedActor && !src.actorId.isEmpty), .text(text),
+                          .text(JSONValue.obj(["state": .string("chat"), "reply": .string(reply)]).serialized()),
+                          .text(WorkClock.iso())])
+            }
+        }
+        core.queue.async { core.notify(.changed) }
+    }
+
+    /// 给意图判断用的上下文：这个会话已有的 Work（含待回答的问题）与待澄清的意图。
+    static func conversationContext(_ core: WorkCore, source src: Source) -> JSONValue {
+        (try? core.read { store -> JSONValue in
+            guard let conversationId = try conversation(store, source: src, create: false) else {
+                return .obj(["works": .array([]), "openIntents": .array([])])
+            }
+            let works = store.works().filter { $0.sourceConversationId == conversationId && !$0.archived }.prefix(20)
+            let intents = try store.db.query("""
+                SELECT i.id, i.objective, i.question, e.actor_id FROM intents i JOIN input_events e ON e.id = i.event_id
+                WHERE i.conversation_id = ? AND i.status = 'open' ORDER BY i.updated_at DESC LIMIT 5
+                """, [.text(conversationId)])
+            return .obj([
+                "works": .array(works.map { work in
+                    let open = work.currentRunId.map { store.openAttentions(runId: $0) } ?? []
+                    return .obj(["displayId": .string(work.displayId), "title": .string(work.title),
+                                 "project": .str(store.project(id: work.projectId)?.name),
+                                 "status": .string(work.status.label), "reason": .str(work.statusReason),
+                                 "openQuestions": .array(open.filter { $0.kind == .question }.map { attention in
+                                     .obj(["attentionId": .string(attention.id),
+                                           "questions": attention.body["questions"] ?? .array([])])
+                                 })])
+                }),
+                "openIntents": .array(intents.map { row in
+                    .obj(["intentId": .string(row.text("id")), "objective": .string(row.text("objective")),
+                          "question": .str(row.string("question")), "askedBy": .string(row.text("actor_id"))])
+                }),
+            ])
+        }) ?? .obj(["works": .array([]), "openIntents": .array([])])
     }
 
     private static func ackNotification(_ core: WorkCore, params: JSONValue) throws -> JSONValue {
@@ -396,7 +469,8 @@ enum SourceGateway {
 
     /// 从原会话回答 Work 的问题。来源事件没有可靠的发送人身份：工具权限一律回应用内处理；
     /// 业务问题只有在设置里明确允许、且来自发起该 Work 的会话时才接收。
-    private static func answerAttention(_ core: WorkCore, params: JSONValue) throws -> JSONValue {
+    static func answerAttention(_ core: WorkCore, params: JSONValue, verifiedActor: Bool = false,
+                                via channel: String = "WorkBuddy") throws -> JSONValue {
         let src = try source(params)
         guard let attentionId = params["attentionId"]?.text else { throw WorkError.invalid("缺少 attentionId") }
         let config = settings(core)
@@ -410,11 +484,14 @@ enum SourceGateway {
         }
         guard attention.kind == .question, config["remoteAnswers"]?.boolValue == true else {
             return .obj(["state": .string("requires_app"),
-                         "message": .string("这一步需要在 Claude Picker 应用内由本人确认（来源消息没有可验证的发送人身份）。"),
+                         "message": .string(attention.kind == .question
+                            ? "在原会话回答问题的功能没有开启，请在 Claude Picker 应用内作答。"
+                            : "工具权限只能在 Claude Picker 应用内由本人确认。"),
                          "link": .string("claude-picker://work/\(work.displayId)")])
         }
         let result = try core.answer(attentionId: attentionId, revision: nil, answer: params["answer"] ?? .null,
-                                     actor: "WorkBuddy" + (src.actorId.isEmpty ? "（身份未验证）" : "（\(src.actorId)，身份未验证）"))
+                                     actor: channel + (src.actorId.isEmpty ? "（身份未验证）"
+                                        : (verifiedActor ? "（\(src.actorId)）" : "（\(src.actorId)，身份未验证）")))
         return .obj(["state": .string(result["accepted"]?.boolValue == true ? "recorded" : (result["state"]?.stringValue ?? "rejected")),
                      "message": result["message"] ?? .null])
     }
@@ -444,7 +521,8 @@ enum SourceGateway {
                                                                       "question": .str($0.string("question"))]) })])
             }
         }) ?? []
-        return .obj(["settings": settings(core), "socket": .str(SourceSocketServer.shared.path),
+        return .obj(["settings": settings(core), "bot": WecomBot.shared.status(),
+                     "socket": .str(SourceSocketServer.shared.path),
                      "listening": .bool(SourceSocketServer.shared.isListening),
                      "lastSeen": core.getSetting("robot.lastSeen") ?? .null,
                      "conversations": .array(conversations)])

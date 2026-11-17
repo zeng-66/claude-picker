@@ -47,7 +47,6 @@ import DesktopPet, {
 } from "./DesktopPet.jsx";
 import {
   DEFAULT_NAVIGATION,
-  EmptyModules,
   ModuleSidebar,
   TapdModule,
   WorkModule,
@@ -142,10 +141,35 @@ export default function App() {
     works: "all",
   });
   const [terminalHistory, setTerminalHistory] = useState({});
+  const [sidebarWidths, setSidebarWidths] = useStored("sidebarWidths", {});
+  const sidebarWidth = sidebarWidths[page] || 248;
+  const clampSidebarWidth = (value) => Math.max(180, Math.min(360, value));
+  function resizeSidebar(event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    handle.setPointerCapture(event.pointerId);
+    handle.onpointermove = (move) =>
+      setSidebarWidths((current) => ({
+        ...current,
+        [page]: clampSidebarWidth(startWidth + move.clientX - startX),
+      }));
+    const finish = () => {
+      handle.onpointermove = null;
+      handle.onpointerup = null;
+      handle.onpointercancel = null;
+    };
+    handle.onpointerup = finish;
+    handle.onpointercancel = finish;
+  }
   const [petSettings, setPetSettings] = useStored(
     "desktopPet",
     DEFAULT_PET_SETTINGS,
   );
+  const [prototypeWorks, setPrototypeWorks] = useStored("tapdCreatedWorks", []);
+  const [prototypeWorkFocus, setPrototypeWorkFocus] = useState(null);
   const [desktopMode, setDesktopMode] = useState(false);
   const [openConsoleRequested, setOpenConsoleRequested] = useState(false);
   const visiblePages = navigation
@@ -154,7 +178,7 @@ export default function App() {
     .filter(Boolean);
   useEffect(() => {
     if (!visiblePages.some(([id]) => id === page))
-      setPage(visiblePages[0]?.[0] || "");
+      setPage(visiblePages[0]?.[0] || "workspace");
   }, [navigation, page]);
   const [selectedWorkId, setSelectedWorkId] = useStored("selectedWork", null);
   const [contextTab, setContextTab] = useState("context");
@@ -207,6 +231,19 @@ export default function App() {
     setSettings((current) => ({ ...current, ...patch }));
     if (persist) request("app.settings", patch).catch(() => {});
   }, []);
+
+  const emptyNavigationApplied = useRef(false);
+  useEffect(() => {
+    if (visiblePages.length) {
+      emptyNavigationApplied.current = false;
+      return;
+    }
+    if (!settings || emptyNavigationApplied.current) return;
+    emptyNavigationApplied.current = true;
+    setPage("workspace");
+    setSelectedWorkId(null);
+    updateSettings({ sidebar: true, terminal: true, workbench: false });
+  }, [navigation, settings, updateSettings]);
 
   // 默认布局 B（任务看板）：启动时先进入 Work 中心。只在启动时应用一次，不改变之后的手动切换。
   useEffect(() => {
@@ -696,13 +733,13 @@ export default function App() {
     let latest = settings.terminalWidth;
     handle.onpointermove = (move) => {
       const rect = body.getBoundingClientRect();
-      const sidebarWidth = settings.sidebar ? 250 : 48;
+      const firstColumnWidth = settings.sidebar ? sidebarWidth : 48;
       latest = Math.max(
         24,
         Math.min(
           57,
-          ((move.clientX - rect.left - sidebarWidth) /
-            (rect.width - sidebarWidth)) *
+          ((move.clientX - rect.left - firstColumnWidth) /
+            (rect.width - firstColumnWidth)) *
             100,
         ),
       );
@@ -726,9 +763,11 @@ export default function App() {
   function restoreTerminal() {
     setDesktopMode(false);
     setNavigation((current) =>
-      current.map((item) =>
-        item.id === "workspace" ? { ...item, visible: true } : item,
-      ),
+      current.some((item) => item.visible)
+        ? current.map((item) =>
+            item.id === "workspace" ? { ...item, visible: true } : item,
+          )
+        : current,
     );
     setPage("workspace");
     updateSettings({ terminal: true });
@@ -991,16 +1030,45 @@ export default function App() {
   }
 
   function renderMain(legacy) {
-    if (!visiblePages.length)
+    if (page === "tapd")
       return (
-        <EmptyModules
-          onSettings={() => setModal({ kind: "settings", page: "navigation" })}
+        <TapdModule
+          key={sections.tapd}
+          workspace={sections.tapd}
+          onCreateWork={({ title, supplement, task, project }) => {
+            const id = `WORK-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+            setPrototypeWorks((current) => [
+              {
+                id,
+                title,
+                status: "pending",
+                project,
+                summary: task.description,
+                supplement,
+                source: { ...task, project },
+              },
+              ...current,
+            ]);
+            setPrototypeWorkFocus(id);
+            setSections((current) => ({ ...current, works: "all" }));
+            setNavigation((current) =>
+              current.map((item) =>
+                item.id === "works" ? { ...item, visible: true } : item,
+              ),
+            );
+            setPage("works");
+          }}
         />
       );
-    if (page === "tapd")
-      return <TapdModule key={sections.tapd} workspace={sections.tapd} />;
     if (page === "works")
-      return <WorkModule key={sections.works} filter={sections.works} />;
+      return (
+        <WorkModule
+          key={sections.works}
+          filter={sections.works}
+          createdWorks={prototypeWorks}
+          focusId={prototypeWorkFocus}
+        />
+      );
     if (page === "git") {
       if (selectedWork)
         return (
@@ -1027,11 +1095,158 @@ export default function App() {
     return legacy;
   }
 
+  const branchPicker = (
+    <div className="project-menu-wrap">
+      {page === "git" && (
+        <label className="search sidebar-branch-search">
+          <MagnifyingGlass size={13} />
+          <input
+            aria-label="搜索分支"
+            placeholder="搜索分支…"
+            value={branchFilter}
+            onFocus={() => {
+              setMenu("branch");
+              loadBranches();
+            }}
+            onChange={(event) => {
+              setBranchFilter(event.target.value);
+              setMenu("branch");
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setMenu(null);
+                event.stopPropagation();
+              }
+            }}
+          />
+        </label>
+      )}
+      <button
+        className="branch-picker"
+        aria-label="选择分支"
+        title={
+          project
+            ? `${project.title} · ${tildePath(project.path, state.home)}`
+            : ""
+        }
+        onClick={() => {
+          setMenu(menu === "branch" ? null : "branch");
+          setPickedBranch(currentBranch ?? "");
+          if (menu !== "branch") loadBranches();
+        }}
+        onContextMenu={(event) => openBranchContext(event, currentBranch)}
+      >
+        <GitBranch size={15} />
+        <b>{branchLabel}</b>
+        <CaretDown size={12} />
+      </button>
+      {menu === "branch" && (
+        <div
+          className="dropdown project-branch-dropdown"
+          role="dialog"
+          aria-label="项目与分支"
+          data-blocking
+        >
+          <div className="branch-project-list">
+            <div className="menu-title">项目</div>
+            {projects.map((item) => (
+              <button
+                key={item.path}
+                className={workbenchPath === item.path ? "selected" : ""}
+                title={tildePath(item.path, state.home)}
+                onClick={() => {
+                  selectProject(item.path);
+                  setMenu("branch");
+                }}
+              >
+                {item.isHome ? (
+                  <House
+                    size={14}
+                    weight={workbenchPath === item.path ? "fill" : "regular"}
+                  />
+                ) : (
+                  <Folder
+                    size={14}
+                    weight={workbenchPath === item.path ? "fill" : "regular"}
+                  />
+                )}
+                <span>{item.title}</span>
+              </button>
+            ))}
+          </div>
+          <div className="branch-options">
+            {page !== "git" && (
+              <label className="search">
+                <MagnifyingGlass size={13} />
+                <input
+                  aria-label="筛选分支"
+                  placeholder="筛选分支…"
+                  value={branchFilter}
+                  onChange={(event) => setBranchFilter(event.target.value)}
+                />
+              </label>
+            )}
+            {notRepository && (
+              <div className="pane-note">这个目录不是 Git 仓库</div>
+            )}
+            {branchesError && !notRepository && (
+              <div className="pane-note error">{branchesError}</div>
+            )}
+            {!branches && !branchesError && !notRepository && (
+              <div className="pane-note">正在读取分支…</div>
+            )}
+            {branches &&
+              !branchesError &&
+              !notRepository &&
+              branchGroups.every(({ items }) => !items.length) && (
+                <div className="pane-note">没有匹配的分支</div>
+              )}
+            {branches &&
+              branchGroups.map(({ group, items }) => (
+                <div key={group}>
+                  <div className="menu-title">{group}</div>
+                  {items.map((item) => (
+                    <button
+                      key={item.name}
+                      className={`${pickedBranch === item.name ? "picked" : ""} ${item.isCurrent ? "current" : ""}`}
+                      disabled={gitBusy}
+                      onClick={() => {
+                        setPickedBranch(item.name);
+                        if (settings.followSessionBranch)
+                          revealBranch(item.name);
+                      }}
+                      onDoubleClick={() => checkoutBranch(item.name)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          checkoutBranch(item.name);
+                        }
+                      }}
+                      onContextMenu={(event) => {
+                        setPickedBranch(item.name);
+                        openBranchContext(event, item.name);
+                      }}
+                    >
+                      <GitBranch size={14} />
+                      <span>{item.name}</span>
+                      {item.isCurrent && <Check size={13} />}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            <div className="branch-picker-hint">双击签出 · 右键更多操作</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div
       data-module={page}
       className={`app module-prototype ${desktopMode ? "desktop-mode" : ""} ${!sidebar ? "module-sidebar-collapsed" : ""} ${settings.density === "compact" ? "compact" : ""}`}
       style={{
+        "--first-sidebar-width": `${sidebarWidth}px`,
         "--app-scale": settings.appFontSize / 12,
         "--terminal-font-size": `${settings.termFontSize}px`,
       }}
@@ -1057,157 +1272,40 @@ export default function App() {
             )}
           </div>
         </div>
-        <nav className="topnav" aria-label="工作台导航">
-          {visiblePages.map(([id, label, Icon]) => (
-            <button
-              key={id}
-              data-navigation-id={id}
-              data-navigation-group="top"
-              aria-label={label}
-              onPointerDown={navigationDrag.beginDrag}
-              className={page === id ? "active" : ""}
-              title={
-                id === "git" && selectedWork
-                  ? `${selectedWork.displayId} 的变更审阅`
-                  : label
-              }
-              onClick={() => {
-                if (!navigationDrag.wasDragged()) setPage(id);
-              }}
-            >
-              <Icon size={15} />
-              <span className="nav-label">{label}</span>
-              {id === "works" && attentionCount > 0 && (
-                <span className="nav-count">{attentionCount}</span>
-              )}
-            </button>
-          ))}
-        </nav>
+        {visiblePages.length > 0 &&
+          !(
+            visiblePages.length === 1 && visiblePages[0][0] === "workspace"
+          ) && (
+            <nav className="topnav" aria-label="工作台导航">
+              {visiblePages.map(([id, label, Icon]) => (
+                <button
+                  key={id}
+                  data-navigation-id={id}
+                  data-navigation-group="top"
+                  aria-label={label}
+                  onPointerDown={navigationDrag.beginDrag}
+                  className={page === id ? "active" : ""}
+                  title={
+                    id === "git" && selectedWork
+                      ? `${selectedWork.displayId} 的变更审阅`
+                      : label
+                  }
+                  onClick={() => {
+                    if (!navigationDrag.wasDragged()) setPage(id);
+                  }}
+                >
+                  <Icon size={15} />
+                  <span className="nav-label">{label}</span>
+                  {id === "works" && attentionCount > 0 && (
+                    <span className="nav-count">{attentionCount}</span>
+                  )}
+                </button>
+              ))}
+            </nav>
+          )}
         {showGitHeader ? (
           <div className="workbench-header">
-            <div className="project-menu-wrap">
-              <button
-                className="branch-picker"
-                aria-label="选择分支"
-                title={
-                  project
-                    ? `${project.title} · ${tildePath(project.path, state.home)}`
-                    : ""
-                }
-                onClick={() => {
-                  setMenu(menu === "branch" ? null : "branch");
-                  setPickedBranch(currentBranch ?? "");
-                  if (menu !== "branch") loadBranches();
-                }}
-                onContextMenu={(event) =>
-                  openBranchContext(event, currentBranch)
-                }
-              >
-                <GitBranch size={15} />
-                <b>{branchLabel}</b>
-                <CaretDown size={12} />
-              </button>
-              {menu === "branch" && (
-                <div
-                  className="dropdown project-branch-dropdown"
-                  role="dialog"
-                  aria-label="项目与分支"
-                  data-blocking
-                >
-                  <div className="branch-project-list">
-                    <div className="menu-title">项目</div>
-                    {projects.map((item) => (
-                      <button
-                        key={item.path}
-                        className={
-                          workbenchPath === item.path ? "selected" : ""
-                        }
-                        title={tildePath(item.path, state.home)}
-                        onClick={() => {
-                          selectProject(item.path);
-                          setMenu("branch");
-                        }}
-                      >
-                        {item.isHome ? (
-                          <House
-                            size={14}
-                            weight={
-                              workbenchPath === item.path ? "fill" : "regular"
-                            }
-                          />
-                        ) : (
-                          <Folder
-                            size={14}
-                            weight={
-                              workbenchPath === item.path ? "fill" : "regular"
-                            }
-                          />
-                        )}
-                        <span>{item.title}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="branch-options">
-                    <label className="search">
-                      <MagnifyingGlass size={13} />
-                      <input
-                        aria-label="筛选分支"
-                        placeholder="筛选分支…"
-                        value={branchFilter}
-                        onChange={(event) =>
-                          setBranchFilter(event.target.value)
-                        }
-                      />
-                    </label>
-                    {notRepository && (
-                      <div className="pane-note">这个目录不是 Git 仓库</div>
-                    )}
-                    {branchesError && !notRepository && (
-                      <div className="pane-note error">{branchesError}</div>
-                    )}
-                    {!branches && !branchesError && !notRepository && (
-                      <div className="pane-note">正在读取分支…</div>
-                    )}
-                    {branches &&
-                      branchGroups.map(({ group, items }) => (
-                        <div key={group}>
-                          <div className="menu-title">{group}</div>
-                          {items.map((item) => (
-                            <button
-                              key={item.name}
-                              className={`${pickedBranch === item.name ? "picked" : ""} ${item.isCurrent ? "current" : ""}`}
-                              disabled={gitBusy}
-                              onClick={() => {
-                                setPickedBranch(item.name);
-                                if (settings.followSessionBranch)
-                                  revealBranch(item.name);
-                              }}
-                              onDoubleClick={() => checkoutBranch(item.name)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.preventDefault();
-                                  checkoutBranch(item.name);
-                                }
-                              }}
-                              onContextMenu={(event) => {
-                                setPickedBranch(item.name);
-                                openBranchContext(event, item.name);
-                              }}
-                            >
-                              <GitBranch size={14} />
-                              <span>{item.name}</span>
-                              {item.isCurrent && <Check size={13} />}
-                            </button>
-                          ))}
-                        </div>
-                      ))}
-                    <div className="branch-picker-hint">
-                      双击签出 · 右键更多操作
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+            {page !== "git" && branchPicker}
             <nav className="git-nav">
               {tabs.map(([name, Icon]) => (
                 <button
@@ -1296,6 +1394,7 @@ export default function App() {
           />
         ) : (
           <ModuleSidebar
+            branchControls={page === "git" ? branchPicker : null}
             page={page}
             section={page === "git" ? tab : sections[page]}
             collapsed={!sidebar}
@@ -1314,6 +1413,40 @@ export default function App() {
           />
         )}
 
+        {sidebar && (
+          <div
+            className="first-sidebar-resize"
+            role="separator"
+            aria-label="调整第一栏宽度"
+            aria-orientation="vertical"
+            aria-valuemin={180}
+            aria-valuemax={360}
+            aria-valuenow={sidebarWidth}
+            tabIndex={0}
+            onPointerDown={resizeSidebar}
+            onDoubleClick={() =>
+              setSidebarWidths((current) => ({ ...current, [page]: 248 }))
+            }
+            onKeyDown={(event) => {
+              if (
+                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              )
+                return;
+              event.preventDefault();
+              setSidebarWidths((current) => ({
+                ...current,
+                [page]:
+                  event.key === "Home"
+                    ? 180
+                    : event.key === "End"
+                      ? 360
+                      : clampSidebarWidth(
+                          sidebarWidth + (event.key === "ArrowLeft" ? -12 : 12),
+                        ),
+              }));
+            }}
+          />
+        )}
         {renderMain(
           <>
             {terminal ? (
@@ -1369,7 +1502,7 @@ export default function App() {
                     )}
                   </div>
                 )}
-                {!chatMode && <div className="terminal-dock">{composer}</div>}
+                {!chatMode && !native && !window.claudeDesktop && <div className="terminal-dock">{composer}</div>}
               </section>
             ) : null}
 

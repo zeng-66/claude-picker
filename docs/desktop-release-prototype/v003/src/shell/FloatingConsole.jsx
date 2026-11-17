@@ -27,15 +27,19 @@ export function TerminalTranscript({ active, messages = [] }) {
         <span className="console-prompt">❯</span>{" "}
         {active?.label || "等待输入新的任务"}
       </p>
-      <p>已读取项目上下文，可以继续当前会话。</p>
+      <details className="terminal-command-record">
+        <summary>会话上下文 · 查看输出</summary>
+        <pre>{`工作目录：${active?.cwd || "~/project/claude-picker"}\n已读取项目上下文，可以继续当前会话。`}</pre>
+      </details>
       {messages.map((message, index) => (
         <React.Fragment key={index}>
           <p>
             <span className="console-prompt">❯</span> {message}
           </p>
-          <p className="console-answer">
-            已收到这条输入。此处演示对应的终端输出。
-          </p>
+          <details className="terminal-command-record">
+            <summary>处理记录 · 查看输出</summary>
+            <pre>已收到这条输入。此处演示对应的终端输出。</pre>
+          </details>
         </React.Fragment>
       ))}
     </div>
@@ -50,7 +54,7 @@ export default function FloatingConsole({
   forceOpen,
   onOpened,
 }) {
-  const [minimized, setMinimized] = useStored("consoleMinimized", false);
+  const [minimized, setMinimized] = useStored("consoleMinimized", true);
   const [size, setSize] = useStored("consoleSize", { width: 360, height: 214 });
   const [position, setPosition] = useStored("consolePosition", {
     x: Math.round(window.innerWidth * 0.3),
@@ -78,8 +82,8 @@ export default function FloatingConsole({
       180,
       Math.max(180, window.innerHeight - 116),
     );
-    const displayWidth = minimized ? 44 : width;
-    const displayHeight = minimized ? 44 : height;
+    const displayWidth = width;
+    const displayHeight = height;
     setSize((current) =>
       current.width === width && current.height === height
         ? current
@@ -119,12 +123,12 @@ export default function FloatingConsole({
         x: clamp(
           start.position.x + dx,
           12,
-          window.innerWidth - (minimized ? 44 : size.width) - 12,
+          window.innerWidth - size.width - 12,
         ),
         y: clamp(
           start.position.y + dy,
           52,
-          window.innerHeight - (minimized ? 44 : size.height) - 64,
+          window.innerHeight - size.height - 64,
         ),
       });
     };
@@ -194,21 +198,7 @@ export default function FloatingConsole({
     );
   }
 
-  if (minimized)
-    return (
-      <button
-        className={`composer-bubble ${active?.busy ? "busy" : ""}`}
-        style={{ left: position.x, top: position.y }}
-        aria-label="展开悬浮终端"
-        title="展开悬浮终端，可拖动位置"
-        onPointerDown={beginDrag}
-        onClick={() => {
-          if (!moved.current) setMinimized(false);
-        }}
-      >
-        <img src={appIcon} alt="" />
-      </button>
-    );
+  if (minimized) return null;
   return (
     <section
       className={`floating-composer floating-console ${showOutput ? "show-output" : ""} ${position.y < 220 ? "near-top" : ""}`}
@@ -240,7 +230,7 @@ export default function FloatingConsole({
         <div data-console-action>
           <IconButton
             icon={Minus}
-            label="最小化为图标"
+            label="收起到桌宠"
             onClick={() => setMinimized(true)}
           />
         </div>

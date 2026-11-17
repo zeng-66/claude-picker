@@ -1,0 +1,344 @@
+{
+  "schemaVersion": 1,
+  "name": "Clawd Dev Life",
+  "author": "alwinecor",
+  "version": "1.2.0",
+  "license": "CC BY-NC-SA 4.0",
+  "description": "Clawd Dev Life 主题：思考、写码、压缩上下文、报错都有对应的小剧场。非官方同人作品，与 Anthropic 无关。",
+  "preview": "idle.svg",
+  "appearance": {
+    "dark": {
+      "assetsDir": "assets-dark"
+    }
+  },
+  "viewBox": {
+    "x": -4.5,
+    "y": -7,
+    "width": 24,
+    "height": 24
+  },
+  "layout": {
+    "contentBox": {
+      "x": 0,
+      "y": 6,
+      "width": 15,
+      "height": 10
+    },
+    "centerX": 7.5,
+    "baselineY": 16,
+    "visibleHeightRatio": 0.29,
+    "baselineBottomRatio": 0.05
+  },
+  "eyeTracking": {
+    "enabled": true,
+    "states": [
+      "idle",
+      "mini-idle"
+    ],
+    "eyeRatioX": 0.5,
+    "eyeRatioY": 0.667,
+    "maxOffset": 3,
+    "bodyScale": 0.33,
+    "shadowStretch": 0.15,
+    "shadowShift": 0.3,
+    "ids": {
+      "eyes": "eyes-js",
+      "body": "body-js",
+      "shadow": "shadow-js"
+    },
+    "shadowOrigin": "7.5px 15px"
+  },
+  "customization": {
+    "petTint": false
+  },
+  "states": {
+    "idle": [
+      "idle.svg"
+    ],
+    "thinking": [
+      "thinking.apng",
+      "ultrathink.apng",
+      "plan.apng"
+    ],
+    "working": [
+      "todo.apng",
+      "simple.apng",
+      "bug.apng",
+      "loop.apng",
+      "deadline.apng"
+    ],
+    "juggling": [
+      "subagents.apng"
+    ],
+    "sweeping": [
+      "compact.apng"
+    ],
+    "carrying": [
+      "clone.apng"
+    ],
+    "notification": [
+      "proceed.apng"
+    ],
+    "attention": [
+      "passed_long.apng",
+      "lgtm.apng"
+    ],
+    "error": [
+      "error.apng"
+    ],
+    "sleeping": [
+      "sleep.apng"
+    ],
+    "roam": [
+      "roam.svg"
+    ],
+    "dizzy": [
+      "dizzy.apng"
+    ],
+    "yawning": [
+      "yawn.apng"
+    ],
+    "dozing": [
+      "sleep.apng"
+    ],
+    "collapsing": [
+      "sleep.apng"
+    ],
+    "waking": [
+      "wake.apng"
+    ]
+  },
+  "sleepSequence": {
+    "mode": "full"
+  },
+  "workingTiers": [
+    {
+      "minSessions": 3,
+      "file": "team3.apng"
+    },
+    {
+      "minSessions": 2,
+      "file": "team2.apng",
+      "files": [
+        "team2.apng",
+        "conflict.apng"
+      ]
+    },
+    {
+      "minSessions": 1,
+      "file": "todo.apng",
+      "files": [
+        "todo.apng",
+        "simple.apng",
+        "bug.apng",
+        "loop.apng",
+        "deadline.apng"
+      ]
+    }
+  ],
+  "idleAnimations": [
+    {
+      "file": "fish.apng",
+      "duration": 3920
+    },
+    {
+      "file": "coffee.apng",
+      "duration": 4710
+    },
+    {
+      "file": "duck.apng",
+      "duration": 4320
+    },
+    {
+      "file": "works.apng",
+      "duration": 4200
+    },
+    {
+      "file": "blame.apng",
+      "duration": 4420
+    },
+    {
+      "file": "deploy.apng",
+      "duration": 4480
+    },
+    {
+      "file": "overtime.apng",
+      "duration": 5120
+    },
+    {
+      "file": "offwork.apng",
+      "duration": 4280
+    },
+    {
+      "file": "leak.apng",
+      "duration": 3940
+    },
+    {
+      "file": "overflow.apng",
+      "duration": 4370
+    },
+    {
+      "file": "cherry.apng",
+      "duration": 3940
+    },
+    {
+      "file": "esc.apng",
+      "duration": 3660
+    },
+    {
+      "file": "forcepush.apng",
+      "duration": 4180
+    },
+    {
+      "file": "stash.apng",
+      "duration": 3840
+    },
+    {
+      "file": "clear.apng",
+      "duration": 4080
+    },
+    {
+      "file": "bye_long.apng",
+      "duration": 5180
+    }
+  ],
+  "reactions": {
+    "drag": {
+      "file": "drag.svg"
+    },
+    "clickLeft": {
+      "file": "hello.apng",
+      "duration": 4350
+    },
+    "clickRight": {
+      "file": "right.apng",
+      "duration": 3360
+    },
+    "annoyed": {
+      "file": "notfound.apng",
+      "duration": 4030
+    },
+    "double": {
+      "files": [
+        "rmrf.apng",
+        "detached_long.apng",
+        "banned_long.apng"
+      ],
+      "duration": 5430
+    }
+  },
+  "timings": {
+    "minDisplay": {
+      "attention": 4460,
+      "error": 3940,
+      "notification": 3840,
+      "carrying": 4420,
+      "dizzy": 5500,
+      "sweeping": 4860,
+      "working": 1000,
+      "thinking": 1000
+    },
+    "autoReturn": {
+      "attention": 4460,
+      "error": 3940,
+      "notification": 3840,
+      "carrying": 4420,
+      "dizzy": 5500,
+      "sweeping": 300000
+    },
+    "mouseIdleTimeout": 20000,
+    "mouseSleepTimeout": 60000,
+    "yawnDuration": 5760,
+    "deepSleepTimeout": 65760,
+    "collapseDuration": 100,
+    "wakeDuration": 5690
+  },
+  "hitBoxes": {
+    "default": {
+      "x": -1,
+      "y": 5,
+      "w": 17,
+      "h": 11
+    }
+  },
+  "fileHitBoxes": {
+    "conflict.apng": {
+      "x": -4,
+      "y": 5,
+      "w": 23,
+      "h": 11
+    },
+    "team2.apng": {
+      "x": -3,
+      "y": 2,
+      "w": 21,
+      "h": 14
+    },
+    "team3.apng": {
+      "x": -3,
+      "y": -4,
+      "w": 21,
+      "h": 20
+    }
+  },
+  "miniMode": {
+    "supported": true,
+    "offsetRatio": 0.486,
+    "peek": {
+      "offsetRatio": 0.09
+    },
+    "viewBox": {
+      "x": -15,
+      "y": -25,
+      "width": 45,
+      "height": 45
+    },
+    "states": {
+      "mini-idle": [
+        "mini-idle.svg"
+      ],
+      "mini-crabwalk": [
+        "mini-crabwalk.svg"
+      ],
+      "mini-enter": [
+        "mini-enter.apng"
+      ],
+      "mini-enter-sleep": [
+        "mini-enter-sleep.apng"
+      ],
+      "mini-peek": [
+        "mini-peek.apng"
+      ],
+      "mini-peek-hold": [
+        "mini-peek-hold.apng"
+      ],
+      "mini-working": [
+        "mini-working.apng"
+      ],
+      "mini-alert": [
+        "mini-alert.apng"
+      ],
+      "mini-happy": [
+        "mini-happy.apng"
+      ],
+      "mini-sleep": [
+        "mini-sleep.apng"
+      ],
+      "mini-sleep-peek": [
+        "mini-sleep-peek.apng"
+      ]
+    },
+    "timings": {
+      "minDisplay": {
+        "mini-peek": 720,
+        "mini-alert": 3920,
+        "mini-happy": 3640
+      },
+      "autoReturn": {
+        "mini-peek": 720,
+        "mini-alert": 3920,
+        "mini-happy": 3640
+      }
+    }
+  }
+}
