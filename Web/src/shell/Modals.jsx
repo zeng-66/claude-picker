@@ -1,4 +1,4 @@
-// 弹窗：模型上下文 / MCP 服务 / 添加目录 / 新建会话 / 界面设置。
+// 弹窗：模型上下文 / MCP 服务 / 添加目录 / 新建会话 / 重命名会话 / 界面设置。
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ArrowsClockwise,
@@ -115,6 +115,7 @@ const STATUS_TEXT = {
 };
 
 export function McpModal({ projectPath, notify, onClose }) {
+  const [mcpProvider, setMcpProvider] = useState('claude');
   const [servers, setServers] = useState(null);
   const [status, setStatus] = useState({});
   const [tools, setTools] = useState({});
@@ -130,19 +131,20 @@ export function McpModal({ projectPath, notify, onClose }) {
   // 插件 / claude.ai 连接器提供的服务不在配置文件里，只能从健康检查结果里拿到。
   const [extra, setExtra] = useState([]);
   const loadStatus = useCallback(() => {
-    request('mcp.status', { projectPath }, { timeoutMs: 90000 })
+    setStatus({ loaded: false });
+    request('mcp.status', { projectPath, provider: mcpProvider }, { timeoutMs: 90000 })
       .then((result) => {
         const statuses = result?.statuses ?? result ?? {};
         setExtra(Array.isArray(result?.extra) ? result.extra : []);
         setStatus((current) => ({ ...current, ...statuses, loaded: true }));
       })
       .catch(() => setStatus((current) => ({ ...current, loaded: true })));
-  }, [projectPath]);
+  }, [projectPath, mcpProvider]);
 
   const load = useCallback(
     async (select) => {
       try {
-        const list = await request('mcp.list', { projectPath });
+        const list = await request('mcp.list', { projectPath, provider: mcpProvider });
         setServers(list);
         setSelectedId((current) => {
           const wanted = select ?? current;
@@ -154,7 +156,7 @@ export function McpModal({ projectPath, notify, onClose }) {
         setError(errorText(cause));
       }
     },
-    [projectPath],
+    [projectPath, mcpProvider],
   );
 
   useEffect(() => {
@@ -177,7 +179,7 @@ export function McpModal({ projectPath, notify, onClose }) {
     if (!selected || !selected.enabled || selected.scope === 'external' || tools[selected.id])
       return;
     setTools((current) => ({ ...current, [selected.id]: { loading: true, tools: [] } }));
-    request('mcp.tools', { projectPath, id: selected.id }, { timeoutMs: 45000 })
+    request('mcp.tools', { projectPath, provider: mcpProvider, id: selected.id }, { timeoutMs: 45000 })
       .then((result) => setTools((current) => ({ ...current, [selected.id]: result })))
       .catch((cause) =>
         setTools((current) => ({
@@ -201,7 +203,11 @@ export function McpModal({ projectPath, notify, onClose }) {
     setBusy(label);
     setError(null);
     try {
-      const result = await request(method, { projectPath, ...params }, { timeoutMs: 90000 });
+      const result = await request(
+        method,
+        { projectPath, provider: mcpProvider, ...params },
+        { timeoutMs: 90000 },
+      );
       if (done) notify(done);
       return result ?? true;
     } catch (cause) {
@@ -214,19 +220,61 @@ export function McpModal({ projectPath, notify, onClose }) {
 
   return (
     <ModalFrame title="MCP 服务" wide onClose={onClose}>
+      <div className="segmented" style={{ marginBottom: 10 }} role="tablist" aria-label="选择 MCP 配置引擎">
+        {[
+          ['claude', 'Claude Code 配置'],
+          ['antigravity', 'Antigravity 配置'],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={mcpProvider === id}
+            className={mcpProvider === id ? 'chosen' : ''}
+            onClick={() => {
+              setMcpProvider(id);
+              setSelectedId('');
+              setAdding(false);
+              setConfirmRemove(false);
+              setError(null);
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <p className="modal-description">
-        查看工具能力、连接状态与服务配置。连接状态由应用直接与服务握手检查；改动写入 Claude Code
-        的配置文件，对新开的会话生效。
+        {mcpProvider === 'antigravity'
+          ? '管理 Antigravity 全局 MCP 配置（~/.gemini/config/mcp_config.json）。仅支持 stdio 与 Streamable HTTP，不支持旧版 SSE。'
+          : '查看工具能力、连接状态与服务配置。连接状态由应用直接与服务握手检查；改动写入 Claude Code 的配置文件，对新开的会话生效。'}
       </p>
       <div className="mcp-heading">
         <span>
           {connectedCount} / {allServers?.length ?? 0} 个服务已连接
           {!status.loaded ? ' · 正在检查连接…' : ''}
         </span>
-        <button onClick={() => setAdding(!adding)}>
-          <Plus size={14} />
-          添加服务
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {mcpProvider === 'antigravity' && (
+            <button
+              disabled={busy === 'import'}
+              onClick={async () => {
+                const res = await act('import', 'mcp.importFromClaude', {});
+                if (!res) return;
+                const msg = `已从 Claude 导入 ${res.imported ?? 0} 个服务`
+                  + (res.skippedSse ? `（跳过 ${res.skippedSse} 个旧版 SSE）` : '');
+                notify(msg);
+                await load();
+                loadStatus();
+              }}
+            >
+              {busy === 'import' ? '导入中…' : '从 Claude 导入'}
+            </button>
+          )}
+          <button onClick={() => setAdding(!adding)}>
+            <Plus size={14} />
+            添加服务
+          </button>
+        </div>
       </div>
       {error && (
         <div className="pane-note error" role="alert">
@@ -524,17 +572,22 @@ export function SessionModal({
   branch,
   isRepository,
   initialMode,
+  providers = [],
+  defaultProvider = 'claude',
   onClose,
   onCreated,
   notify,
 }) {
+  const [provider, setProvider] = useState(defaultProvider);
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState(isRepository ? initialMode : 'current');
   const [target, setTarget] = useState('feature/new-task');
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
   const worktree = mode === 'worktree';
-  const ready = Boolean(title.trim()) && (!worktree || Boolean(target.trim())) && !creating;
+  const providerInfo = providers.find((item) => item.id === provider);
+  const providerAvailable = !providerInfo || providerInfo.available !== false;
+  const ready = (!worktree || Boolean(target.trim())) && providerAvailable && !creating;
 
   async function create() {
     if (!ready) return;
@@ -545,13 +598,15 @@ export function SessionModal({
         'session.create',
         {
           projectPath: project.path,
-          title: title.trim(),
+          ...(title.trim() ? { title: title.trim() } : {}),
           mode,
+          provider,
           ...(worktree ? { branch: target.trim() } : {}),
         },
         { timeoutMs: 90000 },
       );
-      notify(worktree ? `已在工作树 ${target.trim()} 中创建会话` : '会话已创建');
+      const provName = provider === 'antigravity' ? 'Antigravity' : 'Claude';
+      notify(worktree ? `已在工作树 ${target.trim()} 中创建 ${provName} 会话` : `${provName} 会话已创建`);
       onCreated(result);
       onClose();
     } catch (cause) {
@@ -563,11 +618,38 @@ export function SessionModal({
   return (
     <ModalFrame title="新建会话" onClose={onClose}>
       <p className="modal-description">在 {project.title} 中开始新的工作。</p>
+      <div className="field">
+        执行 CLI 引擎
+        <div className="mode-choice" style={{ marginTop: 6 }}>
+          {[
+            ['claude', 'Claude Code', 'claude · 支持终端与图形聊天'],
+            ['antigravity', 'Antigravity', 'agy · Google Antigravity CLI'],
+          ].map(([value, label, desc]) => {
+            const info = providers.find((item) => item.id === value);
+            const ok = !info || info.available !== false;
+            return (
+              <button
+                type="button"
+                key={value}
+                className={provider === value ? 'selected' : ''}
+                onClick={() => setProvider(value)}
+              >
+                <strong>
+                  <em className={`provider-badge ${value}`}>{value === 'antigravity' ? 'A' : 'C'}</em>
+                  {label}
+                  {!ok ? '（未安装）' : ''}
+                </strong>
+                <small>{desc}</small>
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <label className="field">
-        会话名称
+        会话名称（可选）
         <input
           autoFocus
-          placeholder="例如：优化订单列表"
+          placeholder="留空则根据对话内容自动生成，之后可重命名"
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           onKeyDown={(event) => {
@@ -581,6 +663,7 @@ export function SessionModal({
           ['worktree', '独立工作树', TreeStructure],
         ].map(([value, label, Icon]) => (
           <button
+            type="button"
             key={value}
             className={mode === value ? 'selected' : ''}
             disabled={value === 'worktree' && !isRepository}
@@ -602,6 +685,8 @@ export function SessionModal({
       <dl className="session-summary">
         <dt>项目</dt>
         <dd>{tildePath(project.path, home)}</dd>
+        <dt>执行引擎</dt>
+        <dd>{provider === 'antigravity' ? 'Antigravity (agy)' : 'Claude Code (claude)'}</dd>
         <dt>基准分支</dt>
         <dd>{branch ?? (isRepository ? 'detached HEAD' : '不是 Git 仓库')}</dd>
         <dt>工作目录</dt>
@@ -613,6 +698,12 @@ export function SessionModal({
           </>
         )}
       </dl>
+      {!providerAvailable && (
+        <div className="pane-note error" role="alert">
+          <Warning size={14} />
+          本机未检测到 {provider === 'antigravity' ? 'Antigravity CLI (agy)' : 'Claude CLI (claude)'}，请先安装并登录。
+        </div>
+      )}
       {error && (
         <div className="pane-note error" role="alert">
           <Warning size={14} />
@@ -624,6 +715,65 @@ export function SessionModal({
         <button className="primary" disabled={!ready} onClick={create}>
           <Plus size={15} />
           {creating ? '正在创建…' : '创建会话'}
+        </button>
+      </div>
+    </ModalFrame>
+  );
+}
+
+// ---------- 重命名会话 ----------
+
+export function RenameSessionModal({ session, onClose, notify }) {
+  const [title, setTitle] = useState(session.named ? session.title : '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function save(next) {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await request('app.renameSession', { sessionId: session.id, title: next.trim() });
+      notify(next.trim() ? '会话已重命名' : '已恢复为自动标题');
+      onClose();
+    } catch (cause) {
+      setError(errorText(cause));
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalFrame title="重命名会话" onClose={onClose}>
+      <p className="modal-description">
+        {session.named ? '当前使用自定义名称。' : `当前为自动标题：${session.title}`}
+      </p>
+      <label className="field">
+        会话名称
+        <input
+          autoFocus
+          placeholder="留空则使用根据对话自动生成的标题"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing) save(title);
+          }}
+        />
+      </label>
+      {error && (
+        <div className="pane-note error" role="alert">
+          <Warning size={14} />
+          {error}
+        </div>
+      )}
+      <div className="modal-footer">
+        {session.named && (
+          <button disabled={saving} onClick={() => save('')}>
+            恢复自动标题
+          </button>
+        )}
+        <button onClick={onClose}>取消</button>
+        <button className="primary" disabled={saving} onClick={() => save(title)}>
+          保存
         </button>
       </div>
     </ModalFrame>

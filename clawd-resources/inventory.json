@@ -1,0 +1,1312 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 1826,
+    "sha256": "869c5770cd23681ad238f19fd9a2b5cfa8684cf56568f905950dbf2523475926"
+  },
+  {
+    "path": "codex-pets/archives/clawd-gifs.zip",
+    "bytes": 161816,
+    "sha256": "f7421e001bb127b884e7bbf83c95d08fc26d1cf776d0bb72a3c302652900a849"
+  },
+  {
+    "path": "codex-pets/archives/clawd.codex-pet.zip",
+    "bytes": 271691,
+    "sha256": "05d5629502877304e5e88cea6bf9acb6ac5d6f28e82328f838259dfcbafaf844"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-failed.gif",
+    "bytes": 21399,
+    "sha256": "1ac0c9e58c35da931381e0f012249d3f0269ecb9a350880db0d8c734f69d511e"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-idle.gif",
+    "bytes": 24316,
+    "sha256": "6a87e7551d80c38402e7800ad9eeb007695d60c5de0967cf523cff6adbcee982"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-jumping.gif",
+    "bytes": 20299,
+    "sha256": "54d386954bfc4b97849fe1e658de19e599e7bfddfa3d9111225b9ad522ac85b5"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-review.gif",
+    "bytes": 21545,
+    "sha256": "6433faa0bce6dc75cc856d88168ffedd894496cbd7232fdbba2b8aec845cc8b5"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-running-left.gif",
+    "bytes": 34586,
+    "sha256": "9dbc5acd4acfd25c1c3e973e67c163c28f2feb8816d4646f17e496d6ef6586f3"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-running-right.gif",
+    "bytes": 34893,
+    "sha256": "6db8b3cf91fae5ce57c7a7dd6151f252d96fe51f61ae32bfa08844ea0e03e0c1"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-running.gif",
+    "bytes": 25014,
+    "sha256": "cd80c867d1001d390fd9e783f18798126fc56730802df2748beabd9d92ebd3ce"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-waiting.gif",
+    "bytes": 19402,
+    "sha256": "4248decce0b2bf7d8acc73e0449886f0c8376144917673f516eff699e22ac195"
+  },
+  {
+    "path": "codex-pets/gifs/clawd-waving.gif",
+    "bytes": 14900,
+    "sha256": "a9768d1ac5cef4e6aa4399be7728cfdc303f7b38fa3320f9dbdabf6ca911fe1d"
+  },
+  {
+    "path": "codex-pets/sprite-kit/pet.json",
+    "bytes": 207,
+    "sha256": "a199d195266717fae76583afae9e0e3ad9b30f396050fd25a9ecf26235f5bd8c"
+  },
+  {
+    "path": "codex-pets/sprite-kit/spritesheet.webp",
+    "bytes": 271262,
+    "sha256": "467b4334beb70ba655121aacef18ba0846d57a9601c7802b2207bbcecd14d5d3"
+  },
+  {
+    "path": "community-stickers/archives/clawd-stickers-full.zip",
+    "bytes": 5710402,
+    "sha256": "7edb749fd2005edd88e3816e6a05714ad4b7af47c7020989facae1df9e1806dd"
+  },
+  {
+    "path": "community-stickers/repository/.gitattributes",
+    "bytes": 571,
+    "sha256": "27ed88c9d3fce942cdf477abef3aa2fc2c965336923a1a65de6ed389817a3c27"
+  },
+  {
+    "path": "community-stickers/repository/.github/workflows/check.yml",
+    "bytes": 411,
+    "sha256": "424f57d5160cd0938d264731c2fc3338a303b32777dc86acac4d0b6a36b78e32"
+  },
+  {
+    "path": "community-stickers/repository/.gitignore",
+    "bytes": 26,
+    "sha256": "1993f93e08ecb73a7631b1b82d2d29016590d6d1852acd0c714211d11bb36262"
+  },
+  {
+    "path": "community-stickers/repository/LICENSE",
+    "bytes": 1144,
+    "sha256": "b74d26ebba6a8a4257a4b3cf448046b96465f0f7be7fbaa58e557026d7445e32"
+  },
+  {
+    "path": "community-stickers/repository/LICENSE-ART",
+    "bytes": 2163,
+    "sha256": "e12b60b501d70c935f2aed37755764a7567a091cfcdc7d93695b4d1cff3f0224"
+  },
+  {
+    "path": "community-stickers/repository/NOTICE.md",
+    "bytes": 1255,
+    "sha256": "ceefd64af93c6f9891e625d4aac3a243b7f7fa250ead7a01dc65a2ba29ed432a"
+  },
+  {
+    "path": "community-stickers/repository/README.md",
+    "bytes": 22734,
+    "sha256": "d7e6c8519440b65eb91169ed72055482ffb3b416c6b60ce2b5794a7e03db9b46"
+  },
+  {
+    "path": "community-stickers/repository/README.zh-CN.md",
+    "bytes": 21997,
+    "sha256": "ffaeb9ccd5966b75b59e96ad45260c1b4468ced488a05024c4cd6192a7ee470b"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/README.md",
+    "bytes": 7087,
+    "sha256": "3caabd2438dbc722d03452f46e832e92291fe32eefdc8f4a2e9c17406aab1e54"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/README.zh-CN.md",
+    "bytes": 7311,
+    "sha256": "7645d58e67213e4cb42601c25d26261cc7f049b4ffbe876a3cebf069df20dcb3"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/build_all.py",
+    "bytes": 536,
+    "sha256": "862a887887e94875cb9b249f4fb0360d29c0997cdc6f90064e1e54a057db5d56"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/check.py",
+    "bytes": 2021,
+    "sha256": "160628568eabdb81b38727bc14ca1298042990d7e7ea8f94e661dc37e237d8fa"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/banned.gif",
+    "bytes": 84764,
+    "sha256": "2511fdf8b5bc2918084c2a8280cd34f8af907315430835f53cabaa02650d568d"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/blame.gif",
+    "bytes": 82312,
+    "sha256": "598f32588f9acf9c7e9ea0afff4af237b04d147989ece12e705628ed67f5d05e"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/bug.gif",
+    "bytes": 49400,
+    "sha256": "75eb7bd7e6b16524b6fd8746b89afef592d9844c7a7f52cfd22eb8d09a10dd4a"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/bye.gif",
+    "bytes": 76714,
+    "sha256": "da496005d2bfd1b6a64161603c051c0dafc5c9fba2a874447fe358900467938a"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/cherry.gif",
+    "bytes": 97375,
+    "sha256": "88f7d1d8c8f90ae92bc85474a82411f4a5ec81b3e7229e3c0c92695e38d77a91"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/clear.gif",
+    "bytes": 95279,
+    "sha256": "8c0d73218361ce7a377fc6bdd3d843282976bd70f294a3fce8cc4dd00b606902"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/clone.gif",
+    "bytes": 85267,
+    "sha256": "f9cb038301afcb47ae91cfce6f593fc6891d06b18a8fd03676e8411eb3a727de"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/coffee.gif",
+    "bytes": 79267,
+    "sha256": "3d71aa94df3bbc07a923330b9ccebaa9e307d5ec699d982df5a4d8c18b89ab70"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/compact.gif",
+    "bytes": 83492,
+    "sha256": "73cb9043c5514af16ec413d200994ac307f4f8d5382b28408e85787170e42348"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/conflict.gif",
+    "bytes": 98421,
+    "sha256": "f0c2198e0f4b6be7919654d76d6db2b97dcb0695e408bc212d7325b050ae7f37"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/deadline.gif",
+    "bytes": 91152,
+    "sha256": "126b70ed8e246751bc2b8181368c2991d21bf4e4c03f4daebb1bff6fb81d1c8f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/deploy.gif",
+    "bytes": 150968,
+    "sha256": "97dda9615c1477a302e07bc075ca3828ed19573714e33f1f4d8e4792fd3c5317"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/detached.gif",
+    "bytes": 70428,
+    "sha256": "e880f6afabad79dbdcf64459aa666a4a0743447c6d5b0c2e30d885ab31b984f6"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/duck.gif",
+    "bytes": 78880,
+    "sha256": "ead0069e6f51f99388c1be4368fc2ba3f25acfd403cc90a8cb362ec52421cd24"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/error.gif",
+    "bytes": 78936,
+    "sha256": "d608b858b073694b4a13de1ca69714153928bba6ea87e1175f5a71a298cd7c56"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/esc.gif",
+    "bytes": 47951,
+    "sha256": "367ad439131c7e95d025a8eeb950455ae0c1ff1dffe676f92d6410c074df3f8b"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/fish.gif",
+    "bytes": 100563,
+    "sha256": "3ab06e3a4d1744bd77eba225e5d3c7faec172b43da0763864874fcb685c97e10"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/forcepush.gif",
+    "bytes": 102277,
+    "sha256": "d7ae47de43242d5d11466a4af402477b31cee42736e217b3a968b597795a241e"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/hello.gif",
+    "bytes": 71617,
+    "sha256": "2b852c03980ebc52c7f7db01cc25548197c921a64c82973e6fe5077b917776c3"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/leak.gif",
+    "bytes": 111541,
+    "sha256": "ccc18acb123dfa5fedb9cbc9cab1236e87a01946a5a677b55425480e1a62d289"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/lgtm.gif",
+    "bytes": 71540,
+    "sha256": "e973425a1cc08ce7ca81b1f491992f76c46a1dbe68e77a25ded454c5518892bc"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/limit.gif",
+    "bytes": 79696,
+    "sha256": "b4725b140b415c9426e7c1b36b41d49f6bab83ed8968e2f0784245f73a4fcac2"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/loop.gif",
+    "bytes": 160281,
+    "sha256": "7b697fae848d52f47b4d660d6281889351f18fe6271d156cfa49ef33f8de5142"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/notfound.gif",
+    "bytes": 17343,
+    "sha256": "6e76b21fea218e87a6b332f936075c879485e2d2dd15f1ac8682cc86d4056ca0"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/offwork.gif",
+    "bytes": 48292,
+    "sha256": "37b727716d7d6426faeea55d502745a52724481a24d808b11451581c63add019"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/overflow.gif",
+    "bytes": 124812,
+    "sha256": "24d0210105706ecdf9f74c62cf09a0fa8018e212513e7619237eda2091b3f5c2"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/overtime.gif",
+    "bytes": 103091,
+    "sha256": "c8f3a85d00b7a79cd299fdb4b0b0ab2e94cf98651b59dfb4a934d3034a90014c"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/passed.gif",
+    "bytes": 96616,
+    "sha256": "da87ddeacae21c2a22f72e21efd58f3439ecccf0e98c803876111b9395759dfa"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/plan.gif",
+    "bytes": 50280,
+    "sha256": "c660778bc8528141093c4883b0255ad6d577092ac9f14b08ec5f25ecea903817"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/proceed.gif",
+    "bytes": 78188,
+    "sha256": "e516e4e46143930ee18dc39551caab5914c80defce85ed097626392aff5be721"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/right.gif",
+    "bytes": 106654,
+    "sha256": "b78bb28fbfa144a73c1ffb4d357271429ad2ea8694a1c56b646a0ce3b3c8f8db"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/rmrf.gif",
+    "bytes": 120341,
+    "sha256": "3c712566f92ab13e856a4dff07125d570ea4cb9f34cb9472bf56cfba80f60c45"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/simple.gif",
+    "bytes": 142598,
+    "sha256": "cc6c265c10a81bb447876c3c851815130f413de1bfc7c79e61fa949cf78db872"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/sleep.gif",
+    "bytes": 93883,
+    "sha256": "93c6603e981036d8be0dbf5ede25d4a8154f20a0f63c9bf1581a32dc85c50cf4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/stash.gif",
+    "bytes": 134775,
+    "sha256": "52af7e61b34f74f2fac10d6a20dddf476fdb31a336a488c09b5d9f0d765e5db7"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/subagents.gif",
+    "bytes": 55259,
+    "sha256": "520449160bae3d831d3353f756586bfe71b3464bb6778f805d64128fbec3fb79"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/thinking.gif",
+    "bytes": 75996,
+    "sha256": "bdfcd2c2e4c41f1ee3e17588300a1ababfd92bdc6e4515a877acbc981efdede6"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/todo.gif",
+    "bytes": 58425,
+    "sha256": "8800330d526092e09766ae2abf489895564cd65d5447f13727a7d3144077a204"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/ultrathink.gif",
+    "bytes": 109625,
+    "sha256": "eb5aaa13b9cbd77e4f5ac9074640a475a7c6f07349eaee886bd9e1f7fb0d543f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif/works.gif",
+    "bytes": 72838,
+    "sha256": "95257747923f90130ec3176e9f76943b9da362c85ece1120b3eb8b089132e2bd"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/banned.gif",
+    "bytes": 84764,
+    "sha256": "2dc5a9e0f55bcac8e8ed33541935cd3b8de49d7e3ba1bf744a8098a4739df832"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/blame.gif",
+    "bytes": 82312,
+    "sha256": "8cfdc11fe568738d4a16aed712636c051f0223aea6bd246ff8fcf58281522a21"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/bug.gif",
+    "bytes": 48639,
+    "sha256": "27c89355691c037764524bd55c36bf7b5eafddaed89d5df97a6b6f0f5ea8906f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/bye.gif",
+    "bytes": 76714,
+    "sha256": "358f94d3a5f06bc2ad4c070d029e7c668729b47f69de31af08e284b368e85ce1"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/cherry.gif",
+    "bytes": 97375,
+    "sha256": "b1efb65cb796ddddb0772c2605817a0837ebc5ff04c551bcc5a8b1df1d8361a8"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/clear.gif",
+    "bytes": 95279,
+    "sha256": "b98746b18f63b9bcb74dda6622b3c1cca5a08143e0f67ef6e3e54d1e7420b678"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/clone.gif",
+    "bytes": 85267,
+    "sha256": "ccff4e6975dd53de063bd3396ea3453017547d04a15e22cd6893137d32b0094c"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/coffee.gif",
+    "bytes": 79267,
+    "sha256": "926489dd71ba1aa2a9854c6e035ded98a4d08bbcc26908f72d3be93fbe688e53"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/compact.gif",
+    "bytes": 83492,
+    "sha256": "5d129502deda93fe7ac5387e4a1774b2314eb836a93f909426a4f23dbabce99c"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/conflict.gif",
+    "bytes": 98421,
+    "sha256": "f0c2198e0f4b6be7919654d76d6db2b97dcb0695e408bc212d7325b050ae7f37"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/deadline.gif",
+    "bytes": 91152,
+    "sha256": "8623ca0a7a091658d49dbd4fafccb083e7d89d12cfc21a355a5ae673f238fedd"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/deploy.gif",
+    "bytes": 148581,
+    "sha256": "0b214197ca015efd545aafb934dadee1df00e7660eba30fd0307f0250c2b1f22"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/detached.gif",
+    "bytes": 70428,
+    "sha256": "9999b80fff3975684bc45fb427d983b0f4596921fbcdd829edb87d6d852ece83"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/duck.gif",
+    "bytes": 78586,
+    "sha256": "0ac39c5b08ef4fd4fae7f9f2e07ddd4126b7b72e7a519603c013c6168036d744"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/error.gif",
+    "bytes": 78936,
+    "sha256": "71a8dbd86663893507084d7a6d7ad2fc301e1f348d46f3fd5d448e6c7b5c771e"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/esc.gif",
+    "bytes": 47951,
+    "sha256": "eb31c6b90f60fdcdc72d0f4834a6b5b9e52c8ccad81824a1e420154f0f132b56"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/fish.gif",
+    "bytes": 100563,
+    "sha256": "810a03f5165ca4890df744c42444936695c58bf02914a4809e4f11860bfb827d"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/forcepush.gif",
+    "bytes": 102277,
+    "sha256": "acfd174dbc991b51629c56d00f41cf0f1d1460e3cf12782d40ee172eda944258"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/hello.gif",
+    "bytes": 71617,
+    "sha256": "d630569b1a11b856814e40a4acb75aa36381504073070ad7877d4d4eccbe05f5"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/leak.gif",
+    "bytes": 111541,
+    "sha256": "1f931eb537eb9c1acfb9b6dcf1f3f0bcddf08f8be18838ce1de3309009c1049f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/lgtm.gif",
+    "bytes": 71540,
+    "sha256": "f8c55815c63d4cef347f796b5be405d9d18e3dba599d21630a1a2948cc5a8126"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/limit.gif",
+    "bytes": 79696,
+    "sha256": "dade5dc4e0889aff4e3f4335a4f07d919e1cc4a1e013314c5d68b9fa18d0c658"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/loop.gif",
+    "bytes": 160281,
+    "sha256": "f50b5fce0628cc8846a762253a3899df4dd3dc25c915f32af426534a0791465e"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/notfound.gif",
+    "bytes": 17343,
+    "sha256": "6e76b21fea218e87a6b332f936075c879485e2d2dd15f1ac8682cc86d4056ca0"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/offwork.gif",
+    "bytes": 48292,
+    "sha256": "11e5dc9d111ee610c57b5621657d6a74bb1e12bb9c58c03b61304a108c8124cc"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/overflow.gif",
+    "bytes": 124812,
+    "sha256": "1ce3edfa02dcba466da4652183f564a99269acdcbfca400beeac22ea76dc3ef6"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/overtime.gif",
+    "bytes": 103091,
+    "sha256": "c8f3a85d00b7a79cd299fdb4b0b0ab2e94cf98651b59dfb4a934d3034a90014c"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/passed.gif",
+    "bytes": 96616,
+    "sha256": "0b82a79aad80a09fec773e87214c2d11169ea0fcd8cf45a886dac0bbb2b97262"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/plan.gif",
+    "bytes": 50280,
+    "sha256": "579731f825e34be5a84380f2af8a2d9c4b45c14601754fd3dfee325aa267cc33"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/proceed.gif",
+    "bytes": 78188,
+    "sha256": "29bcd790996f0f5dc3bea8126cc8852969b2e4057b1f41048470d0cf788df6b3"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/right.gif",
+    "bytes": 106654,
+    "sha256": "34aa85c24b21998d94789ab1fae1d17c10bddfac5c2e8849a5533517c3084f38"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/rmrf.gif",
+    "bytes": 120341,
+    "sha256": "f31301c342ba0ac16a5340dcb53998fc492dc5d87b0c94d479957085628ae8c4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/simple.gif",
+    "bytes": 142598,
+    "sha256": "7598bad252d5e781ead93959139f3bdcb43b29d40d9453af1a13b940ae7bbe05"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/sleep.gif",
+    "bytes": 93883,
+    "sha256": "09d1f1db0698a733cf61c2a6c58e276c09f323fb926729b52c54d3dd9ccf56f7"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/stash.gif",
+    "bytes": 134775,
+    "sha256": "35110fc110ddc6ed092cad4cd6bb168f5c03d70f2aa5293c4644366bb4153a17"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/subagents.gif",
+    "bytes": 55259,
+    "sha256": "a45bf4ff8b418379f30f192abaf6599f2636a2332d1f0a62e011b0323d874dca"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/thinking.gif",
+    "bytes": 75996,
+    "sha256": "101c28e58e82895c6059618f658b9f6bd947b471fdf9f5a83f87da89ffe4170e"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/todo.gif",
+    "bytes": 58425,
+    "sha256": "93ee5025338f922c425e2225dbe9da46e7b51b42348caff2e667743a9f519f56"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/ultrathink.gif",
+    "bytes": 109625,
+    "sha256": "5c3d88fd74b1edcdd32d1cf89287daf6acf6b4088d2206c78d2292e8f94ed7fa"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/gif-dark/works.gif",
+    "bytes": 72838,
+    "sha256": "28df742de445697c1df9e090864c93decd3f2a01ea22826e4871b9408d76687a"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/src/clawd_dev.py",
+    "bytes": 60629,
+    "sha256": "09202f683cd4dd125b62adfa70a2f610a85d63b971c2907a0358fd51d0393392"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/animations.py",
+    "bytes": 7000,
+    "sha256": "7e0482d43ab971d89ada7e058fe8d770fdf355cb007d4067362bcd94bd60aab2"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/build.py",
+    "bytes": 8355,
+    "sha256": "6fa549dfe0be60f7a704183118f126c7697a29dce6f7493f8b435c90ef2f5335"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/LICENSE",
+    "bytes": 2092,
+    "sha256": "3a694ec7cec4cba50d801d8a0bec8ecf31967e9621dbe04838da052cb2384af3"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/README.md",
+    "bytes": 7107,
+    "sha256": "0685688c3125aa2bfde23214fe5d14a5f702f8b3482ff0b45b6395ed34487ee1"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/README.zh-CN.md",
+    "bytes": 7815,
+    "sha256": "278e17a0c42aaa9c375160f4e261a8671bf3c86bb97c05ec5719780e9408d10b"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/banned_long.apng",
+    "bytes": 42280,
+    "sha256": "5cc1a3d4b2c0a0f573e5f1985daed5be4794dccccb3c8418fecb2b4a4e04128e"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/blame.apng",
+    "bytes": 16999,
+    "sha256": "438085b57dbdb8e4b489453c5802703e6042715ca0cb6d0eaceac32097c0c398"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/bug.apng",
+    "bytes": 15792,
+    "sha256": "9102aabbf7bb33a571228d4a149e4faf3c05749582429458a559404e350d2ff8"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/bye_long.apng",
+    "bytes": 31507,
+    "sha256": "5d55fc29be362e6aac3df26a60d4c38a0494b3c020ed30ddf64d414d1da1ab5f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/cherry.apng",
+    "bytes": 21467,
+    "sha256": "1c23d4e352976f3606413943cb5545f7fe353d9f2bb1a3d548342329f1c07ded"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/clear.apng",
+    "bytes": 24852,
+    "sha256": "e884d3f8e1f03e247f2f23aa80883f07dba6ec350a03fd2900757b784f503742"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/clone.apng",
+    "bytes": 24242,
+    "sha256": "fadc7a31ab08803356680b0bf52f08c7e58618c25101cf48e24d89fd300bd549"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/coffee.apng",
+    "bytes": 37294,
+    "sha256": "f7b77b227badfa86934e6d026d4d4698793c67c6f55b242882cdd7fc0757dd4c"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/compact.apng",
+    "bytes": 25432,
+    "sha256": "874e7260880a706c77627abe34d23d6c02c8cc048ca1e41b13973937f00a44af"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/conflict.apng",
+    "bytes": 41560,
+    "sha256": "d7f3e1518dccac0e3f9f2cc142445444a6895714c73c2afb1642024000abba61"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/deadline.apng",
+    "bytes": 24173,
+    "sha256": "db2808a565f74218b44950cd10487c972a6d98b4c38ad5506527f832aa79aca1"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/deploy.apng",
+    "bytes": 36266,
+    "sha256": "bead81873aa9ddbc4f39493297024f0ddf646354d130d883f501fbba01ba19d3"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/detached_long.apng",
+    "bytes": 37398,
+    "sha256": "5b08c38f4d5447565f4b76e0ef2b856cdfab02134e7131e7640805193fc169f3"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/dizzy.apng",
+    "bytes": 65516,
+    "sha256": "6232c6ba046238be1676dadb4c01fb8d0e1daf3424befa0fdd2ef15526c53e19"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/drag.svg",
+    "bytes": 2344,
+    "sha256": "e952192731b1ce1549c6653513fb86cd457f422460e8eb7cdbf579ef19d4fa38"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/duck.apng",
+    "bytes": 24166,
+    "sha256": "94e058edf36ba1b6b3e9eaf2c3c40d3450eff7b3ed12e475e4edd6a75775e666"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/error.apng",
+    "bytes": 30885,
+    "sha256": "a7ac7c7082ab91e3d1ae2ca9f479ff03674ea67e0b9d6bfeed7ab6c3786b34b0"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/esc.apng",
+    "bytes": 15381,
+    "sha256": "b74143dd0e37f25daafd4d324d803efedd5f2ad168184614c6d4eb2c2b46b0cc"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/fish.apng",
+    "bytes": 31030,
+    "sha256": "3928bbbac05e2398289c7bc04485dddc4d1d51fe24e6869bca807222dbdd3d4f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/forcepush.apng",
+    "bytes": 38370,
+    "sha256": "23e0434dc970c3c15d49597f0fcf98a8c16e0758d1667f8ab01b9dcd0beb0afe"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/hello.apng",
+    "bytes": 31519,
+    "sha256": "dc42158a32de9fc87f8d5cf889ee71b1466c8e4a17df4a12b2017d4c0a26788a"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/idle.svg",
+    "bytes": 1273,
+    "sha256": "11f52fc911899bfe0439f39409c0d75f0dcf4705de7d2e0d1a314906a6189bd6"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/leak.apng",
+    "bytes": 33688,
+    "sha256": "b1af95c3800b4a3f9944a32ce5dd5f9e395a471af06767469ea312d99874dcac"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/lgtm.apng",
+    "bytes": 20197,
+    "sha256": "289b0c083976b85a301704a9669fde8b2b32b2b7e87312970400c064a2a042f0"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/loop.apng",
+    "bytes": 83622,
+    "sha256": "f115dc770060b8504a8de5bb6f8dafa0c2aa193e05585f5c1923d6bc62dd4bf6"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-alert.apng",
+    "bytes": 16482,
+    "sha256": "551707999e988f881a7aef086a2b3e9a2c1f0f36ffb886787461cfc2fee77940"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-crabwalk.svg",
+    "bytes": 1708,
+    "sha256": "255532506fcf2d76292ec5f0c623451a1cb2b89146c106f60f72e90ac733e760"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-enter-sleep.apng",
+    "bytes": 9629,
+    "sha256": "1505de141ff1ce2424f5b730fae8dd7e6aa09034496ed98f1e35a7e22cac55b4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-enter.apng",
+    "bytes": 13194,
+    "sha256": "93d23e3c1eb71c044797d2e8c9731d2a6ec626e1a23601d18a1152d8337e0bdf"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-happy.apng",
+    "bytes": 36393,
+    "sha256": "2b64ec9ab0e678c70312fb7726be9c6eb2ee490c58b799508c3daca0f442c5e5"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-idle.svg",
+    "bytes": 1671,
+    "sha256": "5e233519cae9931b09b170442037f6809bc0ec34ccd2b4f109ae514421a21d2d"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-peek-hold.apng",
+    "bytes": 2419,
+    "sha256": "aa575e985f1544431b7ec4a8dfe22ca26837b4efb1e9ca15cab163dc63d8de64"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-peek.apng",
+    "bytes": 5060,
+    "sha256": "bbd99043a159e162290732e6275ba3a108e5886bd64e9a6a388688e8ed088b53"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-sleep-peek.apng",
+    "bytes": 2513,
+    "sha256": "dab0576196039af056149c5cff2812877bd3e6bedcb204f0010fe75336ca4f01"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-sleep.apng",
+    "bytes": 14826,
+    "sha256": "9635854eda3575205ea143620b1eac9d277ffea8e198eab31c484c014338bd47"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/mini-working.apng",
+    "bytes": 11862,
+    "sha256": "7d8af37c76061450ec9667a9d3744f3761e9e76eb49877441362dff1070297c0"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/notfound.apng",
+    "bytes": 3086,
+    "sha256": "ceabdc7b2e7204c3b9653dc2853a643794551ec5fb9f943dbe7797f5fcc7f9c4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/offwork.apng",
+    "bytes": 18832,
+    "sha256": "d0f0eaca44b1dcd8c5542e587eeec3e42c642973b29d0aaecc8b03597b8226bd"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/overflow.apng",
+    "bytes": 32953,
+    "sha256": "63076fa534470f840003c8ffb888d2a6c34b5fa10eee1ce382c3f2cde1595f84"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/overtime.apng",
+    "bytes": 30678,
+    "sha256": "efc63f06a573538b4ecf12ab54a7ac189449b1d3f7043f37e9ef11d0f55aee04"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/passed_long.apng",
+    "bytes": 65305,
+    "sha256": "49a237332bff0fce871219065258ef66a6996725563ca19031acac892fb2e75f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/plan.apng",
+    "bytes": 11651,
+    "sha256": "a2b3fd3addddb5de5077d3bf7292a44209bd4dc3e3585d1ff7650ae7a5586ee8"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/proceed.apng",
+    "bytes": 27980,
+    "sha256": "ac3993c5348e1b065096e467786c2680981d3ed11df0299bdecfdd24d8701cd5"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/right.apng",
+    "bytes": 23364,
+    "sha256": "8c4db4c3d28165a89f3d4772606f6118671236c890dacd6f79e85291622447eb"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/rmrf.apng",
+    "bytes": 34352,
+    "sha256": "bec150a333399fbcff800433af29b6e87478e015fe484cc3577dac15340779c7"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/roam.svg",
+    "bytes": 1571,
+    "sha256": "a5e57b9b598326a10630c5c7896516b1d169815099bd17b6a5fee559082fd6f4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/simple.apng",
+    "bytes": 31510,
+    "sha256": "0dc260b69cd52f8d0d8577e0eefab84bb784fa062b5b389a101aa3f95143b219"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/sleep.apng",
+    "bytes": 37358,
+    "sha256": "c650205acd83fa3491949752bf08361aceef3dd39a3b601227176938e1fd416d"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/stash.apng",
+    "bytes": 21794,
+    "sha256": "0b445b9c19a6e60c918617f9eb0ae71e3c8f23a2a30e207760fd54d228f9476f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/subagents.apng",
+    "bytes": 17821,
+    "sha256": "f4fbceec4ac5ececee1b595121ab31f4924b23c329ce12707483297ce2e0b12d"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/team2.apng",
+    "bytes": 24361,
+    "sha256": "e00dd19cef6ebe4aa5bf2deef24fda63158f54e4a31bcd292855a3948b661b13"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/team3.apng",
+    "bytes": 48122,
+    "sha256": "60a943350d2c19b6fa7e68b62eb0263cde8a3181d9cbb92d7a2be8292b726698"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/thinking.apng",
+    "bytes": 40803,
+    "sha256": "1fbc027c2d674a41e6924e0bef63d1685c68e579de475c48a9d42bada662cece"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/todo.apng",
+    "bytes": 21107,
+    "sha256": "6fa956a1fff32c08349bf7fa5766a7a511b88da2f0aa39eee67dfce21a94be39"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/ultrathink.apng",
+    "bytes": 37088,
+    "sha256": "618e6908fedd6bb8077fab1f5713753b3e8b1ea441a55acd5cf6606e4182bf4b"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/wake.apng",
+    "bytes": 43655,
+    "sha256": "4ab7abb2292b6a49d70516b994b093b7128acf22d6ea44f6acf129c49a41c6a2"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/works.apng",
+    "bytes": 32162,
+    "sha256": "caa933ac14063d1677c1aefff05f8ad49f6d9ee547f0b1dad041c846ff6c4133"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets/yawn.apng",
+    "bytes": 24784,
+    "sha256": "614433aca6593bb6b685d54ecbbd857086ad046927fab147fb7833a0f6f55859"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/banned_long.apng",
+    "bytes": 42261,
+    "sha256": "947bd4828ec7545d9e05ffd968b7c7ad50510e5ccccc04e01bf42eb7965d1193"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/blame.apng",
+    "bytes": 16989,
+    "sha256": "ea35239bf57e7dbd92be31c06de2199394d0d268dd5d62f2a1287089f3d259b1"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/bug.apng",
+    "bytes": 15965,
+    "sha256": "f24bb3ee7a8df2224a8ff258d06649dbec1fd600430532d45ac810438b44914a"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/bye_long.apng",
+    "bytes": 31329,
+    "sha256": "be08beb571d2d245668ab6239759039904f1d23e963b45c5776b955eb1485bf4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/cherry.apng",
+    "bytes": 21467,
+    "sha256": "fc395eb078a39e26e00944d3ea0dbd5e8cb6d62c2bf8a73d699d14a742d800a9"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/clear.apng",
+    "bytes": 24731,
+    "sha256": "fad8ca71d090cfb7d651fe03474d7851595ad890b484d37cbf927efc6367e6fb"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/clone.apng",
+    "bytes": 24254,
+    "sha256": "b5108a95bbb720fe6ac9fd7b2567c60b3aac6f393baf6f923aed26f3da3b0a2f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/coffee.apng",
+    "bytes": 37232,
+    "sha256": "52a867e211bfb1e4fdfa455ef572470619f08a97ba9868dcf662546b6b2f65ec"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/compact.apng",
+    "bytes": 25430,
+    "sha256": "b321db1bcf8b9eaa1cd13f644a804d6a4b7e175b52efe2b7ffeb80715867fdbb"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/conflict.apng",
+    "bytes": 41560,
+    "sha256": "d7f3e1518dccac0e3f9f2cc142445444a6895714c73c2afb1642024000abba61"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/deadline.apng",
+    "bytes": 24171,
+    "sha256": "0b4c7540be7a568158c0dd04d9175ea9818718e82f939df45de88c9b6382ae01"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/deploy.apng",
+    "bytes": 35799,
+    "sha256": "53f03a6ee85514b858e45941a30d53f576be99ce5d14c4c5ec557c3ad4018bd8"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/detached_long.apng",
+    "bytes": 37384,
+    "sha256": "ef4fb91da67894c6d94226eaeb7e2925ab5695230b73aa7f343220275c7bfb6c"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/dizzy.apng",
+    "bytes": 65309,
+    "sha256": "bf10a853f8f1ebd9a40bc9da89bf025975acef9970a39181b686da0dce5cdc46"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/drag.svg",
+    "bytes": 2344,
+    "sha256": "146ea65617001b7ae15ca96c77568563a59534dcec860c56f299f96df53205bf"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/duck.apng",
+    "bytes": 24239,
+    "sha256": "5d6eb0c3c2eb02f9701b51fae09a3dcba01829ad5bcad67c8dd53b04bbd30738"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/error.apng",
+    "bytes": 30865,
+    "sha256": "d7c7fd4c19150d3eb2aededbf3c74f0a3c163d6ac25fb65f937ee3b9342b1269"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/esc.apng",
+    "bytes": 15344,
+    "sha256": "d6f5a4cab25f4af7c431c31f7210302c0477e0f8bc4e5c8af42faf23472f2ff1"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/fish.apng",
+    "bytes": 31032,
+    "sha256": "7fdd11ddf1a34c4883ea31afe819fd70315c3e912cb7f044ee675960d0e9499c"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/forcepush.apng",
+    "bytes": 38365,
+    "sha256": "152c54aca17747c7a52158b0b3b6cd4893470d8493d030b75a359e27efa92577"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/hello.apng",
+    "bytes": 31579,
+    "sha256": "c9a1b59201a66c5b5196ecc1650f532a28c4f9500bbaf8f379b2bf9a58feec87"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/idle.svg",
+    "bytes": 1273,
+    "sha256": "97cef42b03d6ec95112cfa72dc858037a2e78c6d007b459cc27a97fa4f49f476"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/leak.apng",
+    "bytes": 33680,
+    "sha256": "c17d4d6067232060451c98b06c2d94d363c259ba0956a40c8c57f2912f9a7a96"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/lgtm.apng",
+    "bytes": 20194,
+    "sha256": "15b7ee1891c8bac9d4f56702d326dac53aede5fe890813a14afa31f67cf2dce7"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/loop.apng",
+    "bytes": 83626,
+    "sha256": "1b2b1f85009cfd6b756785714b91a15d4023f1d0ef919e13583a31ed405e4395"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-alert.apng",
+    "bytes": 16482,
+    "sha256": "551707999e988f881a7aef086a2b3e9a2c1f0f36ffb886787461cfc2fee77940"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-crabwalk.svg",
+    "bytes": 1708,
+    "sha256": "55407a4c0e9cfdb8dae4d36ec73c9e15ec9c18888f97f710252a6dae42691614"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-enter-sleep.apng",
+    "bytes": 9629,
+    "sha256": "1505de141ff1ce2424f5b730fae8dd7e6aa09034496ed98f1e35a7e22cac55b4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-enter.apng",
+    "bytes": 13185,
+    "sha256": "59cad9d89a54d0048c66395b839151a4f201b57ee3191ecb26d010b99d2699cc"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-happy.apng",
+    "bytes": 36393,
+    "sha256": "2b64ec9ab0e678c70312fb7726be9c6eb2ee490c58b799508c3daca0f442c5e5"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-idle.svg",
+    "bytes": 1671,
+    "sha256": "5e233519cae9931b09b170442037f6809bc0ec34ccd2b4f109ae514421a21d2d"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-peek-hold.apng",
+    "bytes": 2419,
+    "sha256": "aa575e985f1544431b7ec4a8dfe22ca26837b4efb1e9ca15cab163dc63d8de64"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-peek.apng",
+    "bytes": 5060,
+    "sha256": "bbd99043a159e162290732e6275ba3a108e5886bd64e9a6a388688e8ed088b53"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-sleep-peek.apng",
+    "bytes": 2513,
+    "sha256": "dab0576196039af056149c5cff2812877bd3e6bedcb204f0010fe75336ca4f01"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-sleep.apng",
+    "bytes": 14826,
+    "sha256": "9635854eda3575205ea143620b1eac9d277ffea8e198eab31c484c014338bd47"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/mini-working.apng",
+    "bytes": 11862,
+    "sha256": "7d8af37c76061450ec9667a9d3744f3761e9e76eb49877441362dff1070297c0"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/notfound.apng",
+    "bytes": 3086,
+    "sha256": "ceabdc7b2e7204c3b9653dc2853a643794551ec5fb9f943dbe7797f5fcc7f9c4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/offwork.apng",
+    "bytes": 18825,
+    "sha256": "0166d84e2755db8fcc9918c746992d4a032d85a7d760d7c3cadd6aeabe652981"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/overflow.apng",
+    "bytes": 32965,
+    "sha256": "840a0bd4b0dfec42b5b38ad2637433abff0cb6706a62e83224a2b8c372972753"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/overtime.apng",
+    "bytes": 30678,
+    "sha256": "efc63f06a573538b4ecf12ab54a7ac189449b1d3f7043f37e9ef11d0f55aee04"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/passed_long.apng",
+    "bytes": 65211,
+    "sha256": "fcd7d2d2a7c134173a634fb6f1c8e528c689aa7e5db62c4df892607bf2d130f8"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/plan.apng",
+    "bytes": 11655,
+    "sha256": "ee6d29807845e2ea1f1a7ed096ce4cd834cf52e741c85b00180f3b947421ea14"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/proceed.apng",
+    "bytes": 27763,
+    "sha256": "d85b289be176606bef00503d82566000c3428ea93ec20a01ed5f456a5b1b8d9b"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/right.apng",
+    "bytes": 23104,
+    "sha256": "5f29af0dcc8661c91f76b0132c4af71e7ec0cf964b6973c30fd0da4e362e6983"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/rmrf.apng",
+    "bytes": 34315,
+    "sha256": "bb60b3ec88406df64c22dae792266887b10a1f40a14de3a393a22c2c2668d05a"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/roam.svg",
+    "bytes": 1571,
+    "sha256": "53c456e3a01ed5c6a6fcdca1bc261fca362ca74db947e602d218f876c6417043"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/simple.apng",
+    "bytes": 31507,
+    "sha256": "9bee9c3b13b60f72e805322fc58f4d7a88ddbdd4a9c718902c87e46c71f1f0b4"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/sleep.apng",
+    "bytes": 37358,
+    "sha256": "4434f4e14cfb54010d35ee01af9fb9df191ed80e39a0ef11163f2acb83dfceb9"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/stash.apng",
+    "bytes": 21887,
+    "sha256": "90c1009341ddb3dcf7e769c781ea096b43f025a9e001704feeb5605232baeb7e"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/subagents.apng",
+    "bytes": 17807,
+    "sha256": "67668ec16d531abbc45a86ea31aa19491012c5190047dd809c20fa134688fa22"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/team2.apng",
+    "bytes": 24339,
+    "sha256": "c0e6e23c22cf8c86d3dcd6baf9b51456b0ba1fa7800c79d697e954b82b8a0901"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/team3.apng",
+    "bytes": 48106,
+    "sha256": "1ec68f71004cb0d808c025895eb9fb4403ff1c060f022c1d309bad5bf1307524"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/thinking.apng",
+    "bytes": 40801,
+    "sha256": "f7cbcc20712d9a796172b04fc3a4bab8851bf1a02c91cf3fc4cebbeb07c4cb25"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/todo.apng",
+    "bytes": 21187,
+    "sha256": "7216ee63c3ac475f071b929d83ed7384da57fd4fb7d451e61969d1fcf53293bc"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/ultrathink.apng",
+    "bytes": 37139,
+    "sha256": "82272d615e6d60bc34b2f6f234295ae7fa5f30a08c7c63f9c925c8cb15d12c0d"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/wake.apng",
+    "bytes": 43592,
+    "sha256": "f7c55df384aa88233b35137b71568cb2ae2be9b6d8adb4dd66ca5300b2de35fd"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/works.apng",
+    "bytes": 31949,
+    "sha256": "daf2e8d90277f1ffaf45da107b8ef4397278580bf4be2989689d1cfe3eda72e7"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/assets-dark/yawn.apng",
+    "bytes": 24782,
+    "sha256": "36ca0c522acee8c5e460d5b121b8b8936c7460f5c0141b9aba3ec466f270c170"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/clawd-dev-life/theme.json",
+    "bytes": 6060,
+    "sha256": "336ebcfadfdea8caef310bb9336b46358bfe7a54e7ff0390f793bdcda73437a2"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/mini.py",
+    "bytes": 12203,
+    "sha256": "e22aef1faf7dd83db7c8bf5954348766f76660e429d992e5a407f08d2af5b47c"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/preview.py",
+    "bytes": 1813,
+    "sha256": "d8b4e063d2cfd5b1a747c6478e1815e967162a8b0ce4aa70919a22e64daa218f"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/previews/clawd-dev-life.webp",
+    "bytes": 326,
+    "sha256": "cd812939cc8ff30fa6f7adab16f3ba5a7dae7ced0c52a2343d1f42299171ee50"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/svg.py",
+    "bytes": 5133,
+    "sha256": "c2aa0d1f52a4b3b1a63895dbdc8aa9d17d278017116c5864fe6f1591cb000410"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/templates/LICENSE",
+    "bytes": 2084,
+    "sha256": "a5ff03b17a9bc595a113be500dcda9518e3d3ec0873977a95f697dae695de7fd"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/templates/README.md",
+    "bytes": 7093,
+    "sha256": "9457c390c332dcdca1b7be7d9760b4e1c119d660ac9889b2beb7eb1b6d620019"
+  },
+  {
+    "path": "community-stickers/repository/dev-life/theme/templates/README.zh-CN.md",
+    "bytes": 7801,
+    "sha256": "f54d6ed5cf252d1f9d5e255eebf5aa1f8c4265b527ecf106ff21e7f13663bd1e"
+  },
+  {
+    "path": "community-stickers/repository/requirements.txt",
+    "bytes": 103,
+    "sha256": "61376be0ee4f72605b4e3873d9a480688394a5fa0c8b677e42fca2377904b82b"
+  },
+  {
+    "path": "official/archives/Clawd-official-assets-expanded.zip",
+    "bytes": 1600544,
+    "sha256": "fb4f007919b14d892b75e03606744ca032eaf181849bce0eeff3046f1313cc7e"
+  },
+  {
+    "path": "official/archives/Clawd-official-assets.zip",
+    "bytes": 543727,
+    "sha256": "e317a62e6898463c6d8a989519e549891a669ff015a3cff9a29e2feed3fdc33e"
+  },
+  {
+    "path": "official/assets/7bbe5052.gif",
+    "bytes": 100535,
+    "sha256": "ec350de9645c5f956895fda9659a01a6ca8a0cf29a10049fe21b68b2de4bc026"
+  },
+  {
+    "path": "official/assets/Clawd-Dancing.gif",
+    "bytes": 144564,
+    "sha256": "9fe38900e3b62a5ff7a737edeff27a45941cfd7f89bae5d3727bfb3af327c0e0"
+  },
+  {
+    "path": "official/assets/Clawd-Jumping.gif",
+    "bytes": 123701,
+    "sha256": "06378e8f4a53bbce7fced82599d91e3cafdbc15ca999c886a2aacc50b1621b1b"
+  },
+  {
+    "path": "official/assets/Clawd-JumpingHappy.gif",
+    "bytes": 124992,
+    "sha256": "9b4f2d6b3e6a2b6cdcafd763132080004276a3086cfd7cec7cf8b8b5dd61e0fa"
+  },
+  {
+    "path": "official/assets/Clawd-Laptop.lottie.json",
+    "bytes": 108624,
+    "sha256": "c3ff42ac936dd60a37b187745bbc8fe66370c81fe9053b22c3fcd9cd7e0684a2"
+  },
+  {
+    "path": "official/assets/Clawd-Lurking.gif",
+    "bytes": 83768,
+    "sha256": "8de541778d1d08c855920bba63f7bb4ed6f691ef232b95f1cbb0a34b1b076233"
+  },
+  {
+    "path": "official/assets/Clawd-Magnifier.gif",
+    "bytes": 506912,
+    "sha256": "8470d42d30001a1a214579d270c458b9952592b2583bce473143a2aef20f2c44"
+  },
+  {
+    "path": "official/assets/Clawd-Pointing.gif",
+    "bytes": 319215,
+    "sha256": "1d557397d48a53f18956ac158b68beb185105bba1d81ff1cbaa9802a16e1621c"
+  },
+  {
+    "path": "official/assets/Clawd-RacingCar.gif",
+    "bytes": 351592,
+    "sha256": "7205e510d56222f0642b7e21759e13c02d60667c5dcb46a4691d0e041d2c1549"
+  },
+  {
+    "path": "official/assets/Clawd-Soccer.gif",
+    "bytes": 492311,
+    "sha256": "b8a7df415dff8ec11b90b843b5163b1712c4a1218831219927208adcb3b7a69e"
+  },
+  {
+    "path": "official/assets/Clawd-Still.png",
+    "bytes": 92184,
+    "sha256": "595609a13c6ff6b16bac4f10bd10f46b6a437a0dde0fd3a30e202b5dc2ba59dc"
+  },
+  {
+    "path": "official/assets/Clawd-Waving.gif",
+    "bytes": 116347,
+    "sha256": "16b6d33c9bb06248206c61671c010bb73bf9880981b74d0ca2cfec16f56a7f22"
+  },
+  {
+    "path": "official/assets/README.md",
+    "bytes": 987,
+    "sha256": "d5b7b51c8dce0d518985e1aecc8aee32135949acbba2c33d32df761e1d3fe6f1"
+  },
+  {
+    "path": "official/assets/ac0fa108.gif",
+    "bytes": 458484,
+    "sha256": "debc2c43bb64bd7c380dcc9912ddb57702412d48ed28c5305e51b6907beca61d"
+  },
+  {
+    "path": "official/assets/clawd-guest-pass.svg",
+    "bytes": 2467,
+    "sha256": "0537d3d30b13bdbcc7bd83ed94e7a9454298791c56bb60a300e6889ccb302f43"
+  },
+  {
+    "path": "official/assets/sources.json",
+    "bytes": 5203,
+    "sha256": "2dfbba4201d2718f17690460965771bb31da1301c334d5bd54a574fdbcba6645"
+  },
+  {
+    "path": "official/initial-download/Clawd-JumpingHappy.gif",
+    "bytes": 124992,
+    "sha256": "9b4f2d6b3e6a2b6cdcafd763132080004276a3086cfd7cec7cf8b8b5dd61e0fa"
+  },
+  {
+    "path": "official/initial-download/Clawd-Magnifier.gif",
+    "bytes": 506912,
+    "sha256": "8470d42d30001a1a214579d270c458b9952592b2583bce473143a2aef20f2c44"
+  },
+  {
+    "path": "official/initial-download/Clawd-RacingCar.gif",
+    "bytes": 351592,
+    "sha256": "7205e510d56222f0642b7e21759e13c02d60667c5dcb46a4691d0e041d2c1549"
+  },
+  {
+    "path": "official/initial-download/Clawd-Still.png",
+    "bytes": 92184,
+    "sha256": "595609a13c6ff6b16bac4f10bd10f46b6a437a0dde0fd3a30e202b5dc2ba59dc"
+  },
+  {
+    "path": "official/initial-download/Clawd-Waving.gif",
+    "bytes": 116347,
+    "sha256": "16b6d33c9bb06248206c61671c010bb73bf9880981b74d0ca2cfec16f56a7f22"
+  },
+  {
+    "path": "official/initial-download/SOURCES.txt",
+    "bytes": 391,
+    "sha256": "0391be072010f6b5ba136c01864ef8eb192543583e28cb8fc9234045036f59ae"
+  }
+]

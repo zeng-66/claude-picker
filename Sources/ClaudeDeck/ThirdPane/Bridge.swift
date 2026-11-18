@@ -11,6 +11,8 @@ enum Bridge {
 
     /// 网页外壳所在的 WebView（`ShellView` 创建时登记）。原生侧主动推事件用。
     @MainActor static weak var liveWebView: WKWebView?
+    /// 桌宠悬浮窗里的 WebView（PetController 创建时登记）。原生事件也同步推给它，桌宠据此显示状态。
+    @MainActor static weak var petWebView: WKWebView?
 
     /// 原生 → 网页的单向事件：`window.dispatchEvent(new CustomEvent(name, {detail}))`。
     /// 还没有 WebView 时直接丢弃，返回 false。
@@ -30,6 +32,7 @@ enum Bridge {
         else { return false }
         let js = "window.dispatchEvent(new CustomEvent(\(nameJSON)[0], { detail: \(json) }))"
         webView.evaluateJavaScript(js, completionHandler: nil)
+        petWebView?.evaluateJavaScript(js, completionHandler: nil)
         return true
     }
 
@@ -90,14 +93,17 @@ enum Bridge {
         McpHandlers.self,
         AppHandlers.self,
         SessionHandlers.self,
+        WorkHandlers.self,
+        UpdateHandlers.self,
+        PetHandlers.self,
     ]
 
     /// 起子进程、读写文件的方法放到后台线程：fetch / pull / push、MCP 健康检查、建 worktree
     /// 都可能要几十秒，同步执行会把整个窗口（含终端）冻住。其余方法读写 `@MainActor` 的 Store，
     /// 留在主线程。
     static func runsInBackground(_ method: String) -> Bool {
-        method.hasPrefix("git.") || method.hasPrefix("file.") || method.hasPrefix("mcp.")
-            || method == "session.create"
+        method.hasPrefix("git.") || method.hasPrefix("file.") || method.hasPrefix("mcp.") || method.hasPrefix("update.")
+            || method == "session.create" || WorkHandlers.handles(method)
     }
 
     static func dispatch(method: String, params: Any?) throws -> BridgeOutcome {
@@ -152,6 +158,8 @@ enum Bridge {
                 envelope = notImplemented(id: id, method: method)
             }
         } catch let error as GitError {
+            envelope = ["id": id, "ok": false, "error": error.jsonObject]
+        } catch let error as WorkError {
             envelope = ["id": id, "ok": false, "error": error.jsonObject]
         } catch {
             envelope = [

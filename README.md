@@ -14,6 +14,10 @@ macOS 上的 Claude Code 会话浏览器：一个窗口里看到所有项目的�
 - 右上角 usage 圆环：读 Claude CLI 的 OAuth 凭据，显示 5 小时与 7 天用量
 - 忙闲指示：claude 正在工作时，会话行显示橙色转圈；后台会话有新产出时，切回来前会在会话行打绿点
 
+## 开发与交付
+
+分支用途、功能内测、上线和打包测试流程遵循 [分支与交付契约](DEVELOPMENT.md#0-分支与交付契约)。
+
 ## 环境要求
 
 | 项 | 要求 |
@@ -21,7 +25,8 @@ macOS 上的 Claude Code 会话浏览器：一个窗口里看到所有项目的�
 | macOS | 14.0 及以上 |
 | 架构 | Apple Silicon（arm64） |
 | Claude Code CLI | **必须先装**，ClaudePicker 通过 login shell 从 `PATH` 调用 `claude` |
-| 已登录 | CLI 需完成登录（`~/.claude/` 下已有会话与凭据） |
+| Antigravity CLI（可选） | 本机安装 `agy`（1.5+）后自动启用 Antigravity 历史会话聚合、终端会话与 ACP Work 执行器 |
+| 已登录 | CLI 需完成登录（`~/.claude/` 或 `~/.gemini/antigravity-cli/` 下已有会话与凭据） |
 
 装 CLI：
 
@@ -75,6 +80,28 @@ open dist/ClaudePicker.app
 | 拖动两栏之间的分隔线 | 调整侧边栏宽度（250–560） |
 
 误删会话的恢复：编辑 `~/.local/share/claude-picker/tree.json`，从 `hiddenSessions` 里删掉那个 session id，重启应用即可。
+
+### 顶部页签、悬浮终端与桌宠
+
+界面按 H5 原型 v003 重构，技术方案见 [docs/ui-refactor-v003.md](docs/ui-refactor-v003.md)。
+
+| 操作 | 效果 |
+|---|---|
+| 点击顶部页签（工作空间 / TAPD 待办 / Work 中心 / 变更） | 第一栏、第二栏整体切换到该模块 |
+| 拖动顶部页签 | 调整顺序；设置 →「顶部页签」可开关显示、上移下移 |
+| `⌘1`–`⌘4` | 切到第 1–4 个可见页签 |
+| `⌘J` | 终端可见时收起；不可见时回到工作空间并展开终端 |
+| 拖动第一栏右边界 | 调整宽度（180–360，按模块记忆）；双击恢复 248 |
+| TAPD 详情「流转到…」/「发表评论」 | 写入 TAPD（流转前二次确认）；有关联 Work 时在其时间线留记录 |
+| TAPD 详情「创建任务」 | 创建本地 Work（不改 TAPD），默认名称为「短 ID + 标题」 |
+| 桌宠（macOS） | 在整个桌面上悬浮，所有桌面空间可见，主窗口最小化后仍在；拖动到任意位置，位置会记住；头顶气泡显示对话与 Work 进度，点气泡打开对应 Work |
+| 单击桌宠 | 第二栏终端可见时聚焦终端，否则打开悬浮终端 |
+| 右键桌宠 | 打开当前会话、悬浮输入、挥手、跳一下、桌宠设置、隐藏桌宠 |
+| 悬浮终端拖柄 | 连续缩放；够大时显示真实终端，小尺寸只显示输入框 |
+| 侧栏引擎筛选（全部 / Claude / Antigravity） | 按引擎过滤普通会话与 Work，会话行通过 `C` / `A` 徽标区分来源 |
+| 会话右键「转到 Antigravity / Claude Code 继续」 | 提取四层 `<thread-handoff>` 前情摘要，在同一目录启动另一 CLI 接力续聊 |
+| Work 输入栏左下角「引擎：… ▾」 | 在非运行态将同一条 Work 无缝切换到另一 CLI 执行器，下一轮自动同步前情上下文 |
+| Work 轮次分割线「↺ 回退到此轮前」 | 基于隐藏 Git Ref（`refs/claude-picker/checkpoints/*`）精确还原代码快照，自动备份 `undo` 并通知智能体重读磁盘文件 |
 
 ## 状态栏与 Claude 配置的联动
 
@@ -138,6 +165,16 @@ python3 scripts/make_icon.py build/icon                  # 只重生成图标
 - 一台机器同时只保留一个内嵌终端（切换会话会终止上一个）。
 - 不支持恢复被隐藏的会话的图形入口，只能改 `tree.json`。
 
+## Windows 与版本更新
+
+新增 Windows x64 开发安装包和设置中的「版本更新」，更新源指向 main 对应的构建产物。构建方法、当前 Windows 适配范围和发布流程见 [桌面发行说明](docs/DESKTOP_RELEASE.md)。
+
+最新 App 界面的可批注 H5 快照保存在 [desktop-release-prototype](docs/desktop-release-prototype/README.md)。当前 v003 运行 `./docs/desktop-release-prototype/v003/preview.sh` 后打开 <http://127.0.0.1:5201/>，支持模块布局、页签配置、悬浮终端和 Clawd 桌宠评审。交互与素材说明见 [v003 开发说明](docs/desktop-release-prototype/v003/DEVELOPMENT.md) 和 [桌宠开发说明](docs/desktop-release-prototype/v003/DESKTOP_PET.md)。
+
 ## 许可
 
 应用代码 MIT。vendored 的 [SwiftTerm](SwiftTerm/) 遵循其自身 MIT 许可，见 [SwiftTerm/LICENSE](SwiftTerm/LICENSE)。
+
+桌宠与空态动画素材：Clawd 角色归 Anthropic 所有。「Clawd Dev Life」主题作者 alwinecor，美术采用 CC BY-NC-SA 4.0（仅非商业分发），见 [Web/src/assets/pet/dev-life/LICENSE-ART](Web/src/assets/pet/dev-life/LICENSE-ART)；「Codex 像素版」来自 Han1 的社区桌宠包。来源清单见 [Web/src/assets/pet/README.md](Web/src/assets/pet/README.md)。
+
+原生终端直接使用终端自身的输入与选择界面。图形聊天输入区位于消息滚动区下方，相关上游补丁见 [Swttch 补丁说明](patches/swttch/README.md)。

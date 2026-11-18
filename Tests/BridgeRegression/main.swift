@@ -212,6 +212,21 @@ do {
            "命令行按引号切分")
     let (_, bad) = call("mcp.add", p.merging(["name": "bad name", "transport": "stdio", "endpoint": "x"]) { $1 })
     expect(bad?.hasPrefix("COMMAND_FAILED") == true, "非法服务名应被拒绝")
+
+    // Antigravity MCP 配置读写、SSE 拦截与从 Claude 导入
+    let agyMcp = tempRoot.appendingPathComponent("agy-mcp.json")
+    setenv("CLAUDE_PICKER_AGY_MCP_CONFIG", agyMcp.path, 1)
+    _ = ok("mcp.add", p.merging(["name": "legacy-sse", "transport": "sse", "endpoint": "http://127.0.0.1:9/sse"]) { $1 })
+    let (_, sseRejected) = call("mcp.add", p.merging(["provider": "antigravity", "name": "bad-sse", "transport": "sse", "endpoint": "http://127.0.0.1:9/sse"]) { $1 })
+    expect(sseRejected?.hasPrefix("COMMAND_FAILED") == true, "Antigravity MCP 应拒绝旧版 SSE")
+    let imported = ok("mcp.importFromClaude", p.merging(["provider": "antigravity"]) { $1 }) as? [String: Any]
+    expect(imported?["imported"] as? Int == 1 && imported?["skippedSse"] as? Int == 1,
+           "mcp.importFromClaude 应导入 stdio/http 并跳过 sse，实际 \(imported ?? [:])")
+    let agyList = ok("mcp.list", p.merging(["provider": "antigravity"]) { $1 }) as? [[String: Any]]
+    expect(agyList?.count == 1 && agyList?.first?["name"] as? String == "fake", "Antigravity mcp.list 应读出导入的服务")
+    let agyTools = ok("mcp.tools", p.merging(["provider": "antigravity", "id": "agy:fake"]) { $1 }) as? [String: Any]
+    expect(agyTools?["tools"] as? [String] == ["alpha", "beta"], "Antigravity MCP 握手应发现工具")
+    unsetenv("CLAUDE_PICKER_AGY_MCP_CONFIG")
     unsetenv("CLAUDE_PICKER_CLAUDE_CONFIG")
 }
 
@@ -242,6 +257,21 @@ MainActor.assumeIsolated {
     expect(!sid.isEmpty && store.projects[1].sessions.first?.id == sid, "session.create 应插入会话")
     expect(store.projects[1].sessions.first?.title == "桥测试会话", "新会话应使用用户起的名字")
     expect(store.activeSessionId == sid, "新会话应成为当前会话")
+
+    // 新建会话：名称留空 → 先显示占位标题，之后由对话总结回填；可重命名 / 恢复自动标题
+    let untitled = ok("session.create", ["projectPath": repo, "mode": "current"]) as? [String: Any]
+    let untitledId = untitled?["sessionId"] as? String ?? ""
+    expect(store.projects[1].sessions.first?.id == untitledId, "未命名会话也应插入")
+    expect(store.projects[1].sessions.first?.title == "新建会话", "未命名会话应显示占位标题")
+    _ = ok("app.renameSession", ["sessionId": untitledId, "title": "  改过的名字 "])
+    expect(store.projects[1].sessions.first?.title == "改过的名字", "app.renameSession 应改名")
+    let named = ((ok("app.state") as? [String: Any])?["projects"] as? [[String: Any]])?[1]["sessions"] as? [[String: Any]]
+    expect(named?.first?["named"] as? Bool == true, "改名后快照应标记 named")
+    _ = ok("app.renameSession", ["sessionId": untitledId, "title": ""])
+    expect(store.projects[1].sessions.first?.title == "新建会话", "清空名称应恢复自动标题")
+    let (_, missing) = call("app.renameSession", ["sessionId": "nope", "title": "x"])
+    expect(missing?.hasPrefix("COMMAND_FAILED") == true, "不存在的会话应报错")
+    _ = ok("app.remove", ["projectPath": repo, "sessionId": untitledId])
 
     // 新建会话：独立工作树（建在 .worktrees 下，归属到项目名下）
     let wt = ok("session.create", ["projectPath": repo, "title": "工作树会话", "mode": "worktree",
@@ -276,6 +306,47 @@ MainActor.assumeIsolated {
     expect(store.projects.first?.isHome == true, "家目录不可移除")
     _ = ok("app.remove", ["projectPath": remote])
     expect(!store.projects.contains { $0.path == remote }, "app.remove 应移除目录")
+
+    // 多引擎（Antigravity）会话创建、跨引擎接力与图形聊天自动降级
+    setenv("CLAUDE_PICKER_AGY_BIN", fakeShell.path, 1)
+    setenv("CLAUDE_PICKER_CLAUDE_BIN", fakeShell.path, 1)
+    let agyCreated = ok("session.create", ["projectPath": repo, "title": "Agy 桥测试", "mode": "current", "provider": "antigravity"]) as? [String: Any]
+    let agySid = agyCreated?["sessionId"] as? String ?? ""
+    expect(agySid.hasPrefix("pending-agy-"), "Antigravity 新建终端会话应分配占位 ID 待落盘晋升")
+    expect(store.projects[1].sessions.first?.provider == .antigravity, "新会话 provider 应为 antigravity")
+    let agySnap = ok("app.state") as? [String: Any]
+    let agyRt = agySnap?["runtime"] as? [String: Any]
+    expect(agyRt?["provider"] as? String == "antigravity" && agyRt?["supportsFast"] as? Bool == false,
+           "激活 Antigravity 会话时 runtime 应切到 antigravity 并关闭 supportsFast")
+
+    // 跨引擎接力：Claude -> Antigravity
+    let claudeTranscript = tempRoot.appendingPathComponent("claude-src.jsonl")
+    try? "{\"type\":\"user\",\"cwd\":\"\(repo)\",\"message\":{\"content\":\"排查同步锁竞争\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":\"已定位到队列重入问题。\"}}\n"
+        .write(to: claudeTranscript, atomically: true, encoding: .utf8)
+    store.projects[1].sessions.insert(
+        Session(id: "claude-src-1", cwd: repo, title: "同步锁排查", summary: "同步锁排查", date: Date(), fileURL: claudeTranscript, provider: .claude),
+        at: 0
+    )
+    let handoffRes = ok("session.handoff", [
+        "sessionId": "claude-src-1",
+        "sourceProvider": "claude",
+        "targetProvider": "antigravity",
+        "projectPath": repo,
+        "cwd": repo,
+    ]) as? [String: Any]
+    let handoffSid = handoffRes?["sessionId"] as? String ?? ""
+    expect(!handoffSid.isEmpty && handoffRes?["provider"] as? String == "antigravity", "session.handoff 应创建目标引擎会话")
+    let afterHandoff = ((ok("app.state") as? [String: Any])?["projects"] as? [[String: Any]])?[1]["sessions"] as? [[String: Any]]
+    let handoffRow = afterHandoff?.first { $0["id"] as? String == handoffSid }
+    expect((handoffRow?["handoffFrom"] as? String)?.hasPrefix("Claude") == true, "接力会话应在快照里携带 handoffFrom 来源标记")
+
+    // 图形聊天模式打开 Antigravity 会话时自动降级到原生终端
+    store.settings.interactionMode = .chat
+    _ = ok("session.open", ["projectPath": repo, "cwd": repo, "sessionId": handoffSid, "provider": "antigravity"])
+    expect(!store.chatActive && store.activeSessionId == handoffSid, "chat 模式下打开 Antigravity 会话应自动回退原生终端")
+    store.settings.interactionMode = .terminal
+    unsetenv("CLAUDE_PICKER_AGY_BIN")
+    unsetenv("CLAUDE_PICKER_CLAUDE_BIN")
 }
 
 // 回归测试会改 tree.json / settings.json：只允许发生在调试数据目录或临时 HOME 里（脚本负责设置）。

@@ -1,0 +1,14 @@
+# Text is stored with LF and checked out in the platform's own line endings, whatever core.autocrlf says.
+* text=auto
+
+# Compared byte for byte by dev-life/check.py: never converted, never diffed as text.
+*.apng binary
+*.gif  binary
+*.webp binary
+*.png  binary
+
+# Built by dev-life/build_all.py: collapsed in GitHub diffs and left out of the language statistics.
+dev-life/gif/**                  linguist-generated
+dev-life/gif-dark/**             linguist-generated
+dev-life/theme/clawd-dev-life/** linguist-generated
+dev-life/theme/previews/**       linguist-generated

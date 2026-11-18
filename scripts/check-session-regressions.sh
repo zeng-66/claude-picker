@@ -5,9 +5,16 @@ check_dir=$(mktemp -d)
 trap '[ -n "${KEEP_CHECK:-}" ] || rm -rf "$check_dir"' EXIT
 # 测试会创建 Store 并落盘 tree.json / settings.json：一律写进临时数据目录，绝不碰正式版的数据。
 export CLAUDE_PICKER_DATA_DIR="$check_dir/data"
-swift build > "$check_dir/build.log" 2>&1 || { tail -20 "$check_dir/build.log"; exit 1; }
-build_dir=$(swift build --show-bin-path)
-swiftc Sources/ClaudeDeck/Models.swift Tests/SessionRegression/main.swift -o "$check_dir/session-checks"
+export CLAUDE_PICKER_AGY_DIR="$check_dir/agy-home"
+export CLAUDE_PICKER_AGY_SETTINGS="$check_dir/agy-home/settings.json"
+export GIT_EDITOR=true
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$check_dir/clang-cache}"
+export SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-$check_dir/swiftpm-cache}"
+swift build --disable-sandbox > "$check_dir/build.log" 2>&1 || { tail -20 "$check_dir/build.log"; exit 1; }
+build_dir=$(swift build --disable-sandbox --show-bin-path)
+swiftc -module-cache-path "$CLANG_MODULE_CACHE_PATH" \
+    Sources/ClaudeDeck/Models.swift Sources/ClaudeDeck/AgentProviders.swift \
+    Tests/SessionRegression/main.swift -lsqlite3 -o "$check_dir/session-checks"
 # Replace only the child-process launcher so terminal callbacks exercise the real
 # implementation without starting Claude or touching the user's conversations.
 python3 - "$check_dir" <<'PY'
@@ -33,15 +40,19 @@ if [[ -f "$build_dir/SwiftTerm.o" ]]; then
     module_dir="$build_dir"
     objects=("$build_dir/SwiftTerm.o")
 fi
-swiftc -I "$module_dir" Sources/ClaudeDeck/Models.swift \
+swiftc -module-cache-path "$CLANG_MODULE_CACHE_PATH" -I "$module_dir" \
+    Sources/ClaudeDeck/Models.swift Sources/ClaudeDeck/AgentProviders.swift \
     Sources/ClaudeDeck/Git/*.swift Sources/ClaudeDeck/ThirdPane/*.swift Sources/ClaudeDeck/Chat*.swift \
+    Sources/ClaudeDeck/Work/*.swift \
     "$check_dir/TerminalPane.swift" \
-    "$check_dir/main.swift" "${objects[@]}" -framework WebKit -o "$check_dir/terminal-checks" > "$check_dir/terminal-build.log" 2>&1 \
+    "$check_dir/main.swift" "${objects[@]}" -framework WebKit -lsqlite3 -o "$check_dir/terminal-checks" > "$check_dir/terminal-build.log" 2>&1 \
     || { (grep -n -C 3 "error:" "$check_dir/terminal-build.log" || tail -20 "$check_dir/terminal-build.log"); exit 1; }
-swiftc -I "$module_dir" Sources/ClaudeDeck/Models.swift \
+swiftc -module-cache-path "$CLANG_MODULE_CACHE_PATH" -I "$module_dir" \
+    Sources/ClaudeDeck/Models.swift Sources/ClaudeDeck/AgentProviders.swift \
     Sources/ClaudeDeck/Git/*.swift Sources/ClaudeDeck/ThirdPane/*.swift Sources/ClaudeDeck/Chat*.swift \
+    Sources/ClaudeDeck/Work/*.swift \
     "$check_dir/TerminalPane.swift" \
-    "$check_dir/bridge/main.swift" "${objects[@]}" -framework WebKit -o "$check_dir/bridge-checks" > "$check_dir/bridge-build.log" 2>&1 \
+    "$check_dir/bridge/main.swift" "${objects[@]}" -framework WebKit -lsqlite3 -o "$check_dir/bridge-checks" > "$check_dir/bridge-build.log" 2>&1 \
     || { (grep -n -C 3 "error:" "$check_dir/bridge-build.log" || tail -20 "$check_dir/bridge-build.log"); exit 1; }
 result=0
 "$check_dir/session-checks" || result=1

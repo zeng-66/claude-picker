@@ -187,5 +187,23 @@ MainActor.assumeIsolated {
     check(ChatBackendManager.parsePortLine("PHASE:boot") == nil, "other startup lines are ignored")
     check(ChatBackendManager.parsePortLine("PORT:0") == nil, "port zero is not ready")
 }
+MainActor.assumeIsolated {
+    let claude = TerminalSession(cwd: directory.path, resumeId: nil, provider: .claude,
+                                 options: RenderOptions(), fontName: "", fontSize: 12)
+    defer { claude.terminate() }
+    let agy = TerminalSession(cwd: directory.path, resumeId: nil, provider: .antigravity,
+                              options: RenderOptions(), fontName: "", fontSize: 12)
+    defer { agy.terminate() }
+    check(claude.view.nativeBackgroundColor == kTerminalBackground,
+          "claude terminal keeps #202122 background")
+    check(agy.view.nativeBackgroundColor == kAntigravityTerminalBackground,
+          "antigravity terminal uses #212734 background")
+    check(TerminalSession.backgroundColor(for: .claude) == kTerminalBackground,
+          "background helper returns #202122 for claude")
+    check(TerminalSession.backgroundColor(for: .antigravity) == kAntigravityTerminalBackground,
+          "background helper returns #212734 for antigravity")
+    check(agy.view.nativeForegroundColor != claude.view.nativeForegroundColor,
+          "antigravity terminal softens default foreground contrast")
+}
 if failures > 0 { exit(1) }
 print("Terminal regression checks passed")

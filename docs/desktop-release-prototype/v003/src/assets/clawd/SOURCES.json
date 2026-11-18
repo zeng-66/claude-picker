@@ -1,0 +1,51 @@
+{
+  "source": "https://codex-pets.net/#/pets/clawd",
+  "author": "Han1",
+  "assets": [
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-failed.gif",
+      "file": "clawd-failed.gif",
+      "sha256": "1ac0c9e58c35da931381e0f012249d3f0269ecb9a350880db0d8c734f69d511e"
+    },
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-idle.gif",
+      "file": "clawd-idle.gif",
+      "sha256": "6a87e7551d80c38402e7800ad9eeb007695d60c5de0967cf523cff6adbcee982"
+    },
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-jumping.gif",
+      "file": "clawd-jumping.gif",
+      "sha256": "54d386954bfc4b97849fe1e658de19e599e7bfddfa3d9111225b9ad522ac85b5"
+    },
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-review.gif",
+      "file": "clawd-review.gif",
+      "sha256": "6433faa0bce6dc75cc856d88168ffedd894496cbd7232fdbba2b8aec845cc8b5"
+    },
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-running-left.gif",
+      "file": "clawd-running-left.gif",
+      "sha256": "9dbc5acd4acfd25c1c3e973e67c163c28f2feb8816d4646f17e496d6ef6586f3"
+    },
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-running-right.gif",
+      "file": "clawd-running-right.gif",
+      "sha256": "6db8b3cf91fae5ce57c7a7dd6151f252d96fe51f61ae32bfa08844ea0e03e0c1"
+    },
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-running.gif",
+      "file": "clawd-running.gif",
+      "sha256": "cd80c867d1001d390fd9e783f18798126fc56730802df2748beabd9d92ebd3ce"
+    },
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-waiting.gif",
+      "file": "clawd-waiting.gif",
+      "sha256": "4248decce0b2bf7d8acc73e0449886f0c8376144917673f516eff699e22ac195"
+    },
+    {
+      "source": "clawd-resources/codex-pets/gifs/clawd-waving.gif",
+      "file": "clawd-waving.gif",
+      "sha256": "a9768d1ac5cef4e6aa4399be7728cfdc303f7b38fa3320f9dbdabf6ca911fe1d"
+    }
+  ]
+}

@@ -296,6 +296,9 @@ hr {
   background: #202122;
   overflow: hidden;
 }
+.terminal-pane.is-antigravity {
+  background: #212734;
+}
 .status-dot {
   display: inline-block;
   width: 5px;
@@ -2452,9 +2455,16 @@ hr {
 .terminal-pane {
   background: transparent;
 }
+.terminal-pane.is-antigravity {
+  background: transparent;
+}
 .terminal-content,
 .terminal-dock {
   background: #202122;
+}
+.terminal-pane.is-antigravity .terminal-content,
+.terminal-pane.is-antigravity .terminal-dock {
+  background: #212734;
 }
 .terminal-hole {
   flex: 1;
@@ -2912,4 +2922,120 @@ label.settings-row {
 }
 .mcp-actions button:disabled {
   opacity: 0.4;
+}
+
+/* 原生终端下方的运行参数条（模式 / 模型 / 推理强度 / 快速模式）。 */
+.runtime-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  min-height: 30px;
+  padding: 3px 10px;
+  border-top: 1px solid #343538;
+  background: #1d1e20;
+  font-size: 11.5px;
+}
+.runtime-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #8f9096;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.runtime-bar-item b {
+  font-weight: 500;
+  color: #d9d4ce;
+}
+.runtime-bar-item svg {
+  color: #8f9096;
+}
+.runtime-bar-item:hover,
+.runtime-bar-item[aria-expanded='true'] {
+  background: #ffffff0d;
+}
+.runtime-bar-item.fast-on b {
+  color: #e6b98f;
+}
+.runtime-bar .runtime-setting:not(:first-child),
+.runtime-bar > .runtime-bar-item {
+  border-left: 1px solid #333438;
+  padding-left: 4px;
+}
+.runtime-bar > .runtime-bar-item {
+  border-radius: 0 5px 5px 0;
+}
+/* 运行参数条复用 .runtime-options 的弹层关闭逻辑，但不继承输入框里的伸展和小字号。 */
+.runtime-options.runtime-bar {
+  flex: 0 0 auto;
+  gap: 2px 4px;
+}
+.runtime-bar > .runtime-bar-item {
+  font-size: 11.5px;
+  padding: 4px 7px 4px 8px;
+  color: #8f9096;
+}
+
+/* ---------- 多 CLI 引擎徽标与筛选 ---------- */
+.provider-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  border-radius: 3.5px;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: -1px;
+  flex-shrink: 0;
+}
+.provider-badge.claude {
+  background: #3d2e26;
+  color: #deb092;
+  border: 1px solid #6b4e3d;
+}
+.provider-badge.antigravity {
+  background: #243244;
+  color: #96bce9;
+  border: 1px solid #3c5675;
+}
+.provider-filter {
+  display: flex;
+  gap: 3px;
+  margin: 0 9px 7px;
+  padding: 2px;
+  background: #1b1c1e;
+  border: 1px solid #2f3034;
+  border-radius: 6px;
+}
+.provider-filter > button {
+  flex: 1;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  color: #8d8e95;
+}
+.provider-filter > button.active {
+  background: #2e3036;
+  color: #ece8e2;
+  font-weight: 550;
+}
+.runtime-value.provider-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.mode-choice strong .provider-badge {
+  margin-right: 6px;
 }

@@ -1,0 +1,150 @@
+[
+  {
+    "url": "https://claude.ai/images/clawd/core/Clawd-Still.png",
+    "resolved_url": "https://claude.ai/images/clawd/core/Clawd-Still.png",
+    "bytes": 92184,
+    "sha256": "595609a13c6ff6b16bac4f10bd10f46b6a437a0dde0fd3a30e202b5dc2ba59dc",
+    "width": 2750,
+    "height": 1850,
+    "frames": 1,
+    "alternate_urls": [],
+    "file": "Clawd-Still.png"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/core/Clawd-Waving.gif",
+    "resolved_url": "https://claude.ai/images/clawd/core/Clawd-Waving.gif",
+    "bytes": 116347,
+    "sha256": "16b6d33c9bb06248206c61671c010bb73bf9880981b74d0ca2cfec16f56a7f22",
+    "width": 2750,
+    "height": 1850,
+    "frames": 17,
+    "alternate_urls": [],
+    "file": "Clawd-Waving.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/core/Clawd-Jumping.gif",
+    "resolved_url": "https://claude.ai/images/clawd/core/Clawd-Jumping.gif",
+    "bytes": 123701,
+    "sha256": "06378e8f4a53bbce7fced82599d91e3cafdbc15ca999c886a2aacc50b1621b1b",
+    "width": 2750,
+    "height": 1850,
+    "frames": 21,
+    "alternate_urls": [],
+    "file": "Clawd-Jumping.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/core/Clawd-JumpingHappy.gif",
+    "resolved_url": "https://claude.ai/images/clawd/core/Clawd-JumpingHappy.gif",
+    "bytes": 124992,
+    "sha256": "9b4f2d6b3e6a2b6cdcafd763132080004276a3086cfd7cec7cf8b8b5dd61e0fa",
+    "width": 2750,
+    "height": 1850,
+    "frames": 21,
+    "alternate_urls": [],
+    "file": "Clawd-JumpingHappy.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/core/Clawd-Pointing.gif",
+    "resolved_url": "https://claude.ai/images/clawd/core/Clawd-Pointing.gif",
+    "bytes": 319215,
+    "sha256": "1d557397d48a53f18956ac158b68beb185105bba1d81ff1cbaa9802a16e1621c",
+    "width": 2750,
+    "height": 1850,
+    "frames": 43,
+    "alternate_urls": [],
+    "file": "Clawd-Pointing.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/core/Clawd-Lurking.gif",
+    "resolved_url": "https://claude.ai/images/clawd/core/Clawd-Lurking.gif",
+    "bytes": 83768,
+    "sha256": "8de541778d1d08c855920bba63f7bb4ed6f691ef232b95f1cbb0a34b1b076233",
+    "width": 1189,
+    "height": 800,
+    "frames": 67,
+    "alternate_urls": [],
+    "file": "Clawd-Lurking.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/persona/Clawd-Magnifier.gif",
+    "resolved_url": "https://claude.ai/images/clawd/persona/Clawd-Magnifier.gif",
+    "bytes": 506912,
+    "sha256": "8470d42d30001a1a214579d270c458b9952592b2583bce473143a2aef20f2c44",
+    "width": 1189,
+    "height": 800,
+    "frames": 113,
+    "alternate_urls": [],
+    "file": "Clawd-Magnifier.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/persona/Clawd-RacingCar.gif",
+    "resolved_url": "https://claude.ai/images/clawd/persona/Clawd-RacingCar.gif",
+    "bytes": 351592,
+    "sha256": "7205e510d56222f0642b7e21759e13c02d60667c5dcb46a4691d0e041d2c1549",
+    "width": 1189,
+    "height": 800,
+    "frames": 48,
+    "alternate_urls": [],
+    "file": "Clawd-RacingCar.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/persona/Clawd-Soccer.gif",
+    "resolved_url": "https://claude.ai/images/clawd/persona/Clawd-Soccer.gif",
+    "bytes": 492311,
+    "sha256": "b8a7df415dff8ec11b90b843b5163b1712c4a1218831219927208adcb3b7a69e",
+    "width": 1188,
+    "height": 798,
+    "frames": 61,
+    "alternate_urls": [],
+    "file": "Clawd-Soccer.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/persona/7bbe5052.gif",
+    "resolved_url": "https://claude.ai/images/clawd/persona/7bbe5052.gif",
+    "bytes": 100535,
+    "sha256": "ec350de9645c5f956895fda9659a01a6ca8a0cf29a10049fe21b68b2de4bc026",
+    "width": 1189,
+    "height": 800,
+    "frames": 11,
+    "alternate_urls": [],
+    "file": "7bbe5052.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd/persona/ac0fa108.gif",
+    "resolved_url": "https://claude.ai/images/clawd/persona/ac0fa108.gif",
+    "bytes": 458484,
+    "sha256": "debc2c43bb64bd7c380dcc9912ddb57702412d48ed28c5305e51b6907beca61d",
+    "width": 1189,
+    "height": 800,
+    "frames": 68,
+    "alternate_urls": [],
+    "file": "ac0fa108.gif"
+  },
+  {
+    "url": "https://claude.ai/images/spotlights/claude-code-celebration/Clawd-Dancing.gif",
+    "resolved_url": "https://claude.ai/images/spotlights/claude-code-celebration/Clawd-Dancing.gif",
+    "bytes": 144564,
+    "sha256": "9fe38900e3b62a5ff7a737edeff27a45941cfd7f89bae5d3727bfb3af327c0e0",
+    "width": 2750,
+    "height": 1850,
+    "frames": 20,
+    "alternate_urls": [],
+    "file": "Clawd-Dancing.gif"
+  },
+  {
+    "url": "https://claude.ai/images/clawd-guest-pass.svg",
+    "resolved_url": "https://claude.ai/images/clawd-guest-pass.svg",
+    "bytes": 2467,
+    "sha256": "0537d3d30b13bdbcc7bd83ed94e7a9454298791c56bb60a300e6889ccb302f43",
+    "alternate_urls": [],
+    "file": "clawd-guest-pass.svg"
+  },
+  {
+    "url": "https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/c838f53ee-DqwARLA7.json",
+    "resolved_url": "https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/c838f53ee-DqwARLA7.json",
+    "bytes": 108624,
+    "sha256": "c3ff42ac936dd60a37b187745bbc8fe66370c81fe9053b22c3fcd9cd7e0684a2",
+    "alternate_urls": [],
+    "file": "Clawd-Laptop.lottie.json"
+  }
+]

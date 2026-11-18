@@ -25,7 +25,7 @@ function nativeHandler() {
 }
 
 export function isNative() {
-  return nativeHandler() !== null;
+  return nativeHandler() !== null || Boolean(window.claudeDesktop);
 }
 
 window.__claudeBridge = {
@@ -43,6 +43,12 @@ window.__claudeBridge = {
 
 /// 发一条请求，返回解包后的 result；失败抛 BridgeError。
 export function request(method, params = {}, { timeoutMs = 30000 } = {}) {
+  if (window.claudeDesktop) {
+    return window.claudeDesktop.request(method, params).then(envelope => {
+      if (!envelope.ok) throw new BridgeError(envelope.error);
+      return envelope.result;
+    });
+  }
   const handler = nativeHandler();
   if (!handler) {
     return mockRequest(method, params).catch((error) => {
@@ -68,6 +74,7 @@ export function request(method, params = {}, { timeoutMs = 30000 } = {}) {
 
 /// 订阅原生事件，返回取消订阅函数。
 export function on(name, listener) {
+  if (window.claudeDesktop) return window.claudeDesktop.on('claude-picker:' + name, listener);
   const handler = (event) => listener(event.detail ?? {});
   window.addEventListener('claude-picker:' + name, handler);
   return () => window.removeEventListener('claude-picker:' + name, handler);

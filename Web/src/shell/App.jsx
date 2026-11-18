@@ -11,14 +11,19 @@ import {
   ClockCounterClockwise,
   Code,
   DotsThree,
+  Briefcase,
+  ChatsCircle,
   Folder,
+  Gear,
   GitBranch,
   GitDiff,
   GitMerge,
   House,
   MagnifyingGlass,
   Minus,
+  SquaresFour,
   Terminal,
+  Tray,
   TreeStructure,
   Warning,
   X,
@@ -28,10 +33,44 @@ import appIcon from './clawd-mark.png';
 import { errorText, isNative, on, request } from './bridge.js';
 import { IconButton, tildePath, useStored } from './ui.jsx';
 import Sidebar from './Sidebar.jsx';
-import Composer from './Composer.jsx';
+import {
+  GIT_SECTIONS,
+  ModuleSidebar,
+  SIDEBAR_DEFAULT,
+  SidebarResizer,
+  WORK_SECTIONS,
+  moveNavigation,
+  normalizeNavigation,
+  tapdSections,
+  useNavigationDrag,
+} from './ModuleViews.jsx';
+import './modules.css';
+import Composer, { RuntimeBar } from './Composer.jsx';
+import DesktopTerminal from './DesktopTerminal.jsx';
+import FloatingConsole, { ConsoleBubble } from './FloatingConsole.jsx';
+import DesktopPet from './pet/DesktopPet.jsx';
+import { petEvent, usePetSignals } from './pet/usePetSignals.js';
 import WorkspaceTab from './WorkspaceTab.jsx';
 import { BranchesTab, HistoryTab, MoreTab, WorktreeTab } from './GitPages.jsx';
-import { ContextModal, DirectoryModal, McpModal, SessionModal, SettingsModal } from './Modals.jsx';
+import { ContextModal, DirectoryModal, McpModal, RenameSessionModal, SessionModal } from './Modals.jsx';
+import './work/work.css';
+import { needsAttention, useWorks } from './work/useWorks.js';
+import WorkChat from './work/WorkChat.jsx';
+import ContextPanel from './work/ContextPanel.jsx';
+import BoardPage from './work/BoardPage.jsx';
+import TapdModule from './work/TapdModule.jsx';
+import ReviewTab from './work/ReviewTab.jsx';
+import FloatingWork from './work/FloatingWork.jsx';
+import SettingsModal from './work/SettingsModal.jsx';
+import { ConfirmHost } from './work/confirm.jsx';
+import { DeliveryModal, ExportModal, NewWorkModal, SearchModal, SourceModal } from './work/WorkModals.jsx';
+
+const PAGES = [
+  ['workspace', '工作空间', ChatsCircle],
+  ['tapd', 'TAPD 待办', Tray],
+  ['works', 'Work 中心', SquaresFour],
+  ['git', '变更', GitDiff],
+];
 
 const tabs = [
   ['工作区', GitDiff],
@@ -42,6 +81,23 @@ const tabs = [
 ];
 
 const DEFAULT_TERMINAL_WIDTH = 30;
+
+/// Work 第一栏各分类的数量（docs §6.1）。
+export function workSection(work) {
+  if (work.archived || work.status === 'completed' || work.status === 'cancelled') return 'ended';
+  if (work.status === 'failed' || work.status === 'interrupted') return 'trouble';
+  return work.status;
+}
+function countWorkSections(works) {
+  const counts = { all: 0 };
+  for (const work of works) {
+    const section = workSection(work);
+    counts[section] = (counts[section] ?? 0) + 1;
+    if (!work.archived) counts.all += 1;
+  }
+  delete counts.ended;
+  return counts;
+}
 const native = isNative();
 if (native) document.documentElement.classList.add('native');
 
@@ -73,18 +129,35 @@ export default function App() {
   const [log, setLog] = useState([]);
   const [followBanner, setFollowBanner] = useState(null);
 
+  // ---------- Work ----------
+  const { snapshot: workSnap } = useWorks();
+  const petSignals = usePetSignals(state, workSnap, settings);
+  const [page, setPage] = useStored('page', 'workspace');
+  // 模块第一栏的当前分类：TAPD 为 workspace id 或 'all'，Work 为 WORK_SECTIONS 的 id。
+  const [sections, setSections] = useStored('moduleSections', { tapd: 'all', works: 'all' });
+  // 第一栏宽度按模块分别记忆（180–360，默认 248）。
+  const [sidebarWidths, setSidebarWidths] = useStored('sidebarWidths', {});
+  const [tapdConfig, setTapdConfig] = useState(null);
+  const [selectedWorkId, setSelectedWorkId] = useStored('selectedWork', null);
+  const [contextTab, setContextTab] = useState('context');
+  const [reviewFile, setReviewFile] = useState(null);
+  const [workModal, setWorkModal] = useState(null);
+  const [tapdFocus, setTapdFocus] = useState(null);
+  const [workFocus, setWorkFocus] = useState(null);
+  // TAPD / Work 第一栏的搜索框内容（不持久化）。
+  const [moduleQuery, setModuleQuery] = useState({ tapd: '', works: '' });
+  const tapdSubmit = useRef(null);
+  const layoutApplied = useRef(false);
+  const selectedWork = workSnap.works.find((item) => item.id === selectedWorkId) ?? null;
+
   const [prompt, setPrompt] = useState('');
   const [sending, setSending] = useState(false);
   const [context, setContext] = useState(null);
 
-  const [floatingMinimized, setFloatingMinimized] = useStored('floatingMinimized', false);
-  const [floatingPosition, setFloatingPosition] = useStored('floatingPosition', {
-    x: Math.max(12, window.innerWidth - 384),
-    y: Math.max(56, window.innerHeight - 218),
-  });
-  const floatingRef = useRef(null);
-  const floatingDragMoved = useRef(false);
+  // 悬浮终端是否展开（收起后只能从桌宠或圆形浮标重新打开）。
+  const [consoleOpen, setConsoleOpen] = useStored('consoleOpen', false);
   const toastTimer = useRef(0);
+  const terminalVisibleRef = useRef(false);
   const lastLayout = useRef('');
 
   // ---------- 原生快照 ----------
@@ -119,6 +192,63 @@ export default function App() {
     setSettings((current) => ({ ...current, ...patch }));
     if (persist) request('app.settings', patch).catch(() => {});
   }, []);
+
+  // ---------- 顶部页签 ----------
+  const navigation = normalizeNavigation(settings?.navigation);
+  const visiblePages = navigation
+    .filter((item) => item.visible)
+    .map((item) => PAGES.find(([id]) => id === item.id))
+    .filter(Boolean);
+  const visibleKey = visiblePages.map(([id]) => id).join(',');
+  const setNavigation = useCallback(
+    (next) => updateSettings({ navigation: normalizeNavigation(next) }),
+    [updateSettings],
+  );
+  const navigationDrag = useNavigationDrag((from, to) => setNavigation(moveNavigation(navigation, from, to)));
+  /// 让某个页签可见（只有在还有其它页签可见时才改；全部隐藏时保持全部隐藏）。
+  function revealPage(id) {
+    if (!navigation.some((item) => item.visible)) return;
+    if (navigation.find((item) => item.id === id)?.visible) return;
+    setNavigation(navigation.map((item) => (item.id === id ? { ...item, visible: true } : item)));
+  }
+
+  // 当前页签被隐藏：切到剩余顺序里的第一个。全部隐藏时回到工作空间。
+  useEffect(() => {
+    if (!settings) return;
+    if (!visiblePages.some(([id]) => id === page)) setPage(visiblePages[0]?.[0] ?? 'workspace');
+  }, [visibleKey, page, Boolean(settings)]);
+
+  // 刚进入「全部隐藏」：回到工作空间默认两栏（只执行一次）。
+  const allHiddenApplied = useRef(false);
+  useEffect(() => {
+    if (!settings) return;
+    if (visiblePages.length) {
+      allHiddenApplied.current = false;
+      return;
+    }
+    if (allHiddenApplied.current) return;
+    allHiddenApplied.current = true;
+    setPage('workspace');
+    setSelectedWorkId(null);
+    updateSettings({ sidebar: true, terminal: true, workbench: false });
+  }, [visibleKey, Boolean(settings)]);
+
+  // TAPD 第一栏：设置里启用的项目。
+  const loadTapdConfig = useCallback(() => {
+    request('tapd.settings')
+      .then(setTapdConfig)
+      .catch(() => setTapdConfig(null));
+  }, []);
+  useEffect(() => {
+    loadTapdConfig();
+  }, []);
+
+  // 默认布局 B（任务看板）：启动时先进入 Work 中心。只在启动时应用一次，不改变之后的手动切换。
+  useEffect(() => {
+    if (!settings || layoutApplied.current) return;
+    layoutApplied.current = true;
+    if (settings.layout === 'B') setPage('works');
+  }, [settings]);
 
   const projects = state?.projects ?? [];
   const active = state?.active ?? null;
@@ -242,10 +372,15 @@ export default function App() {
       try {
         await request(method, { projectPath: pathRef.current, ...params }, { timeoutMs: 150000 });
         if (done) notify(done);
+        // 桌宠的 Git 事件反应（docs §9.5）。
+        if (method === 'git.stashSave') petEvent('stash');
+        else if (/cherry/i.test(method)) petEvent('cherry');
+        else if (method === 'git.push' && params?.force) petEvent('forcepush');
         return true;
       } catch (error) {
         notify(errorText(error), true);
         if (error.code === 'MERGE_CONFLICT') {
+          petEvent('conflict');
           setTab('更多');
           setMorePage('合并与冲突');
         }
@@ -260,6 +395,12 @@ export default function App() {
   );
 
   const currentBranch = status?.branch ?? null;
+  const wasDetached = useRef(false);
+  useEffect(() => {
+    const detached = Boolean(status?.detachedHead);
+    if (detached && !wasDetached.current) petEvent('detached_long');
+    wasDetached.current = detached;
+  }, [status?.detachedHead]);
   const isRepository = Boolean(status);
   const notRepository = statusError?.code === 'NOT_A_REPOSITORY';
 
@@ -331,8 +472,28 @@ export default function App() {
       project: target,
       session,
       x: Math.min(event.clientX, window.innerWidth - 218),
-      y: Math.min(event.clientY, window.innerHeight - 210),
+      y: Math.min(event.clientY, window.innerHeight - 240),
     });
+  }
+
+  async function handoffSession(sessionId, sourceProvider, targetProvider, projectPath, cwd) {
+    if (!sessionId) return;
+    try {
+      setSelectedWorkId(null);
+      revealPage('workspace');
+      setPage('workspace');
+      if (projectPath && projectPath !== workbenchPath) selectProject(projectPath);
+      if (!settings?.terminal) updateSettings({ terminal: true });
+      await request(
+        'session.handoff',
+        { sessionId, sourceProvider, targetProvider, projectPath, cwd },
+        { timeoutMs: 90000 },
+      );
+      const targetName = targetProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
+      notify(`已生成前情摘要并转到 ${targetName} 继续`);
+    } catch (error) {
+      notify(errorText(error), true);
+    }
   }
 
   function treeAction(action) {
@@ -342,6 +503,25 @@ export default function App() {
       selectProject(target.path);
       if (!target.expanded) request('app.toggleProject', { path: target.path });
       setModal({ kind: 'session', mode: 'current', projectPath: target.path });
+    }
+    if (action === '重命名' && session) setModal({ kind: 'rename', session });
+    if (action === '转到 Antigravity 继续' && session) {
+      handoffSession(session.id, session.provider ?? 'claude', 'antigravity', target.path, session.cwd);
+    }
+    if (action === '转到 Claude Code 继续' && session) {
+      handoffSession(session.id, session.provider ?? 'antigravity', 'claude', target.path, session.cwd);
+    }
+    if (action === '作为 Work 继续' && session) {
+      setWorkModal({
+        kind: 'new',
+        adopt: {
+          sessionId: session.id,
+          cwd: session.cwd,
+          label: session.title,
+          projectPath: target.path,
+          provider: session.provider ?? 'claude',
+        },
+      });
     }
     if (action === '置顶')
       request('app.pin', { projectPath: target.path, sessionId: session?.id }).catch(() => {});
@@ -356,14 +536,45 @@ export default function App() {
       );
   }
 
+  function openWork(id) {
+    setSelectedWorkId(id);
+    revealPage('workspace');
+    setPage('workspace');
+    setReviewFile(null);
+    if (settings && !settings.terminal) updateSettings({ terminal: true });
+  }
+
+  function openWorkByDisplayId(displayId) {
+    const found = workSnap.works.find((item) => item.displayId.toLowerCase() === String(displayId).toLowerCase());
+    if (found) openWork(found.id);
+    else notify(`没有找到 ${displayId}`, true);
+  }
+
   function openSession(target, session) {
+    setSelectedWorkId(null);
+    revealPage('workspace');
+    setPage('workspace');
     if (target.path !== workbenchPath) selectProject(target.path);
     if (!settings.terminal) updateSettings({ terminal: true });
     request('session.open', {
       projectPath: target.path,
       cwd: session.cwd,
       sessionId: session.id,
+      provider: session.provider ?? 'claude',
     }).catch((error) => notify(errorText(error), true));
+  }
+
+  /// 回到工作空间并展开第二栏终端（模块侧栏 / 悬浮终端 / 桌宠 / ⌘J 共用）。
+  function restoreTerminal() {
+    setSelectedWorkId(null);
+    revealPage('workspace');
+    setPage('workspace');
+    if (!settings.terminal) updateSettings({ terminal: true });
+  }
+
+  function selectPageAt(index) {
+    const target = visiblePages[index];
+    if (target) setPage(target[0]);
   }
 
   async function sendPrompt() {
@@ -384,18 +595,56 @@ export default function App() {
   const toggles = useRef({});
   toggles.current = {
     newSession: () => setModal({ kind: 'session', mode: 'current', projectPath: workbenchPath }),
-    toggleTerminal: () => updateSettings({ terminal: !settings.terminal }),
+    toggleTerminal: () => (terminalVisibleRef.current ? updateSettings({ terminal: false }) : restoreTerminal()),
+    // 桌面桌宠悬浮窗的操作（原生先把主窗口带到前台）。
+    petClick: () => {
+      if (terminalVisibleRef.current) request('app.command', { name: 'focusTerminal' }).catch(() => {});
+      else setConsoleOpen(true);
+    },
+    openConsole: () => {
+      if (terminalVisibleRef.current) updateSettings({ terminal: false });
+      setConsoleOpen(true);
+    },
+    restoreTerminal: () => restoreTerminal(),
+    openPetSettings: () => setModal({ kind: 'settings', page: 'pet' }),
+    page1: () => selectPageAt(0),
+    page2: () => selectPageAt(1),
+    page3: () => selectPageAt(2),
+    page4: () => selectPageAt(3),
     toggleSidebar: () => updateSettings({ sidebar: !settings.sidebar }),
     toggleWorkbench: () => updateSettings({ workbench: !settings.workbench }),
     openSettings: () => setModal({ kind: 'settings' }),
+    search: () => setWorkModal({ kind: 'search' }),
     focusTree: () =>
       (
         document.querySelector('.session-row.selected') ?? document.querySelector('.project-row')
       )?.focus(),
   };
 
+  const workCommands = useRef({});
+  workCommands.current = {
+    openByDisplayId: openWorkByDisplayId,
+    heldByWork: (sessionId) => {
+      const owner = workSnap.works.find((item) => item.sessionId === sessionId);
+      notify('这个会话正由 Work 执行器使用，已切换到对应的 Work', false);
+      if (owner) openWork(owner.id);
+    },
+  };
+
   useEffect(() => {
-    const offCommand = on('command', (detail) => toggles.current[detail.name]?.());
+    const offCommand = on('command', (detail) => {
+      if (detail.name === 'openWork') return workCommands.current.openByDisplayId(detail.displayId);
+      if (detail.name === 'sessionHeldByWork') return workCommands.current.heldByWork(detail.sessionId);
+      if (detail.name === 'chatFallbackForProvider') {
+        notify(`${detail.provider ?? 'Antigravity'} 会话暂不支持图形聊天，已自动用原生终端打开`);
+        return;
+      }
+      if (detail.name === 'runtimeSavedNextLaunch') {
+        if (detail.text) notify(detail.text);
+        return;
+      }
+      toggles.current[detail.name]?.();
+    });
     const offFollow = on('follow-session', (detail) => {
       if (!detail.projectPath) return;
       setWorkbenchPath(detail.projectPath);
@@ -433,12 +682,24 @@ export default function App() {
   useEffect(() => {
     const handleKey = (event) => {
       // 原生窗口里这三个快捷键由菜单统一处理（终端有焦点时网页收不到按键）
-      if (!native && (event.metaKey || event.ctrlKey)) {
-        const command = { n: 'newSession', j: 'toggleTerminal', b: 'toggleSidebar' }[event.key];
+      if ((!native || window.claudeDesktop) && (event.metaKey || event.ctrlKey)) {
+        const command = {
+          n: 'newSession',
+          j: 'toggleTerminal',
+          b: 'toggleSidebar',
+          1: 'page1',
+          2: 'page2',
+          3: 'page3',
+          4: 'page4',
+        }[event.key];
         if (command) {
           event.preventDefault();
           toggles.current[command]();
         }
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        toggles.current.search?.();
       }
       if (event.key === 'Escape') {
         setModal(null);
@@ -490,62 +751,13 @@ export default function App() {
   });
   useEffect(() => {
     window.addEventListener('resize', reportLayout);
-    return () => window.removeEventListener('resize', reportLayout);
+    // 自己管位置的浮层（悬浮终端、桌宠）移动后发这个事件，原生据此重新摆放终端与可点区域。
+    window.addEventListener('claude-picker:layout', reportLayout);
+    return () => {
+      window.removeEventListener('resize', reportLayout);
+      window.removeEventListener('claude-picker:layout', reportLayout);
+    };
   }, [reportLayout]);
-
-  // ---------- 悬浮输入窗 ----------
-  const terminalOpen = Boolean(settings?.terminal);
-  useEffect(() => {
-    if (terminalOpen) return undefined;
-    const containFloating = () => {
-      const bounds = floatingRef.current?.getBoundingClientRect();
-      if (!bounds) return;
-      setFloatingPosition((position) => {
-        const next = {
-          x: Math.max(12, Math.min(window.innerWidth - bounds.width - 12, position.x)),
-          y: Math.max(52, Math.min(window.innerHeight - bounds.height - 12, position.y)),
-        };
-        return next.x === position.x && next.y === position.y ? position : next;
-      });
-    };
-    containFloating();
-    window.addEventListener('resize', containFloating);
-    return () => window.removeEventListener('resize', containFloating);
-  }, [terminalOpen, floatingMinimized]);
-
-  function dragFloating(event) {
-    if (event.button !== 0) return;
-    const button = event.target.closest('button');
-    if (button && button !== event.currentTarget) return;
-    const handle = event.currentTarget;
-    const panel = floatingRef.current;
-    const start = { ...floatingPosition };
-    const pointerX = event.clientX;
-    const pointerY = event.clientY;
-    floatingDragMoved.current = false;
-    handle.setPointerCapture(event.pointerId);
-    handle.onpointermove = (move) => {
-      const deltaX = move.clientX - pointerX;
-      const deltaY = move.clientY - pointerY;
-      if (Math.hypot(deltaX, deltaY) <= 4 && !floatingDragMoved.current) return;
-      floatingDragMoved.current = true;
-      setRuntimeMenu(null);
-      setFloatingPosition({
-        x: Math.max(12, Math.min(window.innerWidth - panel.offsetWidth - 12, start.x + deltaX)),
-        y: Math.max(52, Math.min(window.innerHeight - panel.offsetHeight - 12, start.y + deltaY)),
-      });
-    };
-    const finish = () => {
-      handle.onpointermove = null;
-      handle.onpointerup = null;
-      handle.onpointercancel = null;
-      window.setTimeout(() => {
-        floatingDragMoved.current = false;
-      }, 0);
-    };
-    handle.onpointerup = finish;
-    handle.onpointercancel = finish;
-  }
 
   function beginResize(event) {
     if (event.button !== 0) return;
@@ -555,12 +767,12 @@ export default function App() {
     let latest = settings.terminalWidth;
     handle.onpointermove = (move) => {
       const rect = body.getBoundingClientRect();
-      const sidebarWidth = settings.sidebar ? 250 : 48;
+      const firstColumn = settings.sidebar ? sidebarWidths[page] || SIDEBAR_DEFAULT : 48;
       latest = Math.max(
         24,
         Math.min(
           57,
-          ((move.clientX - rect.left - sidebarWidth) / (rect.width - sidebarWidth)) * 100,
+          ((move.clientX - rect.left - firstColumn) / (rect.width - firstColumn)) * 100,
         ),
       );
       updateSettings({ terminalWidth: latest }, false);
@@ -578,8 +790,60 @@ export default function App() {
   if (!state || !settings) return <div className="app booting" />;
 
   const { sidebar, terminal, workbench } = settings;
-  // 图形聊天模式：第二栏里是 Swttch 自己的输入区，外壳的输入框不再显示。
-  const chatMode = settings.interactionMode === 'chat';
+  const sidebarWidth = sidebarWidths[page] || SIDEBAR_DEFAULT;
+  const terminalVisible = page === 'workspace' && terminal && !selectedWork;
+  terminalVisibleRef.current = terminalVisible;
+  // 悬浮终端：第二栏终端不可见时可用；选中 Work 且收起对话时沿用 FloatingWork。
+  // 原生终端（非图形聊天）：终端下方挂运行参数条。
+  const runtimeBar = (
+    <RuntimeBar
+      runtime={state.runtime}
+      providers={state.providers ?? []}
+      active={active}
+      runtimeMenu={runtimeMenu}
+      onRuntimeMenu={setRuntimeMenu}
+      onHandoff={(targetProv) =>
+        active &&
+        handoffSession(
+          active.sessionId,
+          active.provider ?? 'claude',
+          targetProv,
+          active.projectPath,
+          active.cwd,
+        )
+      }
+    />
+  );
+  const consoleAllowed = !terminalVisible && !(page === 'workspace' && selectedWork && !terminal);
+  const petOn = settings.pet?.enabled !== false;
+  // macOS 原生由桌面悬浮窗显示桌宠（state.desktopPet），主窗口里不再画一份。
+  const petEnabled = petOn && !state.desktopPet;
+  const consoleTerminal =
+    active && window.claudeDesktop ? (
+      <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
+    ) : active && native ? (
+      consoleOpen && consoleAllowed ? <div className="terminal-hole" data-terminal-hole /> : null
+    ) : (
+      <div className="console-placeholder">
+        {active ? `${active.label} · 终端由 ClaudePicker 原生窗口承载，浏览器预览不显示终端内容。` : '还没有打开会话。'}
+      </div>
+    );
+  function openConsoleFromPet() {
+    // 第二栏终端可见时只聚焦它（Q11）；否则打开悬浮终端。
+    if (terminalVisible) {
+      request('app.command', { name: 'focusTerminal' }).catch(() => {});
+      return;
+    }
+    setConsoleOpen(true);
+  }
+  const showTopnav = visiblePages.length > 0 && !(visiblePages.length === 1 && visiblePages[0][0] === 'workspace');
+  const tapdWorkspaces = (tapdConfig?.settings?.enabled ? tapdConfig.settings.workspaces ?? [] : []).filter(
+    (item) => item.enabled !== false,
+  );
+  // 图形聊天模式：第二栏里是 Swttch 自己的输入区（仅 Claude 会话走图形聊天，Antigravity 自动回退原生终端）。
+  const chatMode =
+    settings.interactionMode === 'chat' &&
+    (active?.provider ?? state.runtime?.provider ?? 'claude') === 'claude';
   const terminalWidth = settings.terminalWidth ?? DEFAULT_TERMINAL_WIDTH;
   const runtime = state.runtime;
   const modelLabel =
@@ -593,6 +857,8 @@ export default function App() {
   const composer = (
     <Composer
       runtime={runtime}
+      providers={state.providers ?? []}
+      active={active}
       context={context}
       prompt={prompt}
       onPrompt={setPrompt}
@@ -601,6 +867,16 @@ export default function App() {
       runtimeMenu={runtimeMenu}
       onRuntimeMenu={setRuntimeMenu}
       onOpenContext={() => setModal({ kind: 'context' })}
+      onHandoff={(targetProv) =>
+        active &&
+        handoffSession(
+          active.sessionId,
+          active.provider ?? 'claude',
+          targetProv,
+          active.projectPath,
+          active.cwd,
+        )
+      }
     />
   );
 
@@ -612,6 +888,142 @@ export default function App() {
         item.name.toLowerCase().includes(branchFilter.toLowerCase()),
     ),
   }));
+
+  const branchPicker = (
+    <div className="project-menu-wrap">
+      {page === 'git' && (
+        <label className="search sidebar-branch-search">
+          <MagnifyingGlass size={13} />
+          <input
+            aria-label="搜索分支"
+            placeholder="搜索分支…"
+            value={branchFilter}
+            onFocus={() => {
+              setMenu('branch');
+              loadBranches();
+            }}
+            onChange={(event) => {
+              setBranchFilter(event.target.value);
+              setMenu('branch');
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setMenu(null);
+                event.stopPropagation();
+              }
+            }}
+          />
+        </label>
+      )}
+      <button
+        className="branch-picker"
+        aria-label="选择分支"
+        title={project ? `${project.title} · ${tildePath(project.path, state.home)}` : ''}
+        onClick={() => {
+          setMenu(menu === 'branch' ? null : 'branch');
+          setPickedBranch(currentBranch ?? '');
+          if (menu !== 'branch') loadBranches();
+        }}
+        onContextMenu={(event) => openBranchContext(event, currentBranch)}
+      >
+        <GitBranch size={15} />
+        <b>{branchLabel}</b>
+        <CaretDown size={12} />
+      </button>
+      {menu === 'branch' && (
+        <div
+          className="dropdown project-branch-dropdown"
+          role="dialog"
+          aria-label="项目与分支"
+          data-blocking
+        >
+          <div className="branch-project-list">
+            <div className="menu-title">项目</div>
+            {projects.map((item) => (
+              <button
+                key={item.path}
+                className={workbenchPath === item.path ? 'selected' : ''}
+                title={tildePath(item.path, state.home)}
+                onClick={() => {
+                  selectProject(item.path);
+                  setMenu('branch');
+                }}
+              >
+                {item.isHome ? (
+                  <House
+                    size={14}
+                    weight={workbenchPath === item.path ? 'fill' : 'regular'}
+                  />
+                ) : (
+                  <Folder
+                    size={14}
+                    weight={workbenchPath === item.path ? 'fill' : 'regular'}
+                  />
+                )}
+                <span>{item.title}</span>
+              </button>
+            ))}
+          </div>
+          <div className="branch-options">
+            {page !== 'git' && (
+              <label className="search">
+                <MagnifyingGlass size={13} />
+                <input
+                  aria-label="筛选分支"
+                  placeholder="筛选分支…"
+                  value={branchFilter}
+                  onChange={(event) => setBranchFilter(event.target.value)}
+                />
+              </label>
+            )}
+            {notRepository && <div className="pane-note">这个目录不是 Git 仓库</div>}
+            {branchesError && !notRepository && (
+              <div className="pane-note error">{branchesError}</div>
+            )}
+            {!branches && !branchesError && !notRepository && (
+              <div className="pane-note">正在读取分支…</div>
+            )}
+            {branches && !branchesError && !notRepository && branchGroups.every(({ items }) => !items.length) && (
+              <div className="pane-note">没有匹配的分支</div>
+            )}
+            {branches &&
+              branchGroups.map(({ group, items }) => (
+                <div key={group}>
+                  <div className="menu-title">{group}</div>
+                  {items.map((item) => (
+                    <button
+                      key={item.name}
+                      className={`${pickedBranch === item.name ? 'picked' : ''} ${item.isCurrent ? 'current' : ''}`}
+                      disabled={gitBusy}
+                      onClick={() => {
+                        setPickedBranch(item.name);
+                        if (settings.followSessionBranch) revealBranch(item.name);
+                      }}
+                      onDoubleClick={() => checkoutBranch(item.name)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          checkoutBranch(item.name);
+                        }
+                      }}
+                      onContextMenu={(event) => {
+                        setPickedBranch(item.name);
+                        openBranchContext(event, item.name);
+                      }}
+                    >
+                      <GitBranch size={14} />
+                      <span>{item.name}</span>
+                      {item.isCurrent && <Check size={13} />}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            <div className="branch-picker-hint">双击签出 · 右键更多操作</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   function renderWorkbench() {
     if (!project)
@@ -690,10 +1102,196 @@ export default function App() {
     );
   }
 
+  const attentionCount = workSnap.works.filter(needsAttention).length;
+  const workSectionCounts = countWorkSections(workSnap.works);
+  const showGitHeader = (page === 'workspace' && !selectedWork && workbench) || (page === 'git' && !selectedWork);
+  const contextOpen = settings.contextOpen !== false;
+  const contextWidth = settings.contextWidth ?? 330;
+
+  function openSource(work) {
+    const ref = work.tapdRefs?.[0];
+    if (ref) {
+      setTapdFocus({ ...ref });
+      setPage('tapd');
+    } else if (work.origin === 'wecom') {
+      setWorkModal({ kind: 'source', workId: work.id });
+    }
+  }
+
+  function resizeContext(event) {
+    if (event.button !== 0) return;
+    const handle = event.currentTarget;
+    const container = handle.parentElement.getBoundingClientRect();
+    handle.setPointerCapture(event.pointerId);
+    let latest = contextWidth;
+    handle.onpointermove = (move) => {
+      // 详情栏 290–520，同时给对话至少留 360。
+      latest = Math.round(Math.max(290, Math.min(520, container.right - move.clientX, container.width - 360)));
+      updateSettings({ contextWidth: latest }, false);
+    };
+    handle.onpointerup = handle.onpointercancel = () => {
+      handle.onpointermove = null;
+      updateSettings({ contextWidth: latest });
+    };
+  }
+
+  function renderWorkspaceWork(work) {
+    return (
+      <main className="main-page work-split">
+        {terminal && (
+          <WorkChat
+            work={work}
+            capacity={workSnap.capacity}
+            notify={notify}
+            focus={settings.layout === 'C'}
+            contextOpen={contextOpen}
+            onToggleContext={() => updateSettings({ contextOpen: !contextOpen })}
+            onCollapse={() => updateSettings({ terminal: false })}
+            onOpenReview={() => setPage('git')}
+            onOpenSource={() => openSource(work)}
+          />
+        )}
+        {terminal && contextOpen && (
+          <div
+            className="work-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整详情栏宽度（方向键调整，双击恢复默认）"
+            aria-valuemin={290}
+            aria-valuemax={520}
+            aria-valuenow={contextWidth}
+            tabIndex={0}
+            onPointerDown={resizeContext}
+            onDoubleClick={() => updateSettings({ contextWidth: 330 })}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+              event.preventDefault();
+              const next = contextWidth + (event.key === 'ArrowLeft' ? 10 : -10);
+              updateSettings({ contextWidth: Math.max(290, Math.min(520, next)) });
+            }}
+          />
+        )}
+        {contextOpen && (
+          <aside
+            className="context-panel"
+            style={terminal ? { width: contextWidth } : { flex: 1 }}
+            aria-label={`${work.displayId} 详情`}
+          >
+            <ContextPanel
+              work={work}
+              active={active}
+              project={project}
+              gitStatus={status}
+              home={state.home}
+              tab={contextTab}
+              onTab={setContextTab}
+              onClose={() => updateSettings({ contextOpen: false })}
+              notify={notify}
+              onOpenFile={(path) => {
+                setReviewFile(path);
+                setPage('git');
+              }}
+              onOpenReview={() => setPage('git')}
+              onOpenGit={() => setPage('git')}
+              onOpenSource={() => openSource(work)}
+              onExport={() => setWorkModal({ kind: 'export', workId: work.id })}
+              onOpenTerminal={() => {
+                setSelectedWorkId(null);
+                request('session.open', {
+                  projectPath: work.project?.path,
+                  cwd: work.workspacePath,
+                  sessionId: work.sessionId,
+                  provider: work.executor ?? 'claude',
+                }).catch((error) => notify(errorText(error), true));
+              }}
+              onContinueAsWork={() => {}}
+            />
+          </aside>
+        )}
+        {!terminal && !contextOpen && (
+          <div className="empty">
+            <Briefcase size={30} />
+            <h3>对话与详情都已收起</h3>
+            <p>可以继续在悬浮输入框里补充说明。</p>
+            <div className="settings-inline">
+              <button onClick={() => updateSettings({ terminal: true })}>恢复对话</button>
+              <button onClick={() => updateSettings({ contextOpen: true })}>显示详情</button>
+            </div>
+          </div>
+        )}
+      </main>
+    );
+  }
+
+  function renderMain(legacy) {
+    if (page === 'tapd')
+      return (
+        <TapdModule
+          workspace={sections.tapd ?? 'all'}
+          workspaces={tapdWorkspaces}
+          config={tapdConfig}
+          projects={projects}
+          runtime={state.runtime}
+          notify={notify}
+          focusRef={tapdFocus}
+          query={moduleQuery.tapd}
+          submitRef={tapdSubmit}
+          onOpenSettings={() => setModal({ kind: 'settings', page: 'tapd' })}
+          onOpenWork={openWork}
+          onWorkCreated={(work) => {
+            // 创建任务后进入 Work 中心「全部 Work」，并定位到新卡片（docs §5.4）。
+            setSections((current) => ({ ...current, works: 'all' }));
+            revealPage('works');
+            setPage('works');
+            setWorkFocus(work.id);
+          }}
+        />
+      );
+    if (page === 'works')
+      return (
+        <main className="main-page">
+          <BoardPage
+            snapshot={workSnap}
+            notify={notify}
+            onOpenWork={(work) => openWork(work.id)}
+            onNewWork={() => setWorkModal({ kind: 'new' })}
+            onOpenTapd={() => {
+              revealPage('tapd');
+              setPage('tapd');
+            }}
+            onExport={(work) => setWorkModal({ kind: 'export', workId: work.id })}
+            category={sections.works ?? 'all'}
+            focusId={workFocus}
+            query={moduleQuery.works}
+          />
+        </main>
+      );
+    if (page === 'git') {
+      if (selectedWork)
+        return (
+          <main className="main-page">
+            <ReviewTab
+              key={selectedWork.id}
+              work={selectedWork}
+              notify={notify}
+              initialFile={reviewFile}
+              onDelivery={(target) => setWorkModal({ kind: 'delivery', target, workId: selectedWork.id })}
+              onBack={() => setPage('workspace')}
+            />
+          </main>
+        );
+      return <main className="workbench">{renderWorkbench()}</main>;
+    }
+    if (selectedWork) return renderWorkspaceWork(selectedWork);
+    return legacy;
+  }
+
   return (
     <div
-      className={`app ${settings.density === 'compact' ? 'compact' : ''}`}
+      data-module={page}
+      className={`app module-shell ${sidebar ? '' : 'module-sidebar-collapsed'} ${settings.density === 'compact' ? 'compact' : ''}`}
       style={{
+        '--first-sidebar-width': `${sidebarWidth}px`,
         '--app-scale': settings.appFontSize / 12,
         '--terminal-font-size': `${settings.termFontSize}px`,
       }}
@@ -710,119 +1308,35 @@ export default function App() {
             )}
           </div>
         </div>
-        {terminal && workbench && (
-          <div
-            className="titlebar-spacer"
-            data-drag-region
-            style={{ flexBasis: `${terminalWidth}%` }}
-          />
-        )}
-        {workbench ? (
-          <div className="workbench-header">
-            <div className="project-menu-wrap">
+        {showTopnav && (
+          <nav className="topnav" aria-label="工作台导航">
+            {visiblePages.map(([id, label, Icon], index) => (
               <button
-                className="branch-picker"
-                aria-label="选择分支"
-                title={project ? `${project.title} · ${tildePath(project.path, state.home)}` : ''}
+                key={id}
+                data-navigation-id={id}
+                data-navigation-group="top"
+                aria-label={label}
+                className={page === id ? 'active' : ''}
+                title={
+                  id === 'git' && selectedWork
+                    ? `${selectedWork.displayId} 的变更审阅`
+                    : `${label}${index < 4 ? ` ⌘${index + 1}` : ''} · 拖动排序`
+                }
+                onPointerDown={navigationDrag.beginDrag}
                 onClick={() => {
-                  setMenu(menu === 'branch' ? null : 'branch');
-                  setPickedBranch(currentBranch ?? '');
-                  if (menu !== 'branch') loadBranches();
+                  if (!navigationDrag.wasDragged()) setPage(id);
                 }}
-                onContextMenu={(event) => openBranchContext(event, currentBranch)}
               >
-                <GitBranch size={15} />
-                <b>{branchLabel}</b>
-                <CaretDown size={12} />
+                <Icon size={15} />
+                <span className="nav-label">{label}</span>
+                {id === 'works' && attentionCount > 0 && <span className="nav-count">{attentionCount}</span>}
               </button>
-              {menu === 'branch' && (
-                <div
-                  className="dropdown project-branch-dropdown"
-                  role="dialog"
-                  aria-label="项目与分支"
-                  data-blocking
-                >
-                  <div className="branch-project-list">
-                    <div className="menu-title">项目</div>
-                    {projects.map((item) => (
-                      <button
-                        key={item.path}
-                        className={workbenchPath === item.path ? 'selected' : ''}
-                        title={tildePath(item.path, state.home)}
-                        onClick={() => {
-                          selectProject(item.path);
-                          setMenu('branch');
-                        }}
-                      >
-                        {item.isHome ? (
-                          <House
-                            size={14}
-                            weight={workbenchPath === item.path ? 'fill' : 'regular'}
-                          />
-                        ) : (
-                          <Folder
-                            size={14}
-                            weight={workbenchPath === item.path ? 'fill' : 'regular'}
-                          />
-                        )}
-                        <span>{item.title}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="branch-options">
-                    <label className="search">
-                      <MagnifyingGlass size={13} />
-                      <input
-                        aria-label="筛选分支"
-                        placeholder="筛选分支…"
-                        value={branchFilter}
-                        onChange={(event) => setBranchFilter(event.target.value)}
-                      />
-                    </label>
-                    {notRepository && <div className="pane-note">这个目录不是 Git 仓库</div>}
-                    {branchesError && !notRepository && (
-                      <div className="pane-note error">{branchesError}</div>
-                    )}
-                    {!branches && !branchesError && !notRepository && (
-                      <div className="pane-note">正在读取分支…</div>
-                    )}
-                    {branches &&
-                      branchGroups.map(({ group, items }) => (
-                        <div key={group}>
-                          <div className="menu-title">{group}</div>
-                          {items.map((item) => (
-                            <button
-                              key={item.name}
-                              className={`${pickedBranch === item.name ? 'picked' : ''} ${item.isCurrent ? 'current' : ''}`}
-                              disabled={gitBusy}
-                              onClick={() => {
-                                setPickedBranch(item.name);
-                                if (settings.followSessionBranch) revealBranch(item.name);
-                              }}
-                              onDoubleClick={() => checkoutBranch(item.name)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  event.preventDefault();
-                                  checkoutBranch(item.name);
-                                }
-                              }}
-                              onContextMenu={(event) => {
-                                setPickedBranch(item.name);
-                                openBranchContext(event, item.name);
-                              }}
-                            >
-                              <GitBranch size={14} />
-                              <span>{item.name}</span>
-                              {item.isCurrent && <Check size={13} />}
-                            </button>
-                          ))}
-                        </div>
-                      ))}
-                    <div className="branch-picker-hint">双击签出 · 右键更多操作</div>
-                  </div>
-                </div>
-              )}
-            </div>
+            ))}
+          </nav>
+        )}
+        {showGitHeader ? (
+          <div className="workbench-header">
+            {page !== 'git' && branchPicker}
             <nav className="git-nav">
               {tabs.map(([name, Icon]) => (
                 <button
@@ -848,48 +1362,104 @@ export default function App() {
                 }}
               />
             </nav>
-            <IconButton
-              icon={Minus}
-              label="收起工作台 ⌘\"
-              onClick={() => updateSettings({ workbench: false })}
-            />
+            {page === 'workspace' && (
+              <IconButton
+                icon={Minus}
+                label="收起工作台 ⌘\"
+                onClick={() => updateSettings({ workbench: false })}
+              />
+            )}
           </div>
         ) : (
-          <>
-            <div className="titlebar-fill" data-drag-region />
-            <IconButton
-              icon={Code}
-              label="展开工作台 ⌘\"
-              className="icon-button titlebar-restore"
-              onClick={() => updateSettings({ workbench: true })}
-            />
-          </>
+          <div className="titlebar-fill" data-drag-region />
         )}
+        <div className="titlebar-end">
+          {page === 'workspace' && !selectedWork && !workbench && (
+            <IconButton icon={Code} label="展开工作台 ⌘\\" onClick={() => updateSettings({ workbench: true })} />
+          )}
+          <IconButton icon={Gear} label="设置 ⌘," onClick={() => setModal({ kind: 'settings' })} />
+        </div>
       </header>
       <div className="layout">
-        <Sidebar
-          state={state}
-          open={sidebar}
-          terminalOpen={terminal}
-          workbenchPath={workbenchPath}
-          treeCursor={treeCursor}
-          onCursor={setTreeCursor}
-          onToggleSidebar={() => updateSettings({ sidebar: !sidebar })}
-          onExpandTerminal={() => updateSettings({ terminal: true })}
-          onSelectProject={selectProject}
-          onOpenSession={openSession}
-          onTreeContext={openTreeContext}
-          onAddDirectory={() => setModal({ kind: 'directory' })}
-          onSettings={() => setModal({ kind: 'settings' })}
-          onNewSession={() =>
-            setModal({ kind: 'session', mode: 'current', projectPath: workbenchPath })
-          }
-          onFocusTerminal={() => request('app.command', { name: 'focusTerminal' })}
-        />
+        {page === 'workspace' ? (
+          <Sidebar
+            state={state}
+            open={sidebar}
+            terminalOpen={terminal}
+            workbenchPath={workbenchPath}
+            treeCursor={treeCursor}
+            onCursor={setTreeCursor}
+            onToggleSidebar={() => updateSettings({ sidebar: !sidebar })}
+            onExpandTerminal={() => updateSettings({ terminal: true })}
+            onSelectProject={selectProject}
+            onOpenSession={openSession}
+            onTreeContext={openTreeContext}
+            onAddDirectory={() => setModal({ kind: 'directory' })}
+            onSettings={() => setModal({ kind: 'settings' })}
+            onNewSession={() =>
+              setModal({ kind: 'session', mode: 'current', projectPath: workbenchPath })
+            }
+            onFocusTerminal={() => request('app.command', { name: 'focusTerminal' })}
+            works={workSnap.works}
+            workSessionIds={workSnap.workSessionIds}
+            selectedWorkId={page === 'workspace' || page === 'git' ? selectedWorkId : null}
+            onOpenWork={openWork}
+            onSearch={() => setWorkModal({ kind: 'search' })}
+            providerFilter={settings.providerFilter ?? 'all'}
+            onProviderFilter={(value) => updateSettings({ providerFilter: value })}
+          />
+        ) : (
+          <ModuleSidebar
+            page={page}
+            items={
+              page === 'tapd' ? tapdSections(tapdWorkspaces) : page === 'works' ? WORK_SECTIONS : GIT_SECTIONS
+            }
+            section={page === 'git' ? tab : sections[page] ?? 'all'}
+            counts={page === 'works' ? workSectionCounts : {}}
+            collapsed={!sidebar}
+            onToggle={() => updateSettings({ sidebar: !sidebar })}
+            onSection={(section) => {
+              if (page === 'git') {
+                setTab(section);
+                setMorePage(null);
+              } else setSections((current) => ({ ...current, [page]: section }));
+            }}
+            onSettings={() => setModal({ kind: 'settings' })}
+            terminalVisible={terminalVisible}
+            onTerminal={restoreTerminal}
+            branchControls={page === 'git' ? branchPicker : null}
+            search={
+              page === 'tapd'
+                ? {
+                    label: '搜索 TAPD 任务',
+                    placeholder: '搜索任务名称或 ID，编号回车查询',
+                    value: moduleQuery.tapd,
+                    onChange: (value) => setModuleQuery((current) => ({ ...current, tapd: value })),
+                    onSubmit: (value) => tapdSubmit.current?.(value),
+                  }
+                : page === 'works'
+                  ? {
+                      label: '搜索 Work',
+                      placeholder: '搜索名称、编号或 TAPD ID',
+                      value: moduleQuery.works,
+                      onChange: (value) => setModuleQuery((current) => ({ ...current, works: value })),
+                    }
+                  : null
+            }
+          />
+        )}
+        {sidebar && (
+          <SidebarResizer
+            width={sidebarWidth}
+            onChange={(value) => setSidebarWidths((current) => ({ ...current, [page]: value }))}
+          />
+        )}
 
+        {renderMain(
+          <>
         {terminal ? (
           <section
-            className="terminal-pane"
+            className={`terminal-pane${(active ? active.provider : state.runtime?.provider) === 'antigravity' ? ' is-antigravity' : ''}`}
             style={{ flexBasis: workbench ? `${terminalWidth}%` : '100%' }}
           >
             <div className="terminal-actions" data-terminal-overlay>
@@ -906,14 +1476,16 @@ export default function App() {
                 onClick={() => updateSettings({ terminal: false })}
               />
             </div>
-            {active && native ? (
+            {active && window.claudeDesktop ? (
+              <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
+            ) : active && native ? (
               <div className="terminal-hole" data-terminal-hole />
             ) : (
               <div className="terminal-content">
                 <div className="terminal-intro">
-                  <img src={appIcon} alt="Claude" />
+                  <img src={appIcon} alt="CLI" />
                   <div>
-                    <strong>Claude Code</strong>
+                    <strong>{runtime?.provider === 'antigravity' ? 'Antigravity' : 'Claude Code'}</strong>
                     <span>
                       {modelLabel}
                       {sessionProject ? ` · ${sessionProject.title}` : ''}
@@ -932,7 +1504,8 @@ export default function App() {
                 )}
               </div>
             )}
-            {!chatMode && <div className="terminal-dock">{composer}</div>}
+            {!chatMode && !native && !window.claudeDesktop && <div className="terminal-dock">{composer}</div>}
+            {!chatMode && (native || window.claudeDesktop) && runtimeBar}
           </section>
         ) : null}
 
@@ -975,77 +1548,46 @@ export default function App() {
             )}
             {renderWorkbench()}
           </main>
-        ) : (
-          <div className="workbench-rail">
-            <IconButton
-              icon={Code}
-              label="展开工作台 ⌘\"
-              onClick={() => updateSettings({ workbench: true })}
-            />
-            <span>工作台</span>
-          </div>
+        ) : null}
+          </>,
         )}
       </div>
-      {!terminal &&
-        (chatMode ? (
-          <button
-            className={`composer-bubble ${active?.busy ? 'busy' : ''}`}
-            style={{ left: floatingPosition.x, top: floatingPosition.y }}
-            aria-label="恢复第二栏"
-            title="恢复第二栏 ⌘J"
-            onClick={() => updateSettings({ terminal: true })}
-          >
-            <img src={appIcon} alt="" />
-          </button>
-        ) : floatingMinimized ? (
-          <button
-            ref={floatingRef}
-            className={`composer-bubble ${active?.busy ? 'busy' : ''}`}
-            style={{ left: floatingPosition.x, top: floatingPosition.y }}
-            aria-label="展开悬浮输入框"
-            title="展开输入框 · 拖动可移动"
-            onPointerDown={dragFloating}
-            onClick={() => {
-              if (floatingDragMoved.current) {
-                floatingDragMoved.current = false;
-                return;
-              }
-              setFloatingMinimized(false);
-            }}
-          >
-            <img src={appIcon} alt="" />
-          </button>
-        ) : (
-          <section
-            ref={floatingRef}
-            className={`floating-composer ${floatingPosition.y < 220 ? 'near-top' : ''}`}
-            style={{ left: floatingPosition.x, top: floatingPosition.y }}
-            aria-label="悬浮输入框"
-          >
-            <div className="floating-composer-header" onPointerDown={dragFloating}>
-              <img src={appIcon} alt="" />
-              {active && <span>{active.label}</span>}
-              <small role="status">
-                {active?.busy ? '正在思考…' : active ? '当前会话' : '新对话'}
-              </small>
-              <IconButton
-                icon={Minus}
-                label="缩小为圆形浮标"
-                onClick={() => {
-                  setRuntimeMenu(null);
-                  floatingDragMoved.current = false;
-                  setFloatingMinimized(true);
-                }}
-              />
-              <IconButton
-                icon={Terminal}
-                label="恢复第二栏 ⌘J"
-                onClick={() => updateSettings({ terminal: true })}
-              />
-            </div>
-            {composer}
-          </section>
-        ))}
+      {page === 'workspace' && selectedWork && !terminal && (
+        <FloatingWork work={selectedWork} onRestore={() => updateSettings({ terminal: true })} />
+      )}
+      {consoleAllowed && (
+        <FloatingConsole
+          open={consoleOpen}
+          onClose={() => setConsoleOpen(false)}
+          title={active?.label ?? '新对话'}
+          status={active?.busy ? '正在思考…' : active ? '当前会话' : null}
+          composer={composer}
+          terminal={consoleTerminal}
+          footer={!chatMode && (native || window.claudeDesktop) ? runtimeBar : null}
+          onRestore={() => {
+            setConsoleOpen(false);
+            restoreTerminal();
+          }}
+        />
+      )}
+      {consoleAllowed && !consoleOpen && !petOn && (
+        <ConsoleBubble busy={active?.busy} onOpen={() => setConsoleOpen(true)} />
+      )}
+      {petEnabled && (
+        <DesktopPet
+          settings={settings.pet}
+          onChange={(patch) => updateSettings({ pet: { ...settings.pet, ...patch } })}
+          signals={petSignals}
+          onClick={openConsoleFromPet}
+          onOpenConsole={() => {
+            if (terminalVisible) updateSettings({ terminal: false });
+            setConsoleOpen(true);
+          }}
+          onOpenSession={restoreTerminal}
+          onSettings={() => setModal({ kind: 'settings', page: 'pet' })}
+          onOpenTarget={(target) => (target?.displayId ? openWorkByDisplayId(target.displayId) : restoreTerminal())}
+        />
+      )}
       {treeContext && (
         <div
           className="branch-context tree-context"
@@ -1059,6 +1601,25 @@ export default function App() {
           </div>
           {[
             ['新建对话', false],
+            ...(treeContext.session
+              ? [
+                  ['重命名', false],
+                  [
+                    (treeContext.session.provider ?? 'claude') === 'antigravity'
+                      ? '转到 Claude Code 继续'
+                      : '转到 Antigravity 继续',
+                    (state.providers ?? []).length > 0 &&
+                      !(state.providers ?? []).some(
+                        (p) =>
+                          p.id ===
+                            ((treeContext.session.provider ?? 'claude') === 'antigravity'
+                              ? 'claude'
+                              : 'antigravity') && p.available,
+                      ),
+                  ],
+                  ['作为 Work 继续', false],
+                ]
+              : []),
             [
               '置顶',
               treeContext.session
@@ -1147,6 +1708,8 @@ export default function App() {
           branch={modalProject.path === workbenchPath ? currentBranch : null}
           isRepository={modalProject.path === workbenchPath ? isRepository : true}
           initialMode={modal.mode}
+          providers={state.providers ?? []}
+          defaultProvider={settings.defaultProvider ?? 'claude'}
           notify={notify}
           onClose={() => setModal(null)}
           onCreated={() => {
@@ -1155,14 +1718,94 @@ export default function App() {
           }}
         />
       )}
+      {modal?.kind === 'rename' && (
+        <RenameSessionModal session={modal.session} notify={notify} onClose={() => setModal(null)} />
+      )}
       {modal?.kind === 'settings' && (
         <SettingsModal
+          initialPage={modal.page}
           settings={settings}
+          providers={state.providers ?? []}
+          capacity={workSnap.capacity}
+          projects={projects}
+          notify={notify}
           onChange={updateSettings}
+          navigation={navigation}
+          onNavigationChange={setNavigation}
           onOpenMcp={() => setModal({ kind: 'mcp' })}
-          onClose={() => setModal(null)}
+          onOpenConversations={() => {
+            setModal(null);
+            setWorkModal({ kind: 'source' });
+          }}
+          onClose={() => {
+            setModal(null);
+            loadTapdConfig();
+          }}
         />
       )}
+      {workModal?.kind === 'new' && (
+        <NewWorkModal
+          projects={projects}
+          defaultProject={workModal.adopt ? undefined : workbenchPath}
+          defaultProvider={settings.defaultProvider ?? 'claude'}
+          adopt={workModal.adopt}
+          runtime={state.runtime}
+          home={state.home}
+          notify={notify}
+          onClose={() => setWorkModal(null)}
+          onCreated={(work) => openWork(work.id)}
+        />
+      )}
+      {workModal?.kind === 'search' && (
+        <SearchModal
+          state={state}
+          works={workSnap.works}
+          onClose={() => setWorkModal(null)}
+          onOpenWork={(id) => {
+            setWorkModal(null);
+            openWork(id);
+          }}
+          onOpenSession={(target, session) => {
+            setWorkModal(null);
+            openSession(target, session);
+          }}
+          onOpenProject={(target) => {
+            setWorkModal(null);
+            setSelectedWorkId(null);
+            setPage('workspace');
+            selectProject(target.path);
+            if (!target.expanded) request('app.toggleProject', { path: target.path });
+          }}
+        />
+      )}
+      {workModal?.kind === 'source' && (
+        <SourceModal
+          work={workSnap.works.find((item) => item.id === workModal.workId) ?? null}
+          onClose={() => setWorkModal(null)}
+          onOpenWork={(id) => {
+            setWorkModal(null);
+            openWork(id);
+          }}
+        />
+      )}
+      {workModal?.kind === 'delivery' && workSnap.works.some((item) => item.id === workModal.workId) && (
+        <DeliveryModal
+          work={workSnap.works.find((item) => item.id === workModal.workId)}
+          target={workModal.target}
+          notify={notify}
+          onClose={() => setWorkModal(null)}
+        />
+      )}
+      {workModal?.kind === 'export' && workSnap.works.some((item) => item.id === workModal.workId) && (
+        <ExportModal
+          work={workSnap.works.find((item) => item.id === workModal.workId)}
+          notify={notify}
+          onClose={() => setWorkModal(null)}
+        />
+      )}
+      {workModal && <i hidden data-blocking />}
+      <ConfirmHost />
+
     </div>
   );
 }

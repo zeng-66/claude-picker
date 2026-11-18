@@ -1,0 +1,7 @@
+.prototype-notes { position: fixed; right: 16px; bottom: 16px; z-index: 10000; font: 13px/1.5 system-ui; }
+.prototype-notes > button { background: #de9771; color: #18191d; border: 0; padding: 10px 16px; border-radius: 20px; cursor: pointer; }
+.prototype-notes section { position: absolute; bottom: 50px; right: 0; width: min(370px, calc(100vw - 32px)); max-height: 70vh; overflow: auto; padding: 20px; background: #202126; color: #e5e5e8; border: 1px solid #51525b; border-radius: 12px; box-shadow: 0 12px 40px #0008; }
+.prototype-notes label { display: grid; gap: 5px; margin: 12px 0; }
+.prototype-notes input, .prototype-notes textarea { background: #151619; color: inherit; padding: 8px; border: 1px solid #51525b; border-radius: 5px; }
+.prototype-notes section button { margin: 4px; padding: 7px; cursor: pointer; }
+.prototype-notes li { margin-block: 14px; white-space: pre-wrap; }

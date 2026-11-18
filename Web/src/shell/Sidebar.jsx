@@ -4,8 +4,10 @@ import {
   CaretDown,
   CaretRight,
   CaretUp,
+  ChatCircleDots,
   CircleNotch,
   Folder,
+  MagnifyingGlass,
   Gear,
   House,
   Plus,
@@ -15,6 +17,7 @@ import {
 import appIcon from './clawd-mark.png';
 import { IconButton } from './ui.jsx';
 import { request } from './bridge.js';
+import { statusOf } from './work/useWorks.js';
 
 const VISIBLE_SESSIONS = 5;
 
@@ -34,14 +37,41 @@ export default function Sidebar({
   onSettings,
   onNewSession,
   onFocusTerminal,
+  works = [],
+  workSessionIds = [],
+  selectedWorkId,
+  onOpenWork,
+  onSearch,
+  providerFilter = 'all',
+  onProviderFilter,
 }) {
   const [dragging, setDragging] = useState(null);
   const projects = state.projects;
   const active = state.active;
+  const providers = state.providers ?? [];
+  const hasAgy =
+    providers.some((p) => p.id === 'antigravity' && p.available) ||
+    projects.some((p) => p.sessions.some((s) => s.provider === 'antigravity')) ||
+    works.some((w) => w.executor === 'antigravity');
+  const matchFilter = (prov) => providerFilter === 'all' || (prov ?? 'claude') === providerFilter;
+  // 属于 Work 的会话以 Work 的形式出现，不再作为普通会话重复列出。
+  const hiddenSessions = new Set(workSessionIds);
+  const worksByProject = new Map();
+  for (const work of works) {
+    if (work.archived || work.status === 'cancelled') continue;
+    if (!matchFilter(work.executor)) continue;
+    const path = work.project?.path;
+    if (!path) continue;
+    if (!worksByProject.has(path)) worksByProject.set(path, []);
+    worksByProject.get(path).push(work);
+  }
 
   const rowCount = projects.reduce((count, project) => {
     if (!project.expanded) return count + 1;
-    const total = project.sessions.length;
+    const filtered = project.sessions.filter(
+      (s) => !hiddenSessions.has(s.id) && matchFilter(s.provider),
+    );
+    const total = filtered.length;
     const shown = project.showAll ? total : Math.min(VISIBLE_SESSIONS, total);
     return count + 1 + shown + (total > VISIBLE_SESSIONS ? 1 : 0);
   }, 0);
@@ -98,8 +128,8 @@ export default function Sidebar({
     const percent = Math.round(window?.percent ?? 0);
     const reset = window?.reset ?? (weekly ? '--/--' : '--:--');
     const title = window
-      ? `${weekly ? '本周' : '本 5 小时窗口'} ${percent}%，${reset} 重置`
-      : (usage.note ?? '用量读取中');
+      ? `Claude 额度 · ${weekly ? '本周' : '本 5 小时窗口'} ${percent}%，${reset} 重置`
+      : (usage.note ?? 'Claude 用量读取中');
     return (
       <div className={`usage-row ${weekly ? 'weekly' : ''}`} title={usage.note ?? title}>
         <div className="usage-track">
@@ -152,9 +182,41 @@ export default function Sidebar({
           )}
         </div>
       </div>
+      <div className="sidebar-links">
+        <button onClick={onSearch}>
+          <MagnifyingGlass size={15} />
+          <span>搜索</span>
+          <small>⌘K</small>
+        </button>
+      </div>
+      {(hasAgy || providerFilter !== 'all') && onProviderFilter && (
+        <div className="provider-filter" role="tablist" aria-label="按引擎筛选会话">
+          {[
+            ['all', '全部'],
+            ['claude', 'Claude'],
+            ['antigravity', 'Antigravity'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={providerFilter === id}
+              className={providerFilter === id ? 'active' : ''}
+              onClick={() => onProviderFilter(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="project-list" onKeyDown={navigateTree}>
         {projects.map((project) => {
-          const sessions = project.sessions;
+          const sessions = project.sessions.filter(
+            (session) => !hiddenSessions.has(session.id) && matchFilter(session.provider),
+          );
+          const projectWorks = (worksByProject.get(project.path) ?? []).filter(
+            (work) => work.status !== 'completed' || work.id === selectedWorkId || work.unread,
+          );
           return (
             <section className="project-group" key={project.path}>
               <button
@@ -179,46 +241,83 @@ export default function Sidebar({
                   <Folder size={15} weight="fill" />
                 )}
                 <strong>{project.title}</strong>
-                <span>{sessions.length || ''}</span>
+                <span>{sessions.length + projectWorks.length || ''}</span>
               </button>
               {project.expanded && (
                 <div className="sessions">
-                  {sessions
-                    .slice(0, project.showAll ? undefined : VISIBLE_SESSIONS)
-                    .map((session) => (
+                  {projectWorks.map((work) => {
+                    const status = statusOf(work);
+                    const execTag = work.executor === 'antigravity' ? 'Antigravity' : 'Claude';
+                    return (
                       <button
-                        className={`session-row ${active?.sessionId === session.id ? 'selected' : ''} ${dragging?.sessionId === session.id ? 'dragging' : ''}`}
-                        key={session.id}
-                        data-session={session.id}
-                        title={session.title}
-                        draggable
-                        onDragStart={() =>
-                          setDragging({ path: project.path, sessionId: session.id })
-                        }
-                        onDragEnd={() => setDragging(null)}
-                        onDragOver={(event) => event.preventDefault()}
-                        onDrop={(event) => drop(event, project, session)}
-                        onContextMenu={(event) => onTreeContext(event, project, session)}
-                        onClick={() => {
-                          onCursor(`session-${session.id}`);
-                          onOpenSession(project, session);
-                        }}
+                        className={`work-row ${selectedWorkId === work.id ? 'selected' : ''}`}
+                        key={work.id}
+                        title={`${work.displayId} · ${execTag} · ${work.title} · ${status.label}`}
+                        onClick={() => onOpenWork(work.id)}
                       >
-                        <span
-                          className={`session-marker ${session.running ? 'running' : session.unread ? 'unread' : ''}`}
-                        >
-                          {session.running ? (
-                            <CircleNotch size={12} />
-                          ) : session.unread ? (
-                            <i />
-                          ) : null}
+                        <span className={`session-indicator ${status.tone}`}>
+                          {work.status === 'running' ? <CircleNotch size={12} className="spin" /> : <i />}
                         </span>
                         <span>
-                          <b>{session.title}</b>
-                          <small>{session.time}</small>
+                          <b>{work.title}</b>
+                          <small>
+                            {work.displayId} · {execTag} · {status.label}
+                          </small>
                         </span>
+                        {(work.status === 'waiting_user' || work.unread) && <ChatCircleDots size={13} />}
                       </button>
-                    ))}
+                    );
+                  })}
+                  {sessions
+                    .slice(0, project.showAll ? undefined : VISIBLE_SESSIONS)
+                    .map((session) => {
+                      const prov = session.provider ?? 'claude';
+                      const provLabel = prov === 'antigravity' ? 'Antigravity' : 'Claude Code';
+                      const tip = session.handoffFrom
+                        ? `${provLabel} · ${session.title}（接力自 ${session.handoffFrom}）`
+                        : `${provLabel} · ${session.title}`;
+                      return (
+                        <button
+                          className={`session-row ${!selectedWorkId && active?.sessionId === session.id ? 'selected' : ''} ${dragging?.sessionId === session.id ? 'dragging' : ''}`}
+                          key={`${prov}-${session.id}`}
+                          data-session={session.id}
+                          title={tip}
+                          draggable
+                          onDragStart={() =>
+                            setDragging({ path: project.path, sessionId: session.id })
+                          }
+                          onDragEnd={() => setDragging(null)}
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={(event) => drop(event, project, session)}
+                          onContextMenu={(event) => onTreeContext(event, project, session)}
+                          onClick={() => {
+                            onCursor(`session-${session.id}`);
+                            onOpenSession(project, session);
+                          }}
+                        >
+                          <span
+                            className={`session-marker ${session.running ? 'running' : session.unread ? 'unread' : ''}`}
+                          >
+                            {session.running ? (
+                              <CircleNotch size={12} />
+                            ) : session.unread ? (
+                              <i />
+                            ) : null}
+                          </span>
+                          <span>
+                            <b>
+                              <em className={`provider-badge ${prov}`}>
+                                {prov === 'antigravity' ? 'A' : 'C'}
+                              </em>
+                              {session.title}
+                            </b>
+                            <small>
+                              {session.handoffFrom ? `接力 · ${session.time}` : session.time}
+                            </small>
+                          </span>
+                        </button>
+                      );
+                    })}
                   {sessions.length > VISIBLE_SESSIONS && (
                     <button
                       className={`more-sessions ${treeCursor === `more-${project.path}` ? 'cursor' : ''}`}

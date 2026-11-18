@@ -70,6 +70,9 @@ rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp ".build/release/ClaudeDeck" "$CONTENTS/MacOS/$APP_NAME"
 cp -R Web/dist "$CONTENTS/Resources/web"
+BUILD_COMMIT="$(git rev-parse HEAD)"
+BUILD_DIRTY="false"
+if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then BUILD_DIRTY="true"; fi
 
 if [ "$WANT_CHAT" = "1" ]; then
   echo "    打入图形聊天资源"
@@ -121,6 +124,10 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 	<string>$VERSION</string>
 	<key>CFBundleVersion</key>
 	<string>$BUILD_NUMBER</string>
+	<key>ClaudePickerCommit</key>
+	<string>$BUILD_COMMIT</string>
+	<key>ClaudePickerDirty</key>
+	<string>$BUILD_DIRTY</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>LSMinimumSystemVersion</key>

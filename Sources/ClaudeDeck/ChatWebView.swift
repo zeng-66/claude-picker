@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 import WebKit
 
 /// Swttch 页面地址的拼装与解析（纯函数，便于回归测试）。
@@ -35,9 +36,33 @@ enum ChatRoute {
 /// 会话切换只改页面路由、不重载页面，每个会话的输入草稿、滚动位置和待审批状态由页面自己保留。
 /// 服务启动中 / 失败时，在同一个 WebView 里显示一张本地状态页。
 @MainActor
-final class ChatHost: NSObject, WKNavigationDelegate, WKUIDelegate {
+final class ChatHost: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     static let shared = ChatHost()
     private static let actionScheme = "picker-chat"
+    private static let notifyHandler = "pickerNotify"
+
+    /// WKWebView 里网页通知权限永远停在「未决定」，页面就会挂出「回复完成时收到通知」横幅且通知发不出去。
+    /// 文档开始前换掉 `window.Notification`：权限恒为 granted，`new Notification()` 转给宿主发系统通知。
+    private static let notificationShim = """
+    (() => {
+      const post = (m) => { try { window.webkit.messageHandlers.\(notifyHandler).postMessage(m); } catch (_) {} };
+      class PickerNotification extends EventTarget {
+        constructor(title, opts) {
+          super();
+          opts = opts || {};
+          this.title = String(title);
+          this.body = opts.body ? String(opts.body) : '';
+          this.tag = opts.tag ? String(opts.tag) : '';
+          this.onclick = this.onclose = this.onshow = this.onerror = null;
+          post({ title: this.title, body: this.body, tag: this.tag });
+        }
+        close() { try { this.onclose && this.onclose(new Event('close')); } catch (_) {} }
+        static get permission() { return 'granted'; }
+        static requestPermission(cb) { try { cb && cb('granted'); } catch (_) {} return Promise.resolve('granted'); }
+      }
+      Object.defineProperty(window, 'Notification', { value: PickerNotification, writable: true, configurable: true });
+    })();
+    """
 
     let webView: WKWebView
     /// 页面当前加载的是哪一次启动的 backend（端口变了说明服务重启，需要带新配对码重载）。
@@ -53,8 +78,13 @@ final class ChatHost: NSObject, WKNavigationDelegate, WKUIDelegate {
         // 不落盘：配对得到的 token 只活在本次进程；端口每次不同，持久化只会留下无用的源数据。
         config.websiteDataStore = .nonPersistent()
         config.preferences.isElementFullscreenEnabled = true
+        let content = WKUserContentController()
+        content.addUserScript(WKUserScript(source: Self.notificationShim, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        config.userContentController = content
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
+        // ChatHost 是常驻单例，被 content controller 强引用不构成泄漏。
+        content.add(self, name: Self.notifyHandler)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.appearance = NSAppearance(named: .darkAqua)
@@ -132,6 +162,17 @@ final class ChatHost: NSObject, WKNavigationDelegate, WKUIDelegate {
         return String(arr.dropFirst().dropLast())
     }
 
+    // MARK: WKScriptMessageHandler
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == Self.notifyHandler, message.frameInfo.isMainFrame,
+              message.frameInfo.securityOrigin.host == "127.0.0.1",
+              let body = message.body as? [String: Any],
+              let title = body["title"] as? String, !title.isEmpty else { return }
+        ChatNotifier.shared.post(title: title, body: body["body"] as? String ?? "",
+                                 tag: body["tag"] as? String ?? "")
+    }
+
     // MARK: WKNavigationDelegate
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -201,5 +242,53 @@ final class ChatHost: NSObject, WKNavigationDelegate, WKUIDelegate {
         a.addButton(withTitle: "确定")
         a.addButton(withTitle: "取消")
         completionHandler(a.runModal() == .alertFirstButtonReturn)
+    }
+}
+
+/// 图形聊天页的系统通知。权限在第一次发通知时向系统申请（只弹一次）；
+/// App 在前台时也显示横幅：页面只在用户没看着那个会话时才发，比如正停在另一个会话上。
+/// 声音由 backend 按用户设置单独播放，这里不再出声。
+@MainActor
+final class ChatNotifier: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = ChatNotifier()
+    private var authorized: Bool?
+
+    func post(title: String, body: String, tag: String) {
+        // `swift run` 等无 bundle 的进程里 UNUserNotificationCenter 会直接崩溃。
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        // 同一会话的新通知替换旧的，不堆叠。
+        let id = tag.isEmpty ? UUID().uuidString : "chat-" + tag
+        if authorized == true {
+            Self.deliver(id: id, title: title, body: body)
+            return
+        }
+        center.requestAuthorization(options: [.alert]) { granted, _ in
+            Task { @MainActor in
+                self.authorized = granted
+                if granted { Self.deliver(id: id, title: title, body: body) }
+            }
+        }
+    }
+
+    private static func deliver(id: String, title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list])
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        Task { @MainActor in NSApp.activate(ignoringOtherApps: true) }
+        completionHandler()
     }
 }

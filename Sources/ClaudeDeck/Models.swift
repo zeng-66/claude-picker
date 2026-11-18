@@ -3,12 +3,13 @@ import Foundation
 // MARK: - 会话（从 ~/.claude/projects 读取）
 
 struct Session: Identifiable, Equatable {
-    let id: String          // sessionId
+    let id: String          // sessionId / conversationId
     let cwd: String
     let title: String       // 优先使用会话总结，旧会话回退到首条人类消息
     let summary: String?    // jsonl 中最后一条有效的 ai-title / summary
     let date: Date
     var fileURL: URL? = nil
+    var provider: AgentProvider = .claude
 }
 
 enum SessionScanner {
@@ -219,6 +220,12 @@ struct TreeOrder: Codable {
     var hiddenSessions: [String] = []
     /// 新建会话时用户起的名字（会话 id → 名称），优先于 claude 自动生成的标题
     var titles: [String: String] = [:]
+    /// 会话归属引擎补充记录（新建未落盘或接力会话 id → provider）
+    var sessionProviders: [String: String] = [:]
+    /// 宿主补充记录的会话分支（Antigravity 等未在 jsonl 记录 gitBranch 时回退读取）
+    var sessionBranches: [String: String] = [:]
+    /// 跨引擎接力来源说明（新会话 id → 来源标题）
+    var handoffFrom: [String: String] = [:]
 
     init() {}
 
@@ -231,6 +238,9 @@ struct TreeOrder: Codable {
         hiddenProjects = try c.decodeIfPresent([String].self, forKey: .hiddenProjects) ?? []
         hiddenSessions = try c.decodeIfPresent([String].self, forKey: .hiddenSessions) ?? []
         titles = try c.decodeIfPresent([String: String].self, forKey: .titles) ?? [:]
+        sessionProviders = try c.decodeIfPresent([String: String].self, forKey: .sessionProviders) ?? [:]
+        sessionBranches = try c.decodeIfPresent([String: String].self, forKey: .sessionBranches) ?? [:]
+        handoffFrom = try c.decodeIfPresent([String: String].self, forKey: .handoffFrom) ?? [:]
     }
 }
 
@@ -319,6 +329,21 @@ struct AppSettings: Codable, Equatable {
     var swttchDir: String = ""
     /// node 可执行文件路径，空 = 自动查找
     var nodePath: String = ""
+    /// 默认布局：A 工作空间 / B 任务看板 / C 专注对话
+    var layout: String = "A"
+    /// 工作空间右侧详情栏：是否展开、宽度（290–520）
+    var contextOpen: Bool = true
+    var contextWidth: Double = 330
+    /// 顶部页签：顺序即显示顺序，visible 控制是否显示。
+    var navigation: [NavigationItem] = NavigationItem.defaults
+    /// Clawd 桌宠：显示、尺寸、主题、空闲小剧场、散步与位置。
+    var pet: PetSettings = PetSettings()
+    /// 默认新建会话引擎（claude / antigravity）
+    var defaultProvider: AgentProvider = .claude
+    /// 是否扫描并展示 Antigravity 历史会话
+    var scanAntigravity: Bool = true
+    /// 侧栏会话筛选（all / claude / antigravity）
+    var providerFilter: String = "all"
 
     init() {}
 
@@ -341,6 +366,100 @@ struct AppSettings: Codable, Equatable {
         interactionMode = (try? c.decodeIfPresent(InteractionMode.self, forKey: .interactionMode)) ?? d.interactionMode
         swttchDir = try c.decodeIfPresent(String.self, forKey: .swttchDir) ?? d.swttchDir
         nodePath = try c.decodeIfPresent(String.self, forKey: .nodePath) ?? d.nodePath
+        layout = try c.decodeIfPresent(String.self, forKey: .layout) ?? d.layout
+        contextOpen = try c.decodeIfPresent(Bool.self, forKey: .contextOpen) ?? d.contextOpen
+        contextWidth = try c.decodeIfPresent(Double.self, forKey: .contextWidth) ?? d.contextWidth
+        navigation = NavigationItem.normalized((try? c.decodeIfPresent([NavigationItem].self, forKey: .navigation)) ?? nil)
+        pet = ((try? c.decodeIfPresent(PetSettings.self, forKey: .pet)) ?? nil) ?? d.pet
+        defaultProvider = ((try? c.decodeIfPresent(AgentProvider.self, forKey: .defaultProvider)) ?? nil) ?? d.defaultProvider
+        scanAntigravity = try c.decodeIfPresent(Bool.self, forKey: .scanAntigravity) ?? d.scanAntigravity
+        providerFilter = try c.decodeIfPresent(String.self, forKey: .providerFilter) ?? d.providerFilter
+    }
+}
+
+/// 顶部页签的一项。只认识四个固定页签；未知的丢弃，缺的按默认顺序补在后面并显示。
+struct NavigationItem: Codable, Equatable {
+    var id: String
+    var visible: Bool
+
+    static let ids = ["workspace", "tapd", "works", "git"]
+    static var defaults: [NavigationItem] { ids.map { NavigationItem(id: $0, visible: true) } }
+
+    static func normalized(_ items: [NavigationItem]?) -> [NavigationItem] {
+        guard let items else { return defaults }
+        var seen = Set<String>()
+        var out = items.filter { ids.contains($0.id) && seen.insert($0.id).inserted }
+        for id in ids where !seen.contains(id) { out.append(NavigationItem(id: id, visible: true)) }
+        return out
+    }
+
+    /// 网页传来的 `[{id, visible}]`。
+    static func parse(_ value: Any?) -> [NavigationItem]? {
+        guard let list = value as? [[String: Any]] else { return nil }
+        let items = list.compactMap { entry -> NavigationItem? in
+            guard let id = entry["id"] as? String else { return nil }
+            let visible = entry["visible"] as? Bool ?? (entry["visible"] as? NSNumber)?.boolValue ?? true
+            return NavigationItem(id: id, visible: visible)
+        }
+        return normalized(items)
+    }
+
+    var json: [String: Any] { ["id": id, "visible": visible] }
+}
+
+/// 桌宠设置。位置为空表示用默认位置（右下角）。
+struct PetSettings: Codable, Equatable {
+    var enabled = true
+    var size: Double = 128
+    var theme = "dev-life"
+    var idleShows = true
+    var wander = false
+    var x: Double?
+    var y: Double?
+    /// 桌面悬浮窗左下角（屏幕坐标）。为空表示主屏右下角。
+    var desktopX: Double?
+    var desktopY: Double?
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PetSettings()
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        size = try c.decodeIfPresent(Double.self, forKey: .size) ?? d.size
+        theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? d.theme
+        idleShows = try c.decodeIfPresent(Bool.self, forKey: .idleShows) ?? d.idleShows
+        wander = try c.decodeIfPresent(Bool.self, forKey: .wander) ?? d.wander
+        x = try c.decodeIfPresent(Double.self, forKey: .x)
+        y = try c.decodeIfPresent(Double.self, forKey: .y)
+        desktopX = try c.decodeIfPresent(Double.self, forKey: .desktopX)
+        desktopY = try c.decodeIfPresent(Double.self, forKey: .desktopY)
+    }
+
+    static let themes = ["dev-life", "codex"]
+
+    /// 合并网页传来的部分字段；不合法的值忽略。
+    func merging(_ patch: [String: Any]) -> PetSettings {
+        var next = self
+        func flag(_ key: String) -> Bool? { patch[key] as? Bool ?? (patch[key] as? NSNumber)?.boolValue }
+        func number(_ key: String) -> Double? { (patch[key] as? NSNumber)?.doubleValue }
+        if let v = flag("enabled") { next.enabled = v }
+        if let v = number("size"), [96, 128, 160].contains(v) { next.size = v }
+        if let v = patch["theme"] as? String, Self.themes.contains(v) { next.theme = v }
+        if let v = flag("idleShows") { next.idleShows = v }
+        if let v = flag("wander") { next.wander = v }
+        if patch.keys.contains("x") { next.x = number("x").map { max(0, $0) } }
+        if patch.keys.contains("y") { next.y = number("y").map { max(0, $0) } }
+        if patch.keys.contains("desktopX") { next.desktopX = number("desktopX") }
+        if patch.keys.contains("desktopY") { next.desktopY = number("desktopY") }
+        return next
+    }
+
+    var json: [String: Any] {
+        var out: [String: Any] = ["enabled": enabled, "size": size, "theme": theme, "idleShows": idleShows, "wander": wander]
+        out["x"] = x ?? NSNull()
+        out["y"] = y ?? NSNull()
+        return out
     }
 }
 

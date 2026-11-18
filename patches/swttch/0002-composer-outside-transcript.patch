@@ -1,0 +1,121 @@
+diff --git a/webview/src/pages/ChatPage/__tests__/ChatPage.footerLayout.test.tsx b/webview/src/pages/ChatPage/__tests__/ChatPage.footerLayout.test.tsx
+index 0ac9a87..b76c400 100644
+--- a/webview/src/pages/ChatPage/__tests__/ChatPage.footerLayout.test.tsx
++++ b/webview/src/pages/ChatPage/__tests__/ChatPage.footerLayout.test.tsx
+@@ -3,19 +3,7 @@ import { render, screen } from '@testing-library/react';
+ import { ChatInputFocusProvider, useChatInputFocus } from '@/contexts/ChatInputFocusContext';
+ import { TopBarProvider } from '@/contexts/TopBarContext';
+ 
+-/*
+- * How the strip at the bottom of the chat (the composer, or the panel that
+- * stands in for it) sits against the send index. The scroll container keeps the
+- * end edge of the transcript clear for the rail by padding it, and the strip
+- * lives inside that container, so it gave up the same room: the composer sat
+- * 24px off-centre, with more space on its end side than its start side.
+- *
+- * The strip stays inside the container, because that is what lets the
+- * transcript run on behind it and show around it; it takes the room back by
+- * reaching over the padding. ChatPage is rendered with everything around its
+- * root stubbed out, since only the arrangement of the container, the rail and
+- * the strip is under test.
+- */
++// The input reserves its own height outside the transcript scroll area.
+ 
+ const { stub, spies } = vi.hoisted(() => ({
+   stub: (name: string) => () => <div data-testid={name} />,
+@@ -141,17 +129,17 @@ const footerOf = (container: HTMLElement) => container.querySelector<HTMLElement
+ const scrollerOf = (container: HTMLElement) => container.querySelector<HTMLElement>('[data-chat-scroll]')!;
+ 
+ describe('ChatPage bottom strip layout', () => {
+-  it('keeps the strip inside the scroll container, so the transcript runs on behind it', () => {
++  it('keeps the composer outside the transcript scroll area so text cannot pass behind it', () => {
+     const { container } = renderPage();
+ 
+-    expect(scrollerOf(container).contains(footerOf(container))).toBe(true);
++    expect(scrollerOf(container).contains(footerOf(container))).toBe(false);
++    expect(footerOf(container).parentElement).toBe(scrollerOf(container).parentElement);
+   });
+ 
+-  it('reaches the strip over the room the rail reserves, so its two sides have the same space', () => {
++  it('keeps the composer full width without overlapping the transcript rail padding', () => {
+     const { container } = renderPage();
+ 
+-    // The mocked rail is 16px wide: the strip takes exactly that much back.
+-    expect(footerOf(container).style.marginInlineEnd).toBe('-16px');
++    expect(footerOf(container).style.marginInlineEnd).toBe('');
+   });
+ 
+   it('still reserves the rail width beside the transcript itself', () => {
+diff --git a/webview/src/pages/ChatPage/index.tsx b/webview/src/pages/ChatPage/index.tsx
+index a30ecf7..66b4eb6 100644
+--- a/webview/src/pages/ChatPage/index.tsx
++++ b/webview/src/pages/ChatPage/index.tsx
+@@ -15,10 +15,8 @@ import { AcceptPlanPanel } from './AcceptPlanPanel';
+ import { BannerArea } from './BannerArea';
+ import { SettingsFileProblemBanner } from './SettingsFileProblemBanner';
+ import { MigrationBanner } from './MigrationBanner';
+-import { UpdateBanner } from './UpdateBanner';
+ import { ConnectionLostBanner } from './ConnectionLostBanner';
+ import { AuthErrorBanner } from './AuthErrorBanner';
+-import { BrowserPermissionBanner } from './BrowserPermissionBanner';
+ import { BackgroundTasksPanel } from './BackgroundTasksPanel';
+ import { FilePreviewPane } from '@/components/FilePreviewPane';
+ import { usePaneColumn, usePaneWidth } from '@/components/FilePreviewPane/usePaneColumn';
+@@ -443,10 +441,8 @@ function ChatPageContent() {
+ 
+       <BannerArea>
+         <MigrationBanner />
+-        <UpdateBanner />
+         <ConnectionLostBanner />
+         <AuthErrorBanner />
+-        <BrowserPermissionBanner />
+         <AccountSwitchErrorBanner />
+         <SettingsFileProblemBanner />
+         <AnnouncementTopBannerSlot />
+@@ -484,7 +480,7 @@ function ChatPageContent() {
+           // width reads these and falls back to its own.
+           ...(railAtStart ? ({ '--chat-column-max': '70rem', '--chat-column-px': '2rem' } as React.CSSProperties) : {}),
+         }}
+-        className="flex flex-col flex-1 overflow-y-auto w-full h-screen pb-0 bg-surface-base z-0"
++        className="flex flex-col flex-1 min-h-0 overflow-y-auto w-full pb-0 bg-surface-base z-0"
+       >
+         {transcriptViewMode === null ? (
+           <ChatMessageArea
+@@ -538,25 +534,12 @@ function ChatPageContent() {
+ 
+         <div id="scroll-bottom-marker" />
+ 
+-        {/* Input Area */}
+-        {/* Named so a collapsed review can sit clear of it: the review is drawn
+-            in a portal and cannot see this from where it is, so it measures it.
+-            See CHAT_FOOTER_ID. */}
+-        {/* Never taller than the chat area. A prompt panel pinned here grows
+-            upward, and nothing can scroll back to what went past the top, its
+-            collapse button first of all. Capping the footer at the scroll
+-            container lets each panel shrink its own middle and scroll there,
+-            with no height worked out by hand, at any zoom or window size. */}
+-        {/* It stays in here so the transcript runs on behind it and shows around
+-            it. What it must not do is give up the room the container reserves
+-            for the send index: the end margin takes that room back, and the
+-            strip, stretched across the container, ends up centred instead of
+-            sitting a rail's width off to the start side. No `w-full`: a fixed
+-            width would hold the strip at the padded width and ignore the margin. */}
++      </div>
++      {/* The composer owns its space outside the transcript scroller. Content
++          stops above the input instead of scrolling behind its edges. */}
+         <div
+           id={CHAT_FOOTER_ID}
+-          className="sticky start-0 bottom-0 z-10 flex flex-col max-h-full"
+-          style={railAtStart ? undefined : { marginInlineEnd: -SEND_INDEX_RAIL_WIDTH }}
++          className="relative z-10 flex flex-col shrink-0 max-h-full bg-surface-base"
+         >
+           {showScrollButton && (
+               <button
+@@ -628,7 +611,6 @@ function ChatPageContent() {
+               </div>
+           )}
+         </div>
+-      </div>
+ 
+       <BackgroundTasksPanel />
+       <SideQuestionModal />
