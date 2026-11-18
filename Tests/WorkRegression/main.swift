@@ -71,6 +71,11 @@ func fakeLog() -> [JSONValue] {
     return text.split(separator: "\n").compactMap { JSONValue.parse(String($0)) }
 }
 
+func fakeAgyLog() -> [JSONValue] {
+    guard let path = environment["FAKE_AGY_LOG"], let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+    return text.split(separator: "\n").compactMap { JSONValue.parse(String($0)) }
+}
+
 func spawns(session: String?) -> Int {
     fakeLog().filter { $0["event"]?.stringValue == "spawn" && $0["session"]?.stringValue == session }.count
 }
@@ -849,6 +854,114 @@ do {
           "TAPD 令牌来自钥匙串，前提检查不回显令牌")
     Keychain.delete(.tapdToken)
     check(TapdAdapter.prerequisites(core)["tokenSource"]?.stringValue != "keychain", "清除后不再使用钥匙串里的令牌")
+}
+
+print("Antigravity ACP 执行、跨引擎接力与 Turn Checkpoint 回退")
+do {
+    // 1. 直接由 Antigravity ACP 执行 Work（含工具调用与权限审批）
+    var agyReq = WorkCore.CreateRequest(projectId: alpha.id, title: "Antigravity ACP 写入与审批", objective: "SCENARIO:permission")
+    agyReq.executor = "antigravity"
+    agyReq.start = true
+    let agyWorkId = (try core.create(agyReq))["work"]?["id"]?.stringValue ?? ""
+    check(work(core, agyWorkId)["executor"]?.stringValue == "antigravity", "AGY-01 Work 记录 executor 为 antigravity")
+    check(waitUntil(15) { status(core, agyWorkId) == "waiting_user" }, "AGY-02 ACP session/request_permission 进入待回答", status(core, agyWorkId))
+    let agyPerm = (try core.transcript(workId: agyWorkId, after: 0))["attentions"]?.arrayValue?.first ?? .null
+    check(agyPerm["kind"]?.stringValue == "permission" && agyPerm["toolName"]?.stringValue == "Write",
+          "AGY-02 ACP 权限卡片识别工具名与参数")
+    _ = try core.answer(attentionId: agyPerm["id"]?.stringValue ?? "", revision: nil,
+                        answer: .obj(["behavior": .string("allow")]))
+    check(waitUntil(15) { status(core, agyWorkId) == "waiting_review" }, "AGY-02 批准后 ACP 继续完成轮次并进入待审阅", status(core, agyWorkId))
+    let agyPath = work(core, agyWorkId)["workspacePath"]?.stringValue ?? ""
+    check(FileManager.default.fileExists(atPath: agyPath + "/agy-guarded.txt"), "AGY-02 批准后实际写入 agy-guarded.txt")
+    _ = try core.cancel(workId: agyWorkId, revision: nil, requestId: nil)
+    check(waitUntil(10) { status(core, agyWorkId) == "cancelled" }, "清理 Antigravity 权限测试 Work")
+
+    // 2. 共用 Thread 跨引擎无缝切换（Claude -> Antigravity）+ Turn Checkpoint 外科回退
+    let relayRepo = makeRepo("relay")
+    let sharedRepo = makeRepo("shared-cp")
+    let extraProjects = try core.syncProjects([
+        (path: repoA, name: "alpha"),
+        (path: repoB, name: "beta"),
+        (path: relayRepo, name: "relay"),
+        (path: sharedRepo, name: "shared-cp"),
+    ])
+    let relayProject = extraProjects.first { $0.name == "relay" }!
+    let sharedProject = extraProjects.first { $0.name == "shared-cp" }!
+    let relayId = try create(core, project: relayProject, title: "跨引擎接力与检查点回退", objective: "SCENARIO:edit")
+    check(waitUntil(15) { status(core, relayId) == "waiting_review" }, "RL-01 第 1 轮在 Claude 执行完成", status(core, relayId))
+    let relayPath = work(core, relayId)["workspacePath"]?.stringValue ?? ""
+    check(FileManager.default.fileExists(atPath: relayPath + "/work-output.txt"), "RL-01 Claude 产出 work-output.txt")
+
+    // 在待审阅态将执行器切换为 Antigravity
+    let switched = try core.switchExecutor(workId: relayId, executor: "antigravity")
+    check(switched["accepted"]?.boolValue == true && switched["changed"]?.boolValue == true
+          && work(core, relayId)["executor"]?.stringValue == "antigravity",
+          "RL-02 非运行态可切换执行器至 Antigravity")
+
+    // 第 2 轮发送消息：应启动 fake-agy-acp 并自动注入 <thread-handoff>，在同一 worktree 产出 agy-output.txt
+    _ = try core.send(workId: relayId, messageId: "relay-r2", text: "继续第二轮修改 SCENARIO:edit")
+    check(waitUntil(15) { status(core, relayId) == "waiting_review" && FileManager.default.fileExists(atPath: relayPath + "/agy-output.txt") },
+          "RL-03 第 2 轮由 Antigravity 在同一工作树接力完成", status(core, relayId))
+    let agyPrompts = fakeAgyLog().filter { $0["event"]?.stringValue == "prompt" }.compactMap { $0["text"]?.stringValue }
+    check(agyPrompts.contains { $0.contains("<thread-handoff>") && $0.contains("Claude Code") && $0.contains("work-output.txt") },
+          "RL-03 切换引擎后的首轮自动注入包含第 1 轮摘要的 <thread-handoff>")
+
+    let relayTranscript = try core.transcript(workId: relayId, after: 0)
+    let segments = relayTranscript["segments"]?.arrayValue ?? []
+    check(segments.count == 2 && segments[0]["provider"]?.stringValue == "claude" && segments[1]["provider"]?.stringValue == "antigravity",
+          "RL-04 thread_segments 记录两段跨引擎轨迹")
+
+    // 检查 Turn Checkpoints：每轮均有隐藏 Git Ref 锚定，回退第 2 轮 preCheckpointId 应精确删掉 agy-output.txt 而保留 work-output.txt
+    _ = waitUntil(8) {
+        ((try? core.transcript(workId: relayId, after: 0))?["checkpoints"]?.arrayValue?.count ?? 0) >= 4
+    }
+    let cps = (try core.transcript(workId: relayId, after: 0))["checkpoints"]?.arrayValue ?? []
+    let turnEvents = (relayTranscript["events"]?.arrayValue ?? []).filter { $0["kind"]?.stringValue == "turn_result" }
+    let r2PreId = turnEvents.last?["payload"]?["preCheckpointId"]?.stringValue ?? ""
+    let refsOut = sh("git for-each-ref refs/claude-picker/checkpoints/\(relayId)", cwd: relayPath)
+    check(cps.count >= 4 && !r2PreId.isEmpty && refsOut.stdout.contains("refs/claude-picker/checkpoints/\(relayId)/"),
+          "CP-01 每轮前后自动生成锚定在隐藏 Git Ref 下的检查点", "cps=\(cps.count)")
+
+    let rev = try core.revertCheckpoint(workId: relayId, checkpointId: r2PreId, requestId: "rev-r2")
+    check(rev["reverted"]?.boolValue == true
+          && !FileManager.default.fileExists(atPath: relayPath + "/agy-output.txt")
+          && FileManager.default.fileExists(atPath: relayPath + "/work-output.txt"),
+          "CP-02 回退到第 2 轮前：第 2 轮新增文件被移除，第 1 轮成果完好保留")
+    let undoId = rev["undoCheckpointId"]?.stringValue ?? ""
+    check(!undoId.isEmpty, "CP-03 回退前自动生成 undo 备份检查点")
+
+    // 第 3 轮发送普通消息：验证自动向智能体注入 <workspace-reverted-notice> 防止上下文幻觉
+    let promptCountBefore = fakeAgyLog().filter { $0["event"]?.stringValue == "prompt" }.count
+    _ = try core.send(workId: relayId, messageId: "relay-r3", text: "确认回退后的目录状态 SCENARIO:plain")
+    check(waitUntil(15) {
+        fakeAgyLog().filter { $0["event"]?.stringValue == "prompt" }.count > promptCountBefore
+            && status(core, relayId) == "waiting_review"
+    }, "CP-04 回退后继续对话正常完成")
+    let latestAgyPrompt = fakeAgyLog().filter { $0["event"]?.stringValue == "prompt" }.last?["text"]?.stringValue ?? ""
+    check(latestAgyPrompt.contains("<workspace-reverted-notice>"), "CP-04 回退后的下一轮自动注入 <workspace-reverted-notice> 同步通知")
+    _ = try core.cancel(workId: relayId, revision: nil, requestId: nil)
+    check(waitUntil(10) { status(core, relayId) == "cancelled" }, "清理跨引擎接力 Work")
+
+    // 3. 未隔离共享目录（isolation: project）外部未保存改动冲突保护与强制回退
+    let sharedId = try create(core, project: sharedProject, title: "共享目录检查点保护", objective: "SCENARIO:edit", isolation: "project")
+    check(waitUntil(15) { status(core, sharedId) == "waiting_review" }, "CP-05 共享目录第 1 轮完成")
+    _ = waitUntil(8) {
+        ((try? core.transcript(workId: sharedId, after: 0))?["checkpoints"]?.arrayValue ?? [])
+            .contains { $0["phase"]?.stringValue == "post" }
+    }
+    let sharedTurnPre = (events(core, sharedId).last { $0["kind"]?.stringValue == "turn_result" })?["payload"]?["preCheckpointId"]?.stringValue ?? ""
+    try "external manual edit\n".write(toFile: sharedRepo + "/external.txt", atomically: true, encoding: .utf8)
+    do {
+        _ = try core.revertCheckpoint(workId: sharedId, checkpointId: sharedTurnPre, force: false)
+        check(false, "CP-05 共享目录存在外部改动时默认拦截回退")
+    } catch let error as WorkError {
+        check(error.code == .conflict, "CP-05 共享目录存在外部改动时返回 conflict 保护用户修改")
+    }
+    let forced = try core.revertCheckpoint(workId: sharedId, checkpointId: sharedTurnPre, force: true)
+    check(forced["reverted"]?.boolValue == true && !FileManager.default.fileExists(atPath: sharedRepo + "/work-output.txt"),
+          "CP-05 用户确认 force=true 后可执行强制回退")
+    _ = try core.cancel(workId: sharedId, revision: nil, requestId: nil)
+    check(waitUntil(10) { status(core, sharedId) == "cancelled" }, "清理共享目录 Work")
 }
 
 print("状态目录独占与重启恢复")

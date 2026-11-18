@@ -476,6 +476,26 @@ export default function App() {
     });
   }
 
+  async function handoffSession(sessionId, sourceProvider, targetProvider, projectPath, cwd) {
+    if (!sessionId) return;
+    try {
+      setSelectedWorkId(null);
+      revealPage('workspace');
+      setPage('workspace');
+      if (projectPath && projectPath !== workbenchPath) selectProject(projectPath);
+      if (!settings?.terminal) updateSettings({ terminal: true });
+      await request(
+        'session.handoff',
+        { sessionId, sourceProvider, targetProvider, projectPath, cwd },
+        { timeoutMs: 90000 },
+      );
+      const targetName = targetProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
+      notify(`已生成前情摘要并转到 ${targetName} 继续`);
+    } catch (error) {
+      notify(errorText(error), true);
+    }
+  }
+
   function treeAction(action) {
     const { project: target, session } = treeContext;
     setTreeContext(null);
@@ -485,10 +505,22 @@ export default function App() {
       setModal({ kind: 'session', mode: 'current', projectPath: target.path });
     }
     if (action === '重命名' && session) setModal({ kind: 'rename', session });
+    if (action === '转到 Antigravity 继续' && session) {
+      handoffSession(session.id, session.provider ?? 'claude', 'antigravity', target.path, session.cwd);
+    }
+    if (action === '转到 Claude Code 继续' && session) {
+      handoffSession(session.id, session.provider ?? 'antigravity', 'claude', target.path, session.cwd);
+    }
     if (action === '作为 Work 继续' && session) {
       setWorkModal({
         kind: 'new',
-        adopt: { sessionId: session.id, cwd: session.cwd, label: session.title, projectPath: target.path },
+        adopt: {
+          sessionId: session.id,
+          cwd: session.cwd,
+          label: session.title,
+          projectPath: target.path,
+          provider: session.provider ?? 'claude',
+        },
       });
     }
     if (action === '置顶')
@@ -528,6 +560,7 @@ export default function App() {
       projectPath: target.path,
       cwd: session.cwd,
       sessionId: session.id,
+      provider: session.provider ?? 'claude',
     }).catch((error) => notify(errorText(error), true));
   }
 
@@ -602,6 +635,14 @@ export default function App() {
     const offCommand = on('command', (detail) => {
       if (detail.name === 'openWork') return workCommands.current.openByDisplayId(detail.displayId);
       if (detail.name === 'sessionHeldByWork') return workCommands.current.heldByWork(detail.sessionId);
+      if (detail.name === 'chatFallbackForProvider') {
+        notify(`${detail.provider ?? 'Antigravity'} 会话暂不支持图形聊天，已自动用原生终端打开`);
+        return;
+      }
+      if (detail.name === 'runtimeSavedNextLaunch') {
+        if (detail.text) notify(detail.text);
+        return;
+      }
       toggles.current[detail.name]?.();
     });
     const offFollow = on('follow-session', (detail) => {
@@ -754,7 +795,25 @@ export default function App() {
   terminalVisibleRef.current = terminalVisible;
   // 悬浮终端：第二栏终端不可见时可用；选中 Work 且收起对话时沿用 FloatingWork。
   // 原生终端（非图形聊天）：终端下方挂运行参数条。
-  const runtimeBar = <RuntimeBar runtime={state.runtime} runtimeMenu={runtimeMenu} onRuntimeMenu={setRuntimeMenu} />;
+  const runtimeBar = (
+    <RuntimeBar
+      runtime={state.runtime}
+      providers={state.providers ?? []}
+      active={active}
+      runtimeMenu={runtimeMenu}
+      onRuntimeMenu={setRuntimeMenu}
+      onHandoff={(targetProv) =>
+        active &&
+        handoffSession(
+          active.sessionId,
+          active.provider ?? 'claude',
+          targetProv,
+          active.projectPath,
+          active.cwd,
+        )
+      }
+    />
+  );
   const consoleAllowed = !terminalVisible && !(page === 'workspace' && selectedWork && !terminal);
   const petOn = settings.pet?.enabled !== false;
   // macOS 原生由桌面悬浮窗显示桌宠（state.desktopPet），主窗口里不再画一份。
@@ -781,8 +840,10 @@ export default function App() {
   const tapdWorkspaces = (tapdConfig?.settings?.enabled ? tapdConfig.settings.workspaces ?? [] : []).filter(
     (item) => item.enabled !== false,
   );
-  // 图形聊天模式：第二栏里是 Swttch 自己的输入区，外壳的输入框不再显示。
-  const chatMode = settings.interactionMode === 'chat';
+  // 图形聊天模式：第二栏里是 Swttch 自己的输入区（仅 Claude 会话走图形聊天，Antigravity 自动回退原生终端）。
+  const chatMode =
+    settings.interactionMode === 'chat' &&
+    (active?.provider ?? state.runtime?.provider ?? 'claude') === 'claude';
   const terminalWidth = settings.terminalWidth ?? DEFAULT_TERMINAL_WIDTH;
   const runtime = state.runtime;
   const modelLabel =
@@ -796,6 +857,8 @@ export default function App() {
   const composer = (
     <Composer
       runtime={runtime}
+      providers={state.providers ?? []}
+      active={active}
       context={context}
       prompt={prompt}
       onPrompt={setPrompt}
@@ -804,6 +867,16 @@ export default function App() {
       runtimeMenu={runtimeMenu}
       onRuntimeMenu={setRuntimeMenu}
       onOpenContext={() => setModal({ kind: 'context' })}
+      onHandoff={(targetProv) =>
+        active &&
+        handoffSession(
+          active.sessionId,
+          active.provider ?? 'claude',
+          targetProv,
+          active.projectPath,
+          active.cwd,
+        )
+      }
     />
   );
 
@@ -1128,6 +1201,7 @@ export default function App() {
                   projectPath: work.project?.path,
                   cwd: work.workspacePath,
                   sessionId: work.sessionId,
+                  provider: work.executor ?? 'claude',
                 }).catch((error) => notify(errorText(error), true));
               }}
               onContinueAsWork={() => {}}
@@ -1331,6 +1405,8 @@ export default function App() {
             selectedWorkId={page === 'workspace' || page === 'git' ? selectedWorkId : null}
             onOpenWork={openWork}
             onSearch={() => setWorkModal({ kind: 'search' })}
+            providerFilter={settings.providerFilter ?? 'all'}
+            onProviderFilter={(value) => updateSettings({ providerFilter: value })}
           />
         ) : (
           <ModuleSidebar
@@ -1407,9 +1483,9 @@ export default function App() {
             ) : (
               <div className="terminal-content">
                 <div className="terminal-intro">
-                  <img src={appIcon} alt="Claude" />
+                  <img src={appIcon} alt="CLI" />
                   <div>
-                    <strong>Claude Code</strong>
+                    <strong>{runtime?.provider === 'antigravity' ? 'Antigravity' : 'Claude Code'}</strong>
                     <span>
                       {modelLabel}
                       {sessionProject ? ` · ${sessionProject.title}` : ''}
@@ -1528,6 +1604,19 @@ export default function App() {
             ...(treeContext.session
               ? [
                   ['重命名', false],
+                  [
+                    (treeContext.session.provider ?? 'claude') === 'antigravity'
+                      ? '转到 Claude Code 继续'
+                      : '转到 Antigravity 继续',
+                    (state.providers ?? []).length > 0 &&
+                      !(state.providers ?? []).some(
+                        (p) =>
+                          p.id ===
+                            ((treeContext.session.provider ?? 'claude') === 'antigravity'
+                              ? 'claude'
+                              : 'antigravity') && p.available,
+                      ),
+                  ],
                   ['作为 Work 继续', false],
                 ]
               : []),
@@ -1619,6 +1708,8 @@ export default function App() {
           branch={modalProject.path === workbenchPath ? currentBranch : null}
           isRepository={modalProject.path === workbenchPath ? isRepository : true}
           initialMode={modal.mode}
+          providers={state.providers ?? []}
+          defaultProvider={settings.defaultProvider ?? 'claude'}
           notify={notify}
           onClose={() => setModal(null)}
           onCreated={() => {
@@ -1634,6 +1725,7 @@ export default function App() {
         <SettingsModal
           initialPage={modal.page}
           settings={settings}
+          providers={state.providers ?? []}
           capacity={workSnap.capacity}
           projects={projects}
           notify={notify}
@@ -1655,6 +1747,7 @@ export default function App() {
         <NewWorkModal
           projects={projects}
           defaultProject={workModal.adopt ? undefined : workbenchPath}
+          defaultProvider={settings.defaultProvider ?? 'claude'}
           adopt={workModal.adopt}
           runtime={state.runtime}
           home={state.home}

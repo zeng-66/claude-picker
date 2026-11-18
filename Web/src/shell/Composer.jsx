@@ -41,6 +41,8 @@ function ContextMeter({ context, onOpen }) {
 
 export default function Composer({
   runtime,
+  providers = [],
+  active,
   context,
   prompt,
   onPrompt,
@@ -49,7 +51,14 @@ export default function Composer({
   runtimeMenu,
   onRuntimeMenu,
   onOpenContext,
+  onHandoff,
 }) {
+  const currentProvider = runtime.provider ?? 'claude';
+  const providerLabel = currentProvider === 'antigravity' ? 'Antigravity' : 'Claude';
+  const otherProvider = currentProvider === 'antigravity' ? 'claude' : 'antigravity';
+  const otherLabel = otherProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
+  const otherAvailable =
+    providers.length === 0 || providers.some((p) => p.id === otherProvider && p.available);
   const settings = [
     { id: 'mode', label: '模式', value: runtime.mode, values: runtime.modes },
     { id: 'model', label: '模型', value: runtime.model, values: runtime.models },
@@ -81,6 +90,64 @@ export default function Composer({
       />
       <div className="terminal-controls">
         <div className="runtime-options">
+          <div className="runtime-setting">
+            <button
+              type="button"
+              className="runtime-value provider-pill"
+              title="执行引擎"
+              aria-label={`引擎：${providerLabel}`}
+              aria-expanded={runtimeMenu === 'provider'}
+              onClick={() => onRuntimeMenu(runtimeMenu === 'provider' ? null : 'provider')}
+            >
+              <em className={`provider-badge ${currentProvider}`}>
+                {currentProvider === 'antigravity' ? 'A' : 'C'}
+              </em>
+              {providerLabel}
+            </button>
+            {runtimeMenu === 'provider' && (
+              <div className="runtime-popover" role="menu" aria-label="选择执行引擎">
+                {active?.sessionId ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!otherAvailable}
+                    onClick={() => {
+                      onRuntimeMenu(null);
+                      onHandoff?.(otherProvider);
+                    }}
+                  >
+                    转到 {otherLabel} 接力继续…
+                  </button>
+                ) : (
+                  [
+                    { id: 'claude', label: 'Claude Code' },
+                    { id: 'antigravity', label: 'Antigravity' },
+                  ].map((item) => {
+                    const ok =
+                      providers.length === 0 ||
+                      providers.some((p) => p.id === item.id && p.available);
+                    return (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        key={item.id}
+                        disabled={!ok}
+                        aria-checked={currentProvider === item.id}
+                        onClick={() => {
+                          request('app.runtime', { key: 'provider', value: item.id });
+                          onRuntimeMenu(null);
+                        }}
+                      >
+                        {item.label}
+                        {!ok ? '（未安装）' : ''}
+                        {currentProvider === item.id && <Check size={12} />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
           {settings.map((setting) => (
             <div className="runtime-setting" key={setting.id}>
               <button
@@ -114,16 +181,18 @@ export default function Composer({
               )}
             </div>
           ))}
-          <button
-            type="button"
-            className={`fast-toggle ${runtime.fast ? 'fast-on' : ''}`}
-            title={`快速模式：${runtime.fast ? '开启' : '关闭'}`}
-            aria-label={`快速模式${runtime.fast ? '开启' : '关闭'}`}
-            aria-pressed={runtime.fast}
-            onClick={() => request('app.runtime', { key: 'fast', value: !runtime.fast })}
-          >
-            <Lightning size={13} weight={runtime.fast ? 'fill' : 'regular'} />
-          </button>
+          {runtime.supportsFast !== false && (
+            <button
+              type="button"
+              className={`fast-toggle ${runtime.fast ? 'fast-on' : ''}`}
+              title={`快速模式：${runtime.fast ? '开启' : '关闭'}`}
+              aria-label={`快速模式${runtime.fast ? '开启' : '关闭'}`}
+              aria-pressed={runtime.fast}
+              onClick={() => request('app.runtime', { key: 'fast', value: !runtime.fast })}
+            >
+              <Lightning size={13} weight={runtime.fast ? 'fill' : 'regular'} />
+            </button>
+          )}
           <ContextMeter context={context} onOpen={onOpenContext} />
         </div>
         <button className="send" aria-label="发送" disabled={!prompt.trim() || sending}>
@@ -134,9 +203,21 @@ export default function Composer({
   );
 }
 
-/// 原生终端下方的快捷设置条：模式 / 模型 / 推理强度 / 快速模式。
-/// 原生终端自己负责输入，不挂外壳输入框，运行参数从这里改（写进 ~/.claude/settings.json 并同步到正在运行的 claude）。
-export function RuntimeBar({ runtime, runtimeMenu, onRuntimeMenu }) {
+/// 原生终端下方的快捷设置条：引擎 / 模式 / 模型 / 推理强度 / 快速模式。
+export function RuntimeBar({
+  runtime,
+  providers = [],
+  active,
+  runtimeMenu,
+  onRuntimeMenu,
+  onHandoff,
+}) {
+  const currentProvider = runtime.provider ?? 'claude';
+  const providerLabel = currentProvider === 'antigravity' ? 'Antigravity' : 'Claude';
+  const otherProvider = currentProvider === 'antigravity' ? 'claude' : 'antigravity';
+  const otherLabel = otherProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
+  const otherAvailable =
+    providers.length === 0 || providers.some((p) => p.id === otherProvider && p.available);
   const settings = [
     { id: 'mode', label: '模式', value: runtime.mode, values: runtime.modes },
     { id: 'model', label: '模型', value: runtime.model, values: runtime.models },
@@ -145,6 +226,67 @@ export function RuntimeBar({ runtime, runtimeMenu, onRuntimeMenu }) {
   const labelOf = (setting) => setting.values.find((item) => item.id === setting.value)?.label ?? setting.value;
   return (
     <div className="runtime-bar runtime-options" role="toolbar" aria-label="运行参数">
+      <div className="runtime-setting">
+        <button
+          type="button"
+          className="runtime-bar-item"
+          aria-label={`引擎：${providerLabel}`}
+          aria-expanded={runtimeMenu === 'provider'}
+          onClick={() => onRuntimeMenu(runtimeMenu === 'provider' ? null : 'provider')}
+        >
+          <span>引擎</span>
+          <b>
+            <em className={`provider-badge ${currentProvider}`}>
+              {currentProvider === 'antigravity' ? 'A' : 'C'}
+            </em>
+            {providerLabel}
+          </b>
+          <CaretDown size={10} />
+        </button>
+        {runtimeMenu === 'provider' && (
+          <div className="runtime-popover" role="menu" aria-label="选择执行引擎">
+            {active?.sessionId ? (
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!otherAvailable}
+                onClick={() => {
+                  onRuntimeMenu(null);
+                  onHandoff?.(otherProvider);
+                }}
+              >
+                转到 {otherLabel} 接力继续…
+              </button>
+            ) : (
+              [
+                { id: 'claude', label: 'Claude Code' },
+                { id: 'antigravity', label: 'Antigravity' },
+              ].map((item) => {
+                const ok =
+                  providers.length === 0 ||
+                  providers.some((p) => p.id === item.id && p.available);
+                return (
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    key={item.id}
+                    disabled={!ok}
+                    aria-checked={currentProvider === item.id}
+                    onClick={() => {
+                      request('app.runtime', { key: 'provider', value: item.id });
+                      onRuntimeMenu(null);
+                    }}
+                  >
+                    {item.label}
+                    {!ok ? '（未安装）' : ''}
+                    {currentProvider === item.id && <Check size={12} />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
       {settings.map((setting) => (
         <div className="runtime-setting" key={setting.id}>
           <button
@@ -179,16 +321,18 @@ export function RuntimeBar({ runtime, runtimeMenu, onRuntimeMenu }) {
           )}
         </div>
       ))}
-      <button
-        type="button"
-        className={`runtime-bar-item ${runtime.fast ? 'fast-on' : ''}`}
-        aria-label={`快速模式${runtime.fast ? '开启' : '关闭'}`}
-        aria-pressed={runtime.fast}
-        onClick={() => request('app.runtime', { key: 'fast', value: !runtime.fast })}
-      >
-        <span>快速模式</span>
-        <b>{runtime.fast ? '开启' : '关闭'}</b>
-      </button>
+      {runtime.supportsFast !== false && (
+        <button
+          type="button"
+          className={`runtime-bar-item ${runtime.fast ? 'fast-on' : ''}`}
+          aria-label={`快速模式${runtime.fast ? '开启' : '关闭'}`}
+          aria-pressed={runtime.fast}
+          onClick={() => request('app.runtime', { key: 'fast', value: !runtime.fast })}
+        >
+          <span>快速模式</span>
+          <b>{runtime.fast ? '开启' : '关闭'}</b>
+        </button>
+      )}
     </div>
   );
 }

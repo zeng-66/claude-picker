@@ -3,12 +3,13 @@ import Foundation
 // MARK: - 会话（从 ~/.claude/projects 读取）
 
 struct Session: Identifiable, Equatable {
-    let id: String          // sessionId
+    let id: String          // sessionId / conversationId
     let cwd: String
     let title: String       // 优先使用会话总结，旧会话回退到首条人类消息
     let summary: String?    // jsonl 中最后一条有效的 ai-title / summary
     let date: Date
     var fileURL: URL? = nil
+    var provider: AgentProvider = .claude
 }
 
 enum SessionScanner {
@@ -219,6 +220,12 @@ struct TreeOrder: Codable {
     var hiddenSessions: [String] = []
     /// 新建会话时用户起的名字（会话 id → 名称），优先于 claude 自动生成的标题
     var titles: [String: String] = [:]
+    /// 会话归属引擎补充记录（新建未落盘或接力会话 id → provider）
+    var sessionProviders: [String: String] = [:]
+    /// 宿主补充记录的会话分支（Antigravity 等未在 jsonl 记录 gitBranch 时回退读取）
+    var sessionBranches: [String: String] = [:]
+    /// 跨引擎接力来源说明（新会话 id → 来源标题）
+    var handoffFrom: [String: String] = [:]
 
     init() {}
 
@@ -231,6 +238,9 @@ struct TreeOrder: Codable {
         hiddenProjects = try c.decodeIfPresent([String].self, forKey: .hiddenProjects) ?? []
         hiddenSessions = try c.decodeIfPresent([String].self, forKey: .hiddenSessions) ?? []
         titles = try c.decodeIfPresent([String: String].self, forKey: .titles) ?? [:]
+        sessionProviders = try c.decodeIfPresent([String: String].self, forKey: .sessionProviders) ?? [:]
+        sessionBranches = try c.decodeIfPresent([String: String].self, forKey: .sessionBranches) ?? [:]
+        handoffFrom = try c.decodeIfPresent([String: String].self, forKey: .handoffFrom) ?? [:]
     }
 }
 
@@ -328,6 +338,12 @@ struct AppSettings: Codable, Equatable {
     var navigation: [NavigationItem] = NavigationItem.defaults
     /// Clawd 桌宠：显示、尺寸、主题、空闲小剧场、散步与位置。
     var pet: PetSettings = PetSettings()
+    /// 默认新建会话引擎（claude / antigravity）
+    var defaultProvider: AgentProvider = .claude
+    /// 是否扫描并展示 Antigravity 历史会话
+    var scanAntigravity: Bool = true
+    /// 侧栏会话筛选（all / claude / antigravity）
+    var providerFilter: String = "all"
 
     init() {}
 
@@ -355,6 +371,9 @@ struct AppSettings: Codable, Equatable {
         contextWidth = try c.decodeIfPresent(Double.self, forKey: .contextWidth) ?? d.contextWidth
         navigation = NavigationItem.normalized((try? c.decodeIfPresent([NavigationItem].self, forKey: .navigation)) ?? nil)
         pet = ((try? c.decodeIfPresent(PetSettings.self, forKey: .pet)) ?? nil) ?? d.pet
+        defaultProvider = ((try? c.decodeIfPresent(AgentProvider.self, forKey: .defaultProvider)) ?? nil) ?? d.defaultProvider
+        scanAntigravity = try c.decodeIfPresent(Bool.self, forKey: .scanAntigravity) ?? d.scanAntigravity
+        providerFilter = try c.decodeIfPresent(String.self, forKey: .providerFilter) ?? d.providerFilter
     }
 }
 

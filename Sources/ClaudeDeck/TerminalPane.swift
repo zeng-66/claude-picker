@@ -14,10 +14,13 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     private var hasProgramStatus = false
     let view: LocalProcessTerminalView
     let cwd: String
+    let provider: AgentProvider
+    var boundConversationId: String?
     private let resumeId: String?
     private let sessionId: String?
     private let displayName: String?
     private let initialPrompt: String?
+    private var agyWatchTimer: Timer?
     /// 进程起来后一段时间内不接受注入命令（claude 还在初始化）
     private var readyAt = Date.distantFuture
     /// 切到这个会话后的短暂抑制期：挂载视图会触发 PTY resize → claude 整屏重绘，
@@ -36,12 +39,18 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     var onBusy: ((Bool) -> Void)?
 
     /// - Parameters:
+    ///   - provider: CLI 引擎（默认 `.claude`）。
     ///   - name: 新建会话的显示名（`claude --name`），恢复会话时忽略。
-    ///   - prompt: 新建会话的首条提示词，作为 claude 的位置参数直接带进去。
+    ///   - prompt: 新建会话的首条提示词。
     init(cwd: String, resumeId: String?, sessionId: String? = nil,
          name: String? = nil, prompt: String? = nil,
-         options: RenderOptions, fontName: String, fontSize: Double) {
+         provider: AgentProvider = .claude,
+         options: RenderOptions,
+         agyOptions: AgyRenderOptions = AgyRenderOptions(),
+         fontName: String, fontSize: Double) {
         self.cwd = cwd
+        self.provider = provider
+        self.boundConversationId = resumeId
         self.resumeId = resumeId
         self.sessionId = sessionId
         self.displayName = name
@@ -54,7 +63,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         super.init()
         configure(fontName: fontName, fontSize: fontSize)
         view.processDelegate = self
-        start(options: options)
+        start(options: options, agyOptions: agyOptions)
     }
 
     private func configure(fontName: String, fontSize: Double) {
@@ -73,27 +82,68 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         view.font = f
     }
 
-    private func start(options: RenderOptions) {
+    private func start(options: RenderOptions, agyOptions: AgyRenderOptions) {
         guard !alive else { return }
         var args = ["-lc"]
-        var cmd = "exec claude"
-        if let r = resumeId {
-            cmd = "exec claude --resume \(shellQuote(r))"
-        } else if let s = sessionId {
-            cmd = "exec claude --session-id \(shellQuote(s))"
-        }
-        cmd += " " + options.flags()
-        if resumeId == nil {
-            if let name = displayName, !name.isEmpty { cmd += " --name \(shellQuote(name))" }
-            // 提示词放在最后，前面加 `--` 防止以 `-` 开头的内容被当成选项
-            if let prompt = initialPrompt, !prompt.isEmpty { cmd += " -- \(shellQuote(prompt))" }
+        let cmd: String
+        let execLabel: String
+        switch provider {
+        case .claude:
+            var c = "exec claude"
+            if let r = resumeId {
+                c = "exec claude --resume \(shellQuote(r))"
+            } else if let s = sessionId {
+                c = "exec claude --session-id \(shellQuote(s))"
+            }
+            c += " " + options.flags()
+            if resumeId == nil {
+                if let name = displayName, !name.isEmpty { c += " --name \(shellQuote(name))" }
+                // 提示词放在最后，前面加 `--` 防止以 `-` 开头的内容被当成选项
+                if let prompt = initialPrompt, !prompt.isEmpty { c += " -- \(shellQuote(prompt))" }
+            }
+            cmd = c
+            execLabel = "claude"
+        case .antigravity:
+            var c = "exec agy"
+            if let r = resumeId, !r.isEmpty {
+                c = "exec agy --conversation \(shellQuote(r))"
+            }
+            let flags = agyOptions.flags()
+            if !flags.isEmpty { c += " " + flags }
+            if resumeId == nil, let prompt = initialPrompt, !prompt.isEmpty {
+                c += " -i \(shellQuote(prompt))"
+            }
+            cmd = c
+            execLabel = "agy"
         }
         args.append(cmd)
         let env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         view.startProcess(executable: "/bin/zsh", args: args, environment: env,
-                          execName: "claude", currentDirectory: cwd)
+                          execName: execLabel, currentDirectory: cwd)
         alive = true
-        readyAt = Date().addingTimeInterval(1.6)
+        readyAt = Date().addingTimeInterval(provider == .antigravity ? 2.2 : 1.6)
+        if provider == .antigravity {
+            startAgyBusyMonitor()
+        }
+    }
+
+    private func startAgyBusyMonitor() {
+        agyWatchTimer?.invalidate()
+        agyWatchTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                guard self.alive, !self.terminating, !self.hasProgramStatus,
+                      let cid = self.boundConversationId, !cid.isEmpty else { return }
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    let working = AgySessionScanner.isConversationBusy(id: cid)
+                    Task { @MainActor [weak self] in
+                        guard let self, self.alive, !self.terminating, !self.hasProgramStatus else { return }
+                        if working, !self.busy, Date() < self.suppressUntil || Date() < self.userInputUntil { return }
+                        self.updateBusy(working)
+                    }
+                }
+            }
+        }
     }
 
     /// 往 PTY 里打字（等同用户键盘输入）
@@ -151,6 +201,8 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     func terminate() {
         guard alive else { return }
         terminating = true
+        agyWatchTimer?.invalidate()
+        agyWatchTimer = nil
         busy = false
         view.terminate()
         alive = false
@@ -205,6 +257,8 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         let natural = !terminating
+        agyWatchTimer?.invalidate()
+        agyWatchTimer = nil
         updateBusy(false)
         hasProgramStatus = false
         alive = false

@@ -180,6 +180,9 @@ function WorkCard({ work, onOpen, notify, onExport, focused = false }) {
       <h3>{work.title}</h3>
       <p>{work.objective}</p>
       <div className="task-card-env">
+        <em className={`provider-badge ${work.executor ?? 'claude'}`}>
+          {work.executor === 'antigravity' ? 'A' : 'C'}
+        </em>
         <Folder size={12} /> {work.project?.name ?? '项目不可用'}
       </div>
       {work.statusReason && <div className="task-card-reason">{work.statusReason}</div>}

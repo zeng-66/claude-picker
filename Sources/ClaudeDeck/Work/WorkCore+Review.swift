@@ -490,4 +490,119 @@ extension WorkCore {
             return .obj(["markdown": .string(text), "fileName": .string(name)])
         }
     }
+
+    // MARK: Turn Checkpoints（检查点查询与一键回退）
+
+    func checkpoints(workId: String) throws -> JSONValue {
+        try read { store in
+            guard store.work(id: workId) != nil else { throw WorkError.notFound("找不到这个 Work") }
+            return .obj([
+                "checkpoints": .array(store.checkpoints(workId: workId).map(\.json)),
+            ])
+        }
+    }
+
+    func revertCheckpoint(workId: String, checkpointId: String, force: Bool = false, requestId: String? = nil) throws -> JSONValue {
+        let context: (work: Work, target: WorkCheckpoint, expectedTree: String?) = try read { store in
+            guard let work = store.work(id: workId) else { throw WorkError.notFound("找不到这个 Work") }
+            guard work.status != .running && work.status != .waitingUser else {
+                throw WorkError.rejected("当前轮次正在执行中，请先停止或等待本轮结束后再回退代码。")
+            }
+            guard let path = work.workspacePath, WorkspaceService.isDirectory(path) else {
+                throw WorkError.unavailable("这个 Work 还没有可用的执行目录")
+            }
+            guard let target = store.checkpoint(id: checkpointId), target.workId == workId else {
+                throw WorkError.notFound("找不到目标检查点")
+            }
+            let expected = store.latestPostCheckpoint(workId: workId)?.treeHash
+            return (work, target, expected)
+        }
+
+        let path = context.work.workspacePath!
+        // 先在后台线程外准备备份快照（仅当当前工作区与目标树不同时才备份 undo）
+        let currentVersion = WorkspaceService.version(of: path)
+        var undoSnap: WorkspaceService.CheckpointSnapshot? = nil
+        let undoSeq: Int = try write { store in
+            try store.nextCheckpointSeq(workId: workId)
+        }
+        if let curTree = currentVersion.tree, curTree != context.target.treeHash, context.target.phase != "undo" {
+            undoSnap = WorkspaceService.createCheckpoint(
+                in: path,
+                workId: workId,
+                seq: undoSeq,
+                label: "回退至「\(context.target.label)」前的自动备份"
+            )
+        }
+
+        let affected = try WorkspaceService.revertToCheckpoint(
+            in: path,
+            targetTree: context.target.treeHash,
+            targetHead: context.target.headCommit,
+            isolation: context.work.isolation,
+            expectedCurrentTree: context.expectedTree,
+            force: force
+        )
+
+        let outcome: JSONValue = try write { store in
+            if let recorded = store.recordedResult(requestId: requestId) { return recorded }
+            guard var work = store.work(id: workId) else { throw WorkError.notFound("找不到这个 Work") }
+            var undoId: String? = nil
+            try store.db.transaction {
+                if let undoSnap {
+                    let saved = try store.insertCheckpoint(
+                        workId: workId,
+                        runId: work.currentRunId,
+                        seq: undoSeq,
+                        phase: "undo",
+                        headCommit: undoSnap.head,
+                        treeHash: undoSnap.tree,
+                        gitRef: undoSnap.gitRef,
+                        label: "回退前自动备份"
+                    )
+                    undoId = saved.id
+                }
+                let fileText = affected.isEmpty
+                    ? "工作区与该快照一致"
+                    : "已还原 \(affected.count) 个文件（\(affected.prefix(12).joined(separator: ", "))）"
+                work.revertedNotice = "[系统同步通知] 用户已将工作目录代码回退至检查点「\(context.target.label)」（tree \(context.target.treeHash.prefix(12))，\(fileText)）。请以磁盘当前最新文件内容为准，重新读取相关文件后再做修改，切勿依赖此前轮次中的旧文件记忆。"
+                try store.save(&work)
+                let summary = "已回退代码至「\(context.target.label)」· \(fileText)"
+                let ev = try store.appendEvent(
+                    workId: workId,
+                    runId: work.currentRunId,
+                    kind: "status",
+                    payload: .obj([
+                        "from": .string(work.status.rawValue),
+                        "to": .string(work.status.rawValue),
+                        "reason": .string(summary),
+                        "checkpointReverted": .bool(true),
+                        "checkpointId": .string(context.target.id),
+                        "undoCheckpointId": .str(undoId),
+                    ])
+                )
+                notify(.event(ev))
+                store.addActivity(
+                    workId: workId,
+                    runId: work.currentRunId,
+                    kind: "checkpoint",
+                    title: "回退代码检查点",
+                    detail: "\(context.target.label) · \(fileText)"
+                )
+            }
+            let res: JSONValue = .obj([
+                "reverted": .bool(true),
+                "checkpointId": .string(context.target.id),
+                "undoCheckpointId": .str(undoId),
+                "affectedCount": .int(affected.count),
+                "affectedFiles": .array(affected.prefix(50).map { .string($0) }),
+            ])
+            store.recordResult(requestId: requestId, method: "checkpoint.revert", result: res)
+            return res
+        }
+        queue.async { [self] in
+            notify(.changed)
+            recordDiffEvidence(workId: workId, runId: context.work.currentRunId)
+        }
+        return outcome
+    }
 }

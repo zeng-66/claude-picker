@@ -25,7 +25,8 @@ macOS 上的 Claude Code 会话浏览器：一个窗口里看到所有项目的�
 | macOS | 14.0 及以上 |
 | 架构 | Apple Silicon（arm64） |
 | Claude Code CLI | **必须先装**，ClaudePicker 通过 login shell 从 `PATH` 调用 `claude` |
-| 已登录 | CLI 需完成登录（`~/.claude/` 下已有会话与凭据） |
+| Antigravity CLI（可选） | 本机安装 `agy`（1.5+）后自动启用 Antigravity 历史会话聚合、终端会话与 ACP Work 执行器 |
+| 已登录 | CLI 需完成登录（`~/.claude/` 或 `~/.gemini/antigravity-cli/` 下已有会话与凭据） |
 
 装 CLI：
 
@@ -97,6 +98,10 @@ open dist/ClaudePicker.app
 | 单击桌宠 | 第二栏终端可见时聚焦终端，否则打开悬浮终端 |
 | 右键桌宠 | 打开当前会话、悬浮输入、挥手、跳一下、桌宠设置、隐藏桌宠 |
 | 悬浮终端拖柄 | 连续缩放；够大时显示真实终端，小尺寸只显示输入框 |
+| 侧栏引擎筛选（全部 / Claude / Antigravity） | 按引擎过滤普通会话与 Work，会话行通过 `C` / `A` 徽标区分来源 |
+| 会话右键「转到 Antigravity / Claude Code 继续」 | 提取四层 `<thread-handoff>` 前情摘要，在同一目录启动另一 CLI 接力续聊 |
+| Work 输入栏左下角「引擎：… ▾」 | 在非运行态将同一条 Work 无缝切换到另一 CLI 执行器，下一轮自动同步前情上下文 |
+| Work 轮次分割线「↺ 回退到此轮前」 | 基于隐藏 Git Ref（`refs/claude-picker/checkpoints/*`）精确还原代码快照，自动备份 `undo` 并通知智能体重读磁盘文件 |
 
 ## 状态栏与 Claude 配置的联动
 

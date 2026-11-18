@@ -5,12 +5,15 @@ enum McpHandlers: BridgeModule {
     static func handle(_ method: String, params: Any?) throws -> BridgeOutcome {
         guard method.hasPrefix("mcp.") else { return .unknown }
         let dict = params as? [String: Any] ?? [:]
-        let service = McpService()
+        let provider = AgentProvider.parse(BridgeSupport.optionalString(dict, "provider"))
+        let service = McpService(provider: provider)
         // 没选项目时用家目录：只看用户级配置
         let projectPath = (BridgeSupport.optionalString(dict, "projectPath")
             .map { ($0 as NSString).expandingTildeInPath }) ?? NSHomeDirectory()
 
         switch method {
+        case "mcp.importFromClaude":
+            return .handled(try service.importFromClaude(projectPath: projectPath))
         case "mcp.list":
             return .handled(try BridgeSupport.encode(service.list(projectPath: projectPath)))
 

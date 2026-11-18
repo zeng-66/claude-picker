@@ -7,7 +7,7 @@ import Foundation
 /// 网页只是命令的发起方：路径、项目身份、状态机条件都在原生侧校验；命令的返回值只表达
 /// 「已接受 / 拒绝 / 冲突」，执行进展通过 `claude-picker:work` 事件推回去。
 enum WorkHandlers: BridgeModule {
-    static let prefixes = ["work.", "attention.", "review.", "evidence.", "delivery.", "tapd.", "source.", "agent.", "draft.", "project."]
+    static let prefixes = ["work.", "attention.", "review.", "evidence.", "delivery.", "tapd.", "source.", "agent.", "draft.", "project.", "checkpoint."]
 
     static func handles(_ method: String) -> Bool { prefixes.contains { method.hasPrefix($0) } }
 
@@ -66,13 +66,26 @@ enum WorkHandlers: BridgeModule {
             request.scope = p["scope"]?.stringValue ?? ""
             request.start = p["start"]?.boolValue ?? false
             request.isolation = p["isolation"]?.text ?? "worktree"
+            request.executor = p["executor"]?.text ?? "claude"
             request.permissionMode = cliMode(p["permissionMode"]?.text)
             request.model = p["model"]?.text
             request.idempotencyKey = p["requestId"]?.text.map { "local:\($0)" }
             if let sessionId = p["adoptSessionId"]?.text {
-                request.adoptSession = WorkCore.AdoptedSession(id: sessionId, cwd: p["adoptCwd"]?.text ?? projectPath)
+                request.adoptSession = WorkCore.AdoptedSession(
+                    id: sessionId,
+                    cwd: p["adoptCwd"]?.text ?? projectPath,
+                    provider: p["adoptProvider"]?.text ?? request.executor
+                )
             }
             return try core.create(request)
+
+        case "work.switchExecutor":
+            return try core.switchExecutor(
+                workId: try text(p, "workId"),
+                executor: try text(p, "executor"),
+                model: p["model"]?.stringValue,
+                permissionMode: cliMode(p["permissionMode"]?.stringValue)
+            )
 
         case "work.start":
             return try core.start(workId: try text(p, "workId"), revision: p["revision"]?.intValue, requestId: p["requestId"]?.text)
@@ -130,6 +143,17 @@ enum WorkHandlers: BridgeModule {
                                          tree: p["tree"]?.text, note: p["note"]?.text, requestId: p["requestId"]?.text)
         case "evidence.runCheck":
             return try core.runCheck(workId: try text(p, "workId"), command: p["command"]?.stringValue ?? "")
+
+        case "checkpoint.list":
+            return try core.checkpoints(workId: try text(p, "workId"))
+
+        case "checkpoint.revert":
+            return try core.revertCheckpoint(
+                workId: try text(p, "workId"),
+                checkpointId: try text(p, "checkpointId"),
+                force: p["force"]?.boolValue ?? false,
+                requestId: p["requestId"]?.text
+            )
 
         // MARK: 交付
         case "delivery.preview":
@@ -291,6 +315,7 @@ enum WorkHandlers: BridgeModule {
             request.scope = p["scope"]?.stringValue ?? ""
             request.start = p["start"]?.boolValue ?? false
             request.isolation = p["isolation"]?.text ?? "worktree"
+            request.executor = p["executor"]?.text ?? "claude"
             request.permissionMode = cliMode(p["permissionMode"]?.text)
             request.model = p["model"]?.text
             request.idempotencyKey = "tapd:\(ref.workspaceId):\(ref.entityType):\(ref.entityId):\(existing.count)"

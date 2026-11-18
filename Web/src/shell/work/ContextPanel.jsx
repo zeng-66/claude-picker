@@ -1,6 +1,7 @@
 // 工作空间右侧的详情栏：任务详情 / 变更文件 / 活动。各标签的数据都属于当前选中的对象，独立滚动。
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArrowCounterClockwise,
   ArrowRight,
   ArrowSquareOut,
   ArrowsClockwise,
@@ -281,8 +282,14 @@ function WorkDetail({ work, review, transcript, home, notify, onOpenFile, onOpen
         </div>
         <div className="environment-row">
           <span>执行器</span>
-          <b>Claude Code</b>
+          <b>{work.executor === 'antigravity' ? 'Antigravity (ACP)' : 'Claude Code'}</b>
         </div>
+        {(transcript?.segments?.length ?? 0) > 1 && (
+          <div className="environment-row">
+            <span>会话接力</span>
+            <b>共 {transcript.segments.length} 段跨引擎执行</b>
+          </div>
+        )}
         {run && (
           <div className="environment-row">
             <span>当前轮次</span>
@@ -391,7 +398,12 @@ function SessionInfo({ active, project, status, home, onOpenGit, onContinueAsWor
         {active ? (
           <>
             <button className="source-box" disabled>
-              <strong>{active.label}</strong>
+              <strong>
+                <em className={`provider-badge ${active.provider ?? 'claude'}`}>
+                  {active.provider === 'antigravity' ? 'A' : 'C'}
+                </em>
+                {active.label}
+              </strong>
               <small>{tildePath(active.cwd, home)}</small>
             </button>
             <p className="context-empty">
@@ -453,6 +465,38 @@ export default function ContextPanel({
   const marker = work ? `${work.revision}:${work.status}:${(work.deliveries ?? []).map((d) => d.status).join(',')}` : '';
   const { data } = useTranscript(work?.id ?? null, marker);
   const { state: review, error: reviewError } = useReviewState(work, marker);
+  const [revertingUndo, setRevertingUndo] = useState(false);
+  const checkpoints = data?.checkpoints ?? [];
+  const latestCheckpoint = checkpoints[checkpoints.length - 1] ?? null;
+  const canUndoRevert =
+    Boolean(work) &&
+    work.status !== 'running' &&
+    work.status !== 'waiting_user' &&
+    latestCheckpoint?.phase === 'undo';
+
+  async function undoLastRevert() {
+    if (!work || !latestCheckpoint || revertingUndo) return;
+    const ok = await confirmAction({
+      title: '撤销上次代码回退？',
+      text: `将恢复到自动备份点「${latestCheckpoint.label}」。`,
+      confirmLabel: '确认恢复',
+      cancelLabel: '取消',
+    });
+    if (!ok) return;
+    setRevertingUndo(true);
+    try {
+      const res = await request(
+        'checkpoint.revert',
+        { workId: work.id, checkpointId: latestCheckpoint.id, requestId: newId() },
+        { timeoutMs: 120000 },
+      );
+      notify(`已恢复回退前的代码（还原 ${res.affectedCount ?? 0} 个文件）`);
+    } catch (cause) {
+      notify(errorText(cause), true);
+    } finally {
+      setRevertingUndo(false);
+    }
+  }
 
   return (
     <>
@@ -491,6 +535,22 @@ export default function ContextPanel({
               相对基线的变更
               {review?.files && <span className="tiny-count">{review.files.length}</span>}
             </div>
+            {checkpoints.length > 0 && (
+              <div className="checkpoint-summary-bar">
+                <span>代码检查点：{checkpoints.length} 个</span>
+                {canUndoRevert && (
+                  <button
+                    type="button"
+                    className="turn-revert-btn"
+                    disabled={revertingUndo}
+                    onClick={undoLastRevert}
+                  >
+                    <ArrowCounterClockwise size={11} />
+                    {revertingUndo ? '恢复中…' : '撤销上次代码回退'}
+                  </button>
+                )}
+              </div>
+            )}
             {reviewError && (
               <div className="pane-note error">
                 <Warning size={14} />

@@ -95,7 +95,9 @@ final class Store: ObservableObject {
     @Published var activePath: String = ""
     @Published var settings: AppSettings = SettingsStore.load()
     @Published var options = ClaudeConfig.loadOptions()
+    @Published var agyOptions = AgyConfig.loadOptions()
     @Published var activeMode: PermissionMode = ClaudeConfig.loadOptions().mode
+    @Published var idleProvider: AgentProvider = SettingsStore.load().defaultProvider
     @Published var usage = UsageCache.load() ?? UsageSnapshot(session: nil, weekly: nil)
     private var usageRetryScheduled = false
     @Published var usageLoading = false
@@ -104,6 +106,9 @@ final class Store: ObservableObject {
     private var hiddenSessions: Set<String>
     /// 新建会话时用户起的名字，优先于 claude 自动生成的标题
     private var customTitles: [String: String]
+    private var sessionProviders: [String: String]
+    private var sessionBranches: [String: String]
+    private var handoffFrom: [String: String]
 
     /// 要把键盘交给终端时回调（打开会话、从树里按 Tab）
     var onFocusTerminal: (() -> Void)?
@@ -120,6 +125,10 @@ final class Store: ObservableObject {
         self.hiddenProjects = Set(o.hiddenProjects)
         self.hiddenSessions = Set(o.hiddenSessions)
         self.customTitles = o.titles
+        self.sessionProviders = o.sessionProviders
+        self.sessionBranches = o.sessionBranches
+        self.handoffFrom = o.handoffFrom
+        AgyModelCatalog.refreshInBackground()
         // 任何状态变化都把快照推给网页；同一轮事件循环里的多次改动合并成一次。
         stateObserver = objectWillChange.sink { [weak self] _ in
             MainActor.assumeIsolated { self?.schedulePush() }
@@ -127,6 +136,12 @@ final class Store: ObservableObject {
     }
 
     // MARK: 快照（网页外壳的唯一数据源）
+
+    var currentRuntimeProvider: AgentProvider {
+        if chatActive { return .claude }
+        if let terminal = active { return terminal.provider }
+        return idleProvider
+    }
 
     func snapshot() -> [String: Any] {
         let projectList: [[String: Any]] = projects.map { project in
@@ -137,7 +152,7 @@ final class Store: ObservableObject {
                 "expanded": project.expanded,
                 "showAll": project.showAll,
                 "sessions": project.sessions.map { session -> [String: Any] in
-                    let mark = key(cwd: session.cwd, sid: session.id)
+                    let mark = key(provider: session.provider, cwd: session.cwd, sid: session.id)
                     return [
                         "id": session.id,
                         "title": session.title,
@@ -146,6 +161,8 @@ final class Store: ObservableObject {
                         "time": relativeText(session.date),
                         "running": runningKeys.contains(mark),
                         "unread": unreadKeys.contains(mark),
+                        "provider": session.provider.rawValue,
+                        "handoffFrom": handoffFrom[session.id] ?? NSNull(),
                     ]
                 },
             ]
@@ -161,6 +178,7 @@ final class Store: ObservableObject {
                 "label": activeLabel,
                 "busy": false,
                 "chat": true,
+                "provider": AgentProvider.claude.rawValue,
             ] as [String: Any]
         } else if let terminal = active {
             let owner = projectIndex(owning: terminal.cwd).map { projects[$0].path } ?? terminal.cwd
@@ -170,6 +188,7 @@ final class Store: ObservableObject {
                 "projectPath": owner,
                 "label": activeLabel,
                 "busy": runningKeys.contains(activeKey),
+                "provider": terminal.provider.rawValue,
             ] as [String: Any]
         }
 
@@ -177,22 +196,74 @@ final class Store: ObservableObject {
             items.map { ["id": id($0), "label": label($0)] }
         }
         // 用启动参数进到「跳过确认」之类不在循环里的模式时，也要能显示当前值
-        var modes = Self.modeCycle
-        if !modes.contains(activeMode) { modes.append(activeMode) }
+        var claudeModes = Self.modeCycle
+        if !claudeModes.contains(activeMode) { claudeModes.append(activeMode) }
+        let claudeModels = choices(ModelChoice.allCases, id: \.rawValue, label: \.label)
+        let agyModes = choices(AgyMode.allCases, id: \.rawValue, label: \.label)
+        let agyModels = AgyModelCatalog.entries().map { ["id": $0.id, "label": $0.label] }
+        let efforts = choices(EffortChoice.allCases, id: \.rawValue, label: \.label)
+
+        let rtProvider = currentRuntimeProvider
+        let runtimeDict: [String: Any]
+        switch rtProvider {
+        case .claude:
+            runtimeDict = [
+                "provider": AgentProvider.claude.rawValue,
+                "mode": activeMode.rawValue,
+                "model": options.model.rawValue,
+                "effort": options.effort.rawValue,
+                "fast": options.fast,
+                "supportsFast": true,
+                "hotSwitchable": true,
+                "modes": choices(claudeModes, id: \.rawValue, label: \.label),
+                "models": claudeModels,
+                "efforts": efforts,
+                "catalogs": [
+                    "claude": [
+                        "modes": choices(claudeModes, id: \.rawValue, label: \.label),
+                        "models": claudeModels,
+                        "defaultMode": options.mode.rawValue,
+                    ],
+                    "antigravity": [
+                        "modes": agyModes,
+                        "models": agyModels,
+                        "defaultMode": agyOptions.mode.rawValue,
+                    ],
+                ],
+            ]
+        case .antigravity:
+            runtimeDict = [
+                "provider": AgentProvider.antigravity.rawValue,
+                "mode": agyOptions.mode.rawValue,
+                "model": agyOptions.model,
+                "effort": agyOptions.effort.rawValue,
+                "fast": false,
+                "supportsFast": false,
+                "hotSwitchable": false,
+                "modes": agyModes,
+                "models": agyModels,
+                "efforts": efforts,
+                "catalogs": [
+                    "claude": [
+                        "modes": choices(claudeModes, id: \.rawValue, label: \.label),
+                        "models": claudeModels,
+                        "defaultMode": options.mode.rawValue,
+                    ],
+                    "antigravity": [
+                        "modes": agyModes,
+                        "models": agyModels,
+                        "defaultMode": agyOptions.mode.rawValue,
+                    ],
+                ],
+            ]
+        }
 
         return [
             "home": NSHomeDirectory(),
             "projects": projectList,
             "active": activeInfo,
-            "runtime": [
-                "mode": activeMode.rawValue,
-                "model": options.model.rawValue,
-                "effort": options.effort.rawValue,
-                "fast": options.fast,
-                "modes": choices(modes, id: \.rawValue, label: \.label),
-                "models": choices(ModelChoice.allCases, id: \.rawValue, label: \.label),
-                "efforts": choices(EffortChoice.allCases, id: \.rawValue, label: \.label),
-            ] as [String: Any],
+            "providers": CliBinaryLocator.diagnostics(),
+            "runtime": runtimeDict,
             "settings": [
                 "appFontSize": settings.appFontSize,
                 "termFontSize": settings.termFontSize,
@@ -208,6 +279,9 @@ final class Store: ObservableObject {
                 "contextWidth": settings.contextWidth,
                 "navigation": settings.navigation.map(\.json),
                 "pet": settings.pet.json,
+                "defaultProvider": settings.defaultProvider.rawValue,
+                "scanAntigravity": settings.scanAntigravity,
+                "providerFilter": settings.providerFilter,
             ] as [String: Any],
             "usage": usageInfo(),
             // macOS 原生：桌宠在桌面悬浮窗里显示，主窗口不再画窗口内桌宠。
@@ -295,13 +369,46 @@ final class Store: ObservableObject {
     /// 打开会话时让 Git 工作台跟到该会话：切到会话所在项目；会话记录的分支与仓库当前分支不同时，
     /// 工作区干净且同仓库没有别的会话在跑才自动签出，否则只提示、不动仓库
     /// （同一仓库的会话共用一个工作目录，强切分支会改掉正在跑的会话脚下的文件）。
+    private func recordedBranch(for session: Session) -> String? {
+        if session.provider == .claude, let url = session.fileURL, let b = SessionScanner.lastGitBranch(url) {
+            return b
+        }
+        return sessionBranches[session.id]
+    }
+
+    private func recordCurrentBranch(cwd: String, sid: String) {
+        guard !sid.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            p.arguments = ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"]
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            p.standardInput = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return }
+            p.waitUntilExit()
+            guard p.terminationStatus == 0 else { return }
+            let branch = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !branch.isEmpty, branch != "HEAD" else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.sessionBranches[sid] != branch else { return }
+                self.sessionBranches[sid] = branch
+                self.persistTree()
+            }
+        }
+    }
+
     func followSessionBranch(cwd: String, sid: String?) {
         guard settings.thirdPaneVisible else { return }
         let projectPath = projectIndex(owning: cwd).map { projects[$0].path } ?? cwd
         // 独立工作树里的会话有自己的检出目录，主工作区不需要、也不能跟着切到它的分支。
         let inWorktree = resolvedPath(projectPath) != resolvedPath(cwd)
-        let sessionBranch: String? = inWorktree ? nil : sid.flatMap { session(id: $0)?.fileURL }
-            .flatMap { SessionScanner.lastGitBranch($0) }
+        let sessionBranch: String? = inWorktree ? nil : sid.flatMap { id in
+            if let hit = session(id: id) { return recordedBranch(for: hit) }
+            return sessionBranches[id]
+        }
         let openingKey = key(cwd: cwd, sid: sid ?? "")
         let otherRunning = runningKeys.contains { k in
             k != openingKey && (panes[k]?.cwd == cwd)
@@ -352,8 +459,7 @@ final class Store: ObservableObject {
         guard settings.followSessionBranch else { return nil }
         guard let pi = projectIndex(path: projectPath) else { return 0 }
         let matches = projects[pi].sessions.enumerated().filter { _, session in
-            guard let url = session.fileURL else { return false }
-            return SessionScanner.lastGitBranch(url) == branch
+            return recordedBranch(for: session) == branch
         }
         guard let first = matches.first else { return 0 }
         if !projects[pi].expanded { projects[pi].expanded = true }
@@ -412,73 +518,115 @@ final class Store: ObservableObject {
     func openNew(_ i: Int) {
         guard projects.indices.contains(i) else { return }
         let p = projects[i]
-        open(cwd: p.path, sid: nil, label: "新建 · \(p.title)")
+        open(cwd: p.path, sid: nil, label: "新建 · \(p.title)", provider: settings.defaultProvider)
     }
 
-    /// 多终端会话 key：同一目录下每个 session 各占一个终端
+    /// 多终端会话 key：Claude 保持 `<realpath>|<sid>` 向后兼容，其它引擎带 `<provider>|<realpath>|<sid>` 防冲突。
+    func key(provider: AgentProvider, cwd: String, sid: String) -> String {
+        let base = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path + "|" + sid
+        return provider == .claude ? base : "\(provider.rawValue)|\(base)"
+    }
+
     func key(cwd: String, sid: String) -> String {
-        URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path + "|" + sid
+        let p = session(id: sid)?.provider ?? sessionProviders[sid].map(AgentProvider.parse) ?? .claude
+        return key(provider: p, cwd: cwd, sid: sid)
+    }
+
+    func providerOfSession(id: String?) -> AgentProvider {
+        guard let id, !id.isEmpty else { return settings.defaultProvider }
+        if let hit = session(id: id) { return hit.provider }
+        if let raw = sessionProviders[id] { return AgentProvider.parse(raw) }
+        return .claude
     }
 
     /// 打开（或切到）一个会话。`sid == nil` 是新建：`name` 作为会话名，`prompt` 作为首条提示词。
     @discardableResult
-    func open(cwd: String, sid: String?, label: String, name: String? = nil, prompt: String? = nil) -> String {
+    func open(cwd: String, sid: String?, label: String, name: String? = nil, prompt: String? = nil,
+              provider: AgentProvider? = nil, handoffSource: String? = nil) -> String {
+        let targetProvider = provider ?? (sid != nil ? providerOfSession(id: sid) : idleProvider)
         // 同一个 CLI 会话只能有一个持有者：Work 执行器正在驱动它时，不再用终端或图形聊天打开。
         if let sid, SessionOwnership.shared.heldByExecutor(sid) {
             Bridge.emit("claude-picker:command", detail: ["name": "sessionHeldByWork", "sessionId": sid])
             return sid
         }
         if settings.interactionMode == .chat {
-            openChat(cwd: cwd, sid: sid, label: label, name: name)
-            return sid ?? ""
+            if targetProvider.supportsGraphicalChat {
+                openChat(cwd: cwd, sid: sid, label: label, name: name)
+                return sid ?? ""
+            } else {
+                // Swttch 仅支持 Claude：非 Claude 会话自动降级为原生终端并给出轻提示。
+                chatActive = false
+                chatTarget = nil
+                Bridge.emit("claude-picker:command", detail: [
+                    "name": "chatFallbackForProvider",
+                    "provider": targetProvider.label,
+                ])
+            }
         }
-        // 新建会话：先预生成 session id，会话一建立就有稳定标识，也能立刻插到列表最前
-        let newId = sid == nil ? UUID().uuidString.lowercased() : nil
+        // Claude 可通过 --session-id 预生成稳定 ID；Antigravity 由 CLI 自己分配 ID，先用占位键启动并在落盘后自动晋升绑定。
+        let startedAt = Date()
+        let newId: String? = sid == nil
+            ? (targetProvider == .antigravity ? "pending-agy-\(UUID().uuidString.lowercased())" : UUID().uuidString.lowercased())
+            : nil
         let sessionId = sid ?? newId ?? ""
-        let k = key(cwd: cwd, sid: sessionId)
+        sessionProviders[sessionId] = targetProvider.rawValue
+        if let handoffSource, !handoffSource.isEmpty {
+            handoffFrom[sessionId] = handoffSource
+        }
+        let k = key(provider: targetProvider, cwd: cwd, sid: sessionId)
         if panes[k] == nil {
-            let t = TerminalSession(cwd: cwd, resumeId: sid, sessionId: newId,
+            let cliSessionId = targetProvider == .claude ? newId : nil
+            let t = TerminalSession(cwd: cwd, resumeId: sid, sessionId: cliSessionId,
                                     name: name, prompt: prompt,
+                                    provider: targetProvider,
                                     options: options,
+                                    agyOptions: agyOptions,
                                     fontName: settings.termFontName,
                                     fontSize: settings.termFontSize)
             t.onExit = { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    SessionOwnership.shared.setTerminal(sessionId, held: false)
-                    self.runningKeys.remove(k)
-                    self.refreshSession(cwd: cwd, sid: sessionId)
+                    let currentId = t.boundConversationId ?? sessionId
+                    let currentKey = self.key(provider: targetProvider, cwd: cwd, sid: currentId)
+                    SessionOwnership.shared.setTerminal(currentId, held: false)
+                    self.runningKeys.remove(currentKey)
+                    self.refreshSession(cwd: cwd, sid: currentId, provider: targetProvider)
                 }
             }
             // 行首转圈跟随任务状态，后台任务完成后才标记未读。
             t.onBusy = { [weak self, weak t] busy in
                 MainActor.assumeIsolated {
                     guard let self else { return }
+                    let currentId = t?.boundConversationId ?? sessionId
+                    let currentKey = self.key(provider: targetProvider, cwd: cwd, sid: currentId)
                     if busy {
-                        self.runningKeys.insert(k)
+                        self.runningKeys.insert(currentKey)
                     } else {
-                        self.runningKeys.remove(k)
-                        self.refreshSession(cwd: cwd, sid: sessionId)
-                        self.scheduleTitleRefresh(cwd: cwd, sid: sessionId)
-                        if self.activeKey != k, t?.awayOutput == true {
-                            self.unreadKeys.insert(k)
+                        self.runningKeys.remove(currentKey)
+                        self.refreshSession(cwd: cwd, sid: currentId, provider: targetProvider)
+                        self.scheduleTitleRefresh(cwd: cwd, sid: currentId)
+                        if self.activeKey != currentKey, t?.awayOutput == true {
+                            self.unreadKeys.insert(currentKey)
                         }
                     }
                 }
             }
             panes[k] = t
             SessionOwnership.shared.setTerminal(sessionId, held: true)
+            if targetProvider == .antigravity, let placeholder = newId {
+                scheduleAgySessionBind(cwd: cwd, placeholderId: placeholder, since: startedAt, terminal: t)
+            }
         }
         if let newId {
             if let name, !name.isEmpty { customTitles[newId] = name }
-            insertNewSession(cwd: cwd, id: newId, title: name)
+            insertNewSession(cwd: cwd, id: newId, title: name, provider: targetProvider)
         }
         unreadKeys.remove(k)
         if let owner = projectIndex(owning: cwd), !projects[owner].expanded {
             projects[owner].expanded = true
             persistTree()
         }
-        // 切换视图只抑制重绘，任务状态持续跟随 Claude 的忙闲信号。
+        // 切换视图只抑制重绘，任务状态持续跟随 CLI 的忙闲信号。
         if activeKey != k, let prev = panes[activeKey] { prev.noteDetached() }
         panes[k]?.noteActivated()
         activeKey = k
@@ -486,11 +634,104 @@ final class Store: ObservableObject {
         activeLabel = label
         activePath = cwd
         activeMode = options.mode
+        idleProvider = targetProvider
+        recordCurrentBranch(cwd: cwd, sid: sessionId)
         onActiveChanged?()
-        refreshSession(cwd: cwd, sid: sessionId)
+        refreshSession(cwd: cwd, sid: sessionId, provider: targetProvider)
         if settings.followSessionBranch { followSessionBranch(cwd: cwd, sid: sid) }
         onFocusTerminal?()
         return sessionId
+    }
+
+    /// Antigravity 新建终端启动后，轮询几次索引把占位 ID 替换为 CLI 真实生成的 conversationId。
+    private func scheduleAgySessionBind(cwd: String, placeholderId: String, since: Date, terminal: TerminalSession) {
+        let knownIds = Set(projects.flatMap(\.sessions).map(\.id))
+        for delay in [2.0, 5.0, 12.0, 25.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak terminal] in
+                MainActor.assumeIsolated {
+                    guard let self, let terminal, terminal.alive, terminal.boundConversationId == nil else { return }
+                    DispatchQueue.global(qos: .utility).async { [weak self, weak terminal] in
+                        guard let found = AgySessionScanner.latestConversation(in: cwd, since: since),
+                              !knownIds.contains(found.id) else { return }
+                        Task { @MainActor [weak self, weak terminal] in
+                            guard let self, let terminal, terminal.boundConversationId == nil else { return }
+                            self.promotePlaceholderSession(cwd: cwd, from: placeholderId, to: found, terminal: terminal)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func promotePlaceholderSession(cwd: String, from placeholderId: String, to real: Session, terminal: TerminalSession) {
+        let oldKey = key(provider: .antigravity, cwd: cwd, sid: placeholderId)
+        let newKey = key(provider: .antigravity, cwd: real.cwd, sid: real.id)
+        terminal.boundConversationId = real.id
+        if let pane = panes.removeValue(forKey: oldKey) { panes[newKey] = pane }
+        SessionOwnership.shared.setTerminal(placeholderId, held: false)
+        SessionOwnership.shared.setTerminal(real.id, held: true)
+        if runningKeys.remove(oldKey) != nil { runningKeys.insert(newKey) }
+        if unreadKeys.remove(oldKey) != nil { unreadKeys.insert(newKey) }
+        if let custom = customTitles.removeValue(forKey: placeholderId) { customTitles[real.id] = custom }
+        if let branch = sessionBranches.removeValue(forKey: placeholderId) { sessionBranches[real.id] = branch }
+        if let handoff = handoffFrom.removeValue(forKey: placeholderId) { handoffFrom[real.id] = handoff }
+        sessionProviders.removeValue(forKey: placeholderId)
+        sessionProviders[real.id] = AgentProvider.antigravity.rawValue
+
+        for i in projects.indices {
+            if let j = projects[i].sessions.firstIndex(where: { $0.id == placeholderId }) {
+                projects[i].sessions[j] = retitled(real)
+                break
+            }
+        }
+        if activeKey == oldKey {
+            activeKey = newKey
+            activeSessionId = real.id
+            activeLabel = retitled(real).title
+        }
+        persistTree()
+    }
+
+    /// 跨 CLI 接力续聊：从原会话提取四层 `<thread-handoff>` 上下文信封，在同目录启动目标引擎新会话。
+    func handoff(sessionId: String, sourceProvider: AgentProvider?, targetProvider: AgentProvider,
+                 projectPath: String, cwd: String) throws -> [String: String] {
+        guard CliBinaryLocator.find(targetProvider) != nil else {
+            throw GitError.commandFailed("本机未检测到 \(targetProvider.label)（\(targetProvider.commandName)），请先安装后再接力。", recoverable: false)
+        }
+        let existing = session(id: sessionId)
+        let srcProvider = sourceProvider ?? existing?.provider ?? providerOfSession(id: sessionId)
+        let resolvedCwd = existing?.cwd ?? (cwd.isEmpty ? projectPath : cwd)
+        guard !resolvedCwd.isEmpty else {
+            throw GitError.commandFailed("缺少会话工作目录，无法执行跨引擎接力", recoverable: false)
+        }
+        let fileURL: URL? = existing?.fileURL ?? (
+            srcProvider == .claude
+                ? SessionScanner.find(id: sessionId)?.fileURL
+                : AgySessionScanner.find(id: sessionId)?.fileURL
+        )
+        let baseTitle = existing?.title ?? "接力会话"
+        let envelope = HandoffBuilder.fromSessionFile(
+            sourceProvider: srcProvider,
+            targetProvider: targetProvider,
+            title: baseTitle,
+            cwd: resolvedCwd,
+            fileURL: fileURL
+        )
+        let newTitle = "\(baseTitle)"
+        let newId = open(
+            cwd: resolvedCwd,
+            sid: nil,
+            label: newTitle,
+            name: newTitle,
+            prompt: envelope,
+            provider: targetProvider,
+            handoffSource: "\(srcProvider.shortLabel) · \(baseTitle)"
+        )
+        return [
+            "sessionId": newId,
+            "cwd": resolvedCwd,
+            "provider": targetProvider.rawValue,
+        ]
     }
 
     // MARK: 图形聊天
@@ -584,7 +825,7 @@ final class Store: ObservableObject {
         }
     }
 
-    /// 重命名会话。`title` 为空 = 去掉自定义名字，回到 Claude 根据对话生成的标题。
+    /// 重命名会话。`title` 为空 = 去掉自定义名字，回到 CLI 根据对话生成的标题。
     @discardableResult
     func renameSession(id: String, title: String) -> Bool {
         guard let p = projects.firstIndex(where: { $0.sessions.contains { $0.id == id } }),
@@ -594,17 +835,19 @@ final class Store: ObservableObject {
         let display: String
         if name.isEmpty {
             customTitles.removeValue(forKey: id)
-            let parsed = current.fileURL.flatMap { SessionScanner.parse($0) }
+            let parsed: Session? = current.provider == .claude
+                ? current.fileURL.flatMap { SessionScanner.parse($0) }
+                : AgySessionScanner.find(id: id)
             display = parsed?.title ?? current.summary ?? "新建会话"
         } else {
             customTitles[id] = name
             display = name
         }
         projects[p].sessions[s] = Session(id: id, cwd: current.cwd, title: display, summary: current.summary,
-                                          date: current.date, fileURL: current.fileURL)
+                                          date: current.date, fileURL: current.fileURL, provider: current.provider)
         if activeSessionId == id { activeLabel = display }
         persistTree()
-        if name.isEmpty { refreshSession(cwd: current.cwd, sid: id) }
+        if name.isEmpty { refreshSession(cwd: current.cwd, sid: id, provider: current.provider) }
         return true
     }
 
@@ -661,12 +904,12 @@ final class Store: ObservableObject {
     }
 
     /// 新建会话插到所属项目会话列表最前（tree.json 存的也是这个顺序 → 重启后仍在最前）
-    private func insertNewSession(cwd: String, id: String, title: String?) {
+    private func insertNewSession(cwd: String, id: String, title: String?, provider: AgentProvider = .claude) {
         guard let i = projectIndex(owning: cwd) else { return }
         guard !projects[i].sessions.contains(where: { $0.id == id }) else { return }
         let s = Session(id: id, cwd: resolvedPath(cwd),
                         title: title.flatMap { $0.isEmpty ? nil : $0 } ?? "新建会话",
-                        summary: nil, date: Date())
+                        summary: nil, date: Date(), provider: provider)
         projects[i].sessions.insert(s, at: 0)
         projects[i].expanded = true
         persistTree()
@@ -676,22 +919,32 @@ final class Store: ObservableObject {
     private func retitled(_ session: Session) -> Session {
         guard let custom = customTitles[session.id], custom != session.title else { return session }
         return Session(id: session.id, cwd: session.cwd, title: custom, summary: session.summary,
-                       date: session.date, fileURL: session.fileURL)
+                       date: session.date, fileURL: session.fileURL, provider: session.provider)
     }
 
     /// 打开历史会话或结束一轮任务后重新读取元数据，避免一直展示启动时的快照。
-    func refreshSession(cwd: String, sid: String) {
-        let sessionKey = key(cwd: cwd, sid: sid)
-        let source = projects.flatMap(\.sessions).first { key(cwd: $0.cwd, sid: $0.id) == sessionKey }?.fileURL
+    func refreshSession(cwd: String, sid: String, provider: AgentProvider? = nil) {
+        guard !sid.hasPrefix("pending-agy-") else { return }
+        let targetProvider = provider ?? providerOfSession(id: sid)
+        let sessionKey = key(provider: targetProvider, cwd: cwd, sid: sid)
+        let source = projects.flatMap(\.sessions).first {
+            key(provider: $0.provider, cwd: $0.cwd, sid: $0.id) == sessionKey
+        }?.fileURL
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let updated = source.flatMap { SessionScanner.parse($0) } ?? SessionScanner.find(id: sid)
+            let updated: Session?
+            switch targetProvider {
+            case .claude:
+                updated = source.flatMap { SessionScanner.parse($0) } ?? SessionScanner.find(id: sid)
+            case .antigravity:
+                updated = AgySessionScanner.find(id: sid)
+            }
             guard let updated else { return }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 for i in self.projects.indices {
                     guard let j = self.projects[i].sessions.firstIndex(where: {
-                        self.key(cwd: $0.cwd, sid: $0.id) == sessionKey
-                    }), self.key(cwd: updated.cwd, sid: updated.id) == sessionKey,
+                        self.key(provider: $0.provider, cwd: $0.cwd, sid: $0.id) == sessionKey
+                    }), self.key(provider: updated.provider, cwd: updated.cwd, sid: updated.id) == sessionKey,
                     updated.date >= self.projects[i].sessions[j].date else { continue }
                     let fresh = self.retitled(updated)
                     if self.projects[i].sessions[j] != fresh { self.projects[i].sessions[j] = fresh }
@@ -760,10 +1013,11 @@ final class Store: ObservableObject {
                 return
             }
             // 进程已退出：带着这条提示词恢复同一个会话
-            let cwd = terminal.cwd, sid = activeSessionId, label = activeLabel
+            let cwd = terminal.cwd, sid = activeSessionId, label = activeLabel, prov = terminal.provider
             panes.removeValue(forKey: activeKey)
             activeKey = ""
-            open(cwd: cwd, sid: sid.isEmpty ? nil : sid, label: label, prompt: text)
+            let resumeSid = sid.isEmpty || sid.hasPrefix("pending-agy-") ? nil : sid
+            open(cwd: cwd, sid: resumeSid, label: label, prompt: text, provider: prov)
             return
         }
         let candidates = [projectPath, activePath.isEmpty ? nil : activePath]
@@ -773,7 +1027,7 @@ final class Store: ObservableObject {
             return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
         } ?? NSHomeDirectory()
         let title = projectIndex(path: target).map { projects[$0].title } ?? (target as NSString).lastPathComponent
-        open(cwd: target, sid: nil, label: "新建 · \(title)", prompt: text)
+        open(cwd: target, sid: nil, label: "新建 · \(title)", prompt: text, provider: idleProvider)
     }
 
     /// 会话刚起来的头一两秒还不接受输入，稍后重试几次。
@@ -792,9 +1046,36 @@ final class Store: ObservableObject {
 
     /// 当前会话最近一次请求的上下文用量；没有会话或还没产生过请求时各项为 0。
     func contextInfo() -> [String: Any] {
+        let rtProvider = currentRuntimeProvider
+        if rtProvider == .antigravity {
+            let modelText = AgyModelCatalog.displayLabel(for: agyOptions.model)
+            var info: [String: Any] = [
+                "sessionId": activeSessionId.isEmpty ? NSNull() : activeSessionId,
+                "provider": AgentProvider.antigravity.rawValue,
+                "model": modelText,
+                "used": 0,
+                "total": 1_048_576,
+                "parts": [[String: Any]](),
+            ]
+            guard !activeSessionId.isEmpty, !activeSessionId.hasPrefix("pending-agy-") else { return info }
+            let file = session(id: activeSessionId)?.fileURL ?? AgySessionScanner.transcriptURL(for: activeSessionId)
+            guard FileManager.default.fileExists(atPath: file.path),
+                  let usage = AgyContextUsage.read(file) else { return info }
+            info["model"] = usage.model.isEmpty ? modelText : AgyModelCatalog.displayLabel(for: usage.model)
+            info["used"] = usage.used
+            info["total"] = usage.windowTotal
+            info["parts"] = [
+                ["label": "缓存命中", "value": usage.cacheRead],
+                ["label": "新增输入", "value": usage.input],
+                ["label": "模型输出", "value": usage.output],
+            ]
+            return info
+        }
+
         let configured = (ClaudeConfig.read()["model"] as? String)
         var info: [String: Any] = [
             "sessionId": activeSessionId.isEmpty ? NSNull() : activeSessionId,
+            "provider": AgentProvider.claude.rawValue,
             "model": options.model.label,
             "used": 0,
             "total": 200_000,
@@ -885,6 +1166,9 @@ final class Store: ObservableObject {
         o.hiddenProjects = Array(hiddenProjects)
         o.hiddenSessions = Array(hiddenSessions)
         o.titles = customTitles
+        o.sessionProviders = sessionProviders
+        o.sessionBranches = sessionBranches
+        o.handoffFrom = handoffFrom
         TreeOrderStore.save(o)
     }
 
@@ -933,6 +1217,13 @@ final class Store: ObservableObject {
         if let v = number("contextWidth") { next.contextWidth = min(max(v, 290), 520) }
         if let v = NavigationItem.parse(patch["navigation"]) { next.navigation = v }
         if let v = patch["pet"] as? [String: Any] { next.pet = next.pet.merging(v) }
+        if let raw = patch["defaultProvider"] as? String {
+            next.defaultProvider = AgentProvider.parse(raw)
+        }
+        if let v = flag("scanAntigravity") { next.scanAntigravity = v }
+        if let raw = patch["providerFilter"] as? String, ["all", "claude", "antigravity"].contains(raw) {
+            next.providerFilter = raw
+        }
         if let raw = patch["interactionMode"] as? String, let mode = InteractionMode(rawValue: raw),
            mode != settings.interactionMode {
             // 切换会结束另一种方式下的会话，单独确认；其余设置照常保存。
@@ -942,8 +1233,16 @@ final class Store: ObservableObject {
         }
         guard next != settings else { return }
         let fontChanged = next.termFontSize != settings.termFontSize
+        let scanChanged = next.scanAntigravity != settings.scanAntigravity
+        let defaultProviderChanged = next.defaultProvider != settings.defaultProvider
         settings = next
         SettingsStore.save(next)
+        if defaultProviderChanged && active == nil && !chatActive {
+            idleProvider = next.defaultProvider
+        }
+        if scanChanged {
+            projects = buildProjects()
+        }
         if fontChanged {
             for t in panes.values {
                 t.applyFont(fontName: next.termFontName, fontSize: next.termFontSize)
@@ -1018,8 +1317,51 @@ final class Store: ObservableObject {
         active?.send("/fast\n")
     }
 
-    /// 网页输入区的四项运行参数。未知的键或取值直接忽略。
+    /// 网页输入区的运行参数（按当前激活引擎或待建引擎路由）。未知的键或取值直接忽略。
     func applyRuntime(key: String, value: Any?) {
+        if key == "provider", let raw = value as? String {
+            let next = AgentProvider.parse(raw)
+            idleProvider = next
+            return
+        }
+        if currentRuntimeProvider == .antigravity {
+            switch key {
+            case "mode":
+                if let raw = value as? String, let m = AgyMode(rawValue: raw), agyOptions.mode != m {
+                    agyOptions.mode = m
+                    AgyConfig.setMode(m)
+                    if active?.provider == .antigravity, active?.alive == true {
+                        Bridge.emit("claude-picker:command", detail: [
+                            "name": "runtimeSavedNextLaunch",
+                            "text": "模式已保存，将在新会话或重连后生效",
+                        ])
+                    }
+                }
+            case "model":
+                if let raw = value as? String, !raw.isEmpty {
+                    let norm = AgyModelCatalog.normalizeId(raw)
+                    if agyOptions.model != norm {
+                        agyOptions.model = norm
+                        AgyConfig.setModel(norm)
+                        if active?.provider == .antigravity {
+                            active?.send("/model \(AgyModelCatalog.displayLabel(for: norm))\n")
+                        }
+                    }
+                }
+            case "effort":
+                if let raw = value as? String, let e = EffortChoice(rawValue: raw), agyOptions.effort != e {
+                    agyOptions.effort = e
+                    AgyConfig.setEffort(e)
+                    if active?.provider == .antigravity {
+                        active?.send("/effort \(e.rawValue)\n")
+                    }
+                }
+            default:
+                break
+            }
+            return
+        }
+
         switch key {
         case "mode":
             if let raw = value as? String, let mode = PermissionMode(rawValue: raw) { cycleTo(mode) }
@@ -1034,11 +1376,13 @@ final class Store: ObservableObject {
         }
     }
 
-    /// 从磁盘重读四项（窗口重新激活时用，避免外部改动不同步）
+    /// 从磁盘重读配置（窗口重新激活时用，避免外部改动不同步）
     func reloadClaudeOptions() {
         let o = ClaudeConfig.loadOptions()
         if options != o { options = o }
         if active == nil, activeMode != o.mode { activeMode = o.mode }
+        let agy = AgyConfig.loadOptions()
+        if agyOptions != agy { agyOptions = agy }
     }
 
     // MARK: 用量
@@ -1494,7 +1838,12 @@ if CommandLine.arguments.contains("--source-mcp") {
 }
 
 func buildProjects() -> [Project] {
-    let rawMap = SessionScanner.scan()
+    var rawMap = SessionScanner.scan()
+    if SettingsStore.load().scanAntigravity {
+        for (cwd, agySessions) in AgySessionScanner.scan() {
+            rawMap[cwd, default: []].append(contentsOf: agySessions)
+        }
+    }
     let home = NSHomeDirectory()
     // 被用户删除的目录 / 会话不再出现
     let ord = TreeOrderStore.load()
@@ -1508,10 +1857,10 @@ func buildProjects() -> [Project] {
         let kstd = WorktreeLayout.owner(of: URL(fileURLWithPath: k).resolvingSymlinksInPath().path)
         guard !hiddenP.contains(kstd) else { continue }
         let kept = v.filter { !hiddenS.contains($0.id) }.map { session -> Session in
-            // 用户新建会话时起的名字优先于 claude 自动生成的标题
+            // 用户新建会话时起的名字优先于 CLI 自动生成的标题
             guard let custom = ord.titles[session.id] else { return session }
             return Session(id: session.id, cwd: session.cwd, title: custom, summary: session.summary,
-                           date: session.date, fileURL: session.fileURL)
+                           date: session.date, fileURL: session.fileURL, provider: session.provider)
         }
         if !kept.isEmpty { map[kstd, default: []].append(contentsOf: kept) }
     }

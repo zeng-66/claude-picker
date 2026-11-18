@@ -36,13 +36,52 @@ const PAGES = [
   ['updates', '版本更新', Info],
 ];
 
-function Appearance({ settings, capacity, onChange, notify }) {
+function Appearance({ settings, providers = [], capacity, onChange, notify }) {
   const [slots, setSlots] = useState(capacity.slots);
   useEffect(() => setSlots(capacity.slots), [capacity.slots]);
   return (
     <>
       <h3>界面与会话</h3>
       <p>这些偏好即时生效，不影响正在执行的 Work。</p>
+      <div className="field" role="group" aria-label="CLI 引擎">
+        CLI 引擎
+        {providers.length > 0 && (
+          <div className="cli-status-list">
+            {providers.map((prov) => (
+              <div key={prov.id} className="cli-status-row">
+                {prov.available ? <CheckCircle size={13} className="green" /> : <XCircle size={13} className="red" />}
+                <b>{prov.label}</b>
+                <code>{prov.available ? (prov.path ?? prov.command) : `${prov.command}（未安装）`}</code>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="segmented" style={{ marginTop: 6 }}>
+          {[
+            ['claude', '默认新建：Claude Code'],
+            ['antigravity', '默认新建：Antigravity'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={(settings.defaultProvider ?? 'claude') === value ? 'chosen' : ''}
+              onClick={() => onChange({ defaultProvider: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="follow-session-setting" style={{ marginTop: 8 }}>
+          <span>扫描并聚合 Antigravity 历史会话（~/.gemini/antigravity-cli）</span>
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label="扫描 Antigravity 历史会话"
+            checked={settings.scanAntigravity !== false}
+            onChange={(event) => onChange({ scanAntigravity: event.target.checked })}
+          />
+        </label>
+      </div>
       <label className="font-slider">
         界面字号
         <input
@@ -792,6 +831,7 @@ function Agent({ notify }) {
 export default function SettingsModal({
   initialPage,
   settings,
+  providers = [],
   capacity,
   projects,
   notify,
@@ -834,7 +874,15 @@ export default function SettingsModal({
         </nav>
         <div className="settings-detail">
           {page === 'updates' && <VersionUpdates />}
-          {page === 'appearance' && <Appearance settings={settings} capacity={capacity} onChange={onChange} notify={notify} />}
+          {page === 'appearance' && (
+            <Appearance
+              settings={settings}
+              providers={providers}
+              capacity={capacity}
+              onChange={onChange}
+              notify={notify}
+            />
+          )}
           {page === 'navigation' && <NavigationSettings navigation={navigation} onChange={onNavigationChange} />}
           {page === 'pet' && (
             <PetSettings settings={settings.pet} onChange={(patch) => onChange({ pet: { ...settings.pet, ...patch } })} />

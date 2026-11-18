@@ -834,3 +834,20 @@ macOS 上桌宠改为整个桌面可见的透明悬浮窗（`Sources/ClaudeDeck/
 
 验证：`swift build`、`vite build` 通过；Work 回归 191 项、会话 / 终端 / 桥接回归通过；无头 Chrome 检查桌宠页面与窗口内气泡；开发包启动后用 CGWindowList 确认悬浮窗在 floating 层级显示于其它 App 之上、背景透明，主窗口不再显示窗口内桌宠。透明区域点击穿透、拖动跨屏、全屏 App 旁显示需要实机操作确认。
 
+### 2026-11-18 多引擎共用会话架构与 Antigravity CLI 集成
+
+围绕「Shared Thread + Driver/Adapter 分层 + Turn Checkpoint」完成双引擎接入与代码检查点回退，技术方案、架构深度评估与全量交互规范见 [docs/antigravity-integration-plan.md](docs/antigravity-integration-plan.md)、[docs/multi-agent-architecture-evaluation.md](docs/multi-agent-architecture-evaluation.md) 与 [docs/multi-agent-development-spec.md](docs/multi-agent-development-spec.md)。
+
+| 模块 | 实现入口 |
+|---|---|
+| 引擎抽象与 Antigravity 扫描 / 配置 / Handoff | `Sources/ClaudeDeck/AgentProviders.swift`、`Models.swift`、`TerminalPane.swift`、`main.swift`、`ThirdPane/BridgeHandlers+Session.swift`：只读扫描 `~/.gemini/antigravity-cli/conversation_summaries.db` + `conversation_metadata.json` + `transcript.jsonl`（剔除子代理与已销毁会话、剥离 `<USER_REQUEST>` 标签、读取 1M 上下文窗口占用）；新建终端会话占位键自动晋升真实 `conversationId`；四层 `<thread-handoff>` 跨 CLI 接力信封；Swttch 图形模式打开 Antigravity 会话自动回退原生终端 |
+| ACP 结构化执行器与共用 Thread 切换 | `Sources/ClaudeDeck/Work/ACPExecutor.swift`、`ClaudeExecutor.swift`、`WorkStore.swift`（Schema v1 → v2 自动备份迁移，新增 `works.executor`、`works.reverted_notice`、`thread_segments`、`checkpoints`）、`WorkCore.swift`、`WorkCore+Execution.swift`、`ThirdPane/BridgeHandlers+Work.swift`：对接 `agy acp`（JSON-RPC 2.0 stdio），支持流式增量、工具卡片、双向权限确认与取消；支持 Work 在非运行态通过 `work.switchExecutor` 无缝切换执行引擎并自动注入前情 `<thread-handoff>` |
+| Turn Checkpoint 代码快照与外科回退 | `Sources/ClaudeDeck/Work/WorkspaceService.swift`、`WorkCore+Review.swift`：每轮前后用临时 index `write-tree` + `commit-tree` 锚定到隐藏引用 `refs/claude-picker/checkpoints/<workId>/<seq>`（防 `git gc` 回收且不污染分支与 `git status`）；`checkpoint.revert` 自动生成 `undo` 备份点、校验共享目录外部未保存修改冲突，并在下一轮向智能体注入 `<workspace-reverted-notice>` 消除上下文幻觉 |
+| 双源 MCP 服务管理 | `Sources/ClaudeDeck/ThirdPane/McpService.swift`、`BridgeHandlers+Mcp.swift`、`Web/src/shell/Modals.jsx`：支持管理 `~/.gemini/config/mcp_config.json`，拦截旧版 SSE 传输，提供「从 Claude 导入」一键合并兼容的 `stdio` / `http` 服务 |
+| 前端多引擎与回退交互 | `Web/src/shell/Sidebar.jsx`、`Composer.jsx`、`Modals.jsx`、`App.jsx`、`work/WorkModals.jsx`、`work/WorkChat.jsx`、`work/ContextPanel.jsx`、`work/SettingsModal.jsx`、`work/BoardPage.jsx`：侧栏引擎筛选与 `C`/`A` 徽标、会话右键与底部引擎胶囊接力续聊、新建会话引擎卡、Work 内引擎切换菜单、轮次分割线「↺ 回退到此轮前」与详情栏「撤销上次代码回退」、设置页 CLI 实时诊断 |
+
+验证（分支 `codex/wt-20261118`，开发包 `dist-dev/ClaudePickerDev.app`）：
+- 构建：`swift build`（Debug/Release）、`Web` `vite build`、`./scripts/build-app.sh --dev` 全部通过（签名 `ClaudePicker Local Dev` 校验有效）。
+- 回归脚本：`./scripts/test-git.sh` 全部通过；`./scripts/check-session-regressions.sh`（Session / Terminal / Bridge，含 Antigravity SQLite 扫描、标签清洗、1M Token 统计、`<thread-handoff>`、`session.handoff`、Swttch 自动降级、Antigravity MCP 导入与 SSE 拦截）全部通过；`./scripts/test-work.sh`（含 `fake-agy-acp.py` ACP 协议替身、跨引擎 `claude → antigravity` 接力、隐藏 Git Ref 检查点回退、`undo` 备份、共享目录外部改动冲突保护与 `<workspace-reverted-notice>` 注入）**213 项全部通过，0 项失败**。
+- 界面与运行验收：无头 Chrome CDP 在构建产物上逐项点击验证侧栏引擎筛选、底部接力切换、新建会话双引擎卡、设置页 CLI 状态、MCP Antigravity 页签与导入按钮、新建 Work 引擎选项，控制台 0 报错；启动 `dist-dev/ClaudePickerDev.app`（PID `54588`），通过 `CGWindowListCopyWindowInfo` 与只读 SQLite 校验确认主窗口（`1360×800`）、桌面悬浮窗（`layer=3`）正常挂载，开发库平滑迁移至 `user_version = 2`（含 `checkpoints`、`thread_segments` 表）。`agent-desktop status` / `snapshot` 当前因系统辅助功能与屏幕录制权限为 `denied` 返回 `PERM_DENIED`；授权后（运行 `agent-desktop permissions --guide`）可继续用 `agent-desktop` 做原生窗口 AX 交互复验。
+

@@ -2972,3 +2972,60 @@ label.settings-row {
   padding: 4px 7px 4px 8px;
   color: #8f9096;
 }
+
+/* ---------- 多 CLI 引擎徽标与筛选 ---------- */
+.provider-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  border-radius: 3.5px;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: -1px;
+  flex-shrink: 0;
+}
+.provider-badge.claude {
+  background: #3d2e26;
+  color: #deb092;
+  border: 1px solid #6b4e3d;
+}
+.provider-badge.antigravity {
+  background: #243244;
+  color: #96bce9;
+  border: 1px solid #3c5675;
+}
+.provider-filter {
+  display: flex;
+  gap: 3px;
+  margin: 0 9px 7px;
+  padding: 2px;
+  background: #1b1c1e;
+  border: 1px solid #2f3034;
+  border-radius: 6px;
+}
+.provider-filter > button {
+  flex: 1;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  color: #8d8e95;
+}
+.provider-filter > button.active {
+  background: #2e3036;
+  color: #ece8e2;
+  font-weight: 550;
+}
+.runtime-value.provider-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.mode-choice strong .provider-badge {
+  margin-right: 6px;
+}

@@ -95,7 +95,7 @@ const db = {
     })),
   ],
   active: null,
-  runtime: { mode: 'auto', model: 'opus', effort: 'medium', fast: false },
+  runtime: { provider: 'claude', mode: 'auto', model: 'opus', effort: 'medium', fast: false, supportsFast: true },
   settings: {
     appFontSize: 12,
     termFontSize: 12.5,
@@ -105,6 +105,9 @@ const db = {
     terminal: true,
     workbench: true,
     terminalWidth: 30,
+    defaultProvider: 'claude',
+    scanAntigravity: true,
+    providerFilter: 'all',
   },
   repos: {},
   mcp: [
@@ -208,11 +211,30 @@ function snapshot() {
       home: HOME,
       projects: db.projects,
       active: db.active,
+      providers: [
+        { id: 'claude', label: 'Claude Code', command: 'claude', available: true, path: '/usr/local/bin/claude' },
+        { id: 'antigravity', label: 'Antigravity', command: 'agy', available: true, path: '/Users/demo/.local/bin/agy' },
+      ],
       runtime: {
         ...db.runtime,
         modes: modes.map(pair),
         models: models.map(pair),
         efforts: efforts.map(pair),
+        catalogs: {
+          claude: { modes: modes.map(pair), models: models.map(pair), defaultMode: 'auto' },
+          antigravity: {
+            modes: [
+              { id: 'agent', label: '智能体' },
+              { id: 'plan', label: '规划' },
+              { id: 'ask', label: '问答' },
+            ],
+            models: [
+              { id: 'gemini-4-carbon-high', label: 'Gemini 4 Carbon (High)' },
+              { id: 'gemini-3-flash', label: 'Gemini 3 Flash' },
+            ],
+            defaultMode: 'agent',
+          },
+        },
       },
       settings: db.settings,
       usage: {
@@ -433,7 +455,7 @@ const handlers = {
     push();
     return null;
   },
-  'session.create': ({ projectPath, title, mode, branch }) => {
+  'session.create': ({ projectPath, title, mode, branch, provider = 'claude' }) => {
     const p = project(projectPath);
     let cwd = projectPath;
     if (mode === 'worktree') {
@@ -445,11 +467,25 @@ const handlers = {
     }
     const id = `demo-new-${++seq}`;
     const label = title || '新建会话';
-    p.sessions.unshift({ id, title: label, named: Boolean(title), cwd, time: '刚刚', running: false, unread: false });
+    p.sessions.unshift({ id, title: label, named: Boolean(title), cwd, provider, time: '刚刚', running: false, unread: false });
     p.expanded = true;
-    db.active = { sessionId: id, cwd, projectPath, label, busy: false };
+    db.active = { sessionId: id, cwd, projectPath, label, provider, busy: false };
+    db.runtime.provider = provider;
     push();
-    return { sessionId: id, cwd };
+    return { sessionId: id, cwd, provider };
+  },
+  'session.handoff': ({ sessionId, sourceProvider = 'claude', targetProvider = 'antigravity', projectPath }) => {
+    const p = project(projectPath);
+    const src = p.sessions.find((s) => s.id === sessionId);
+    const id = `demo-handoff-${++seq}`;
+    const label = src?.title ?? '接力会话';
+    const cwd = src?.cwd ?? projectPath;
+    const fromName = sourceProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
+    p.sessions.unshift({ id, title: label, cwd, provider: targetProvider, handoffFrom: fromName, time: '刚刚', running: false, unread: false });
+    db.active = { sessionId: id, cwd, projectPath, label, provider: targetProvider, busy: false };
+    db.runtime.provider = targetProvider;
+    push();
+    return { sessionId: id, cwd, provider: targetProvider };
   },
   'git.status': ({ projectPath }) => statusOf(projectPath),
   'git.diff': ({ projectPath, filePath, staged }) => {

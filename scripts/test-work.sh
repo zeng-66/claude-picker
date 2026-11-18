@@ -10,13 +10,20 @@ export WORK_TEST_DIR="$test_dir/scratch"
 export FAKE_CLAUDE_LOG="$test_dir/fake-claude.log"
 export FAKE_CLAUDE_STATE="$test_dir/fake-state"
 export CLAUDE_PICKER_CLAUDE_BIN="$test_dir/claude"
+export FAKE_AGY_LOG="$test_dir/fake-agy.log"
+export FAKE_AGY_STATE="$test_dir/fake-agy-state"
+export CLAUDE_PICKER_AGY_BIN="$test_dir/agy"
+export CLAUDE_PICKER_AGY_DIR="$test_dir/agy-home"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$test_dir/clang-cache}"
 # 凭据走进程内存储，不碰真实钥匙串。
 export CLAUDE_PICKER_KEYCHAIN=memory
-mkdir -p "$WORK_TEST_DIR" "$FAKE_CLAUDE_STATE"
+mkdir -p "$WORK_TEST_DIR" "$FAKE_CLAUDE_STATE" "$FAKE_AGY_STATE" "$CLAUDE_PICKER_AGY_DIR"
 cp "$repo_dir/Tests/WorkRegression/fake-claude.py" "$CLAUDE_PICKER_CLAUDE_BIN"
-chmod +x "$CLAUDE_PICKER_CLAUDE_BIN"
-swiftc -swift-version 6 \
+cp "$repo_dir/Tests/WorkRegression/fake-agy-acp.py" "$CLAUDE_PICKER_AGY_BIN"
+chmod +x "$CLAUDE_PICKER_CLAUDE_BIN" "$CLAUDE_PICKER_AGY_BIN"
+swiftc -swift-version 6 -module-cache-path "$CLANG_MODULE_CACHE_PATH" \
   "$repo_dir/Sources/ClaudeDeck/Models.swift" \
+  "$repo_dir/Sources/ClaudeDeck/AgentProviders.swift" \
   "$repo_dir"/Sources/ClaudeDeck/Git/*.swift \
   "$repo_dir"/Sources/ClaudeDeck/Work/*.swift \
   "$repo_dir/Tests/WorkRegression/main.swift" -lsqlite3 -o "$test_dir/work-regression" 2> "$test_dir/build.log" \
