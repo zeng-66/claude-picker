@@ -820,7 +820,7 @@ export default function App() {
   const petEnabled = petOn && !state.desktopPet;
   const consoleTerminal =
     active && window.claudeDesktop ? (
-      <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} />
+      <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
     ) : active && native ? (
       consoleOpen && consoleAllowed ? <div className="terminal-hole" data-terminal-hole /> : null
     ) : (
@@ -1459,7 +1459,7 @@ export default function App() {
           <>
         {terminal ? (
           <section
-            className="terminal-pane"
+            className={`terminal-pane${(active ? active.provider : state.runtime?.provider) === 'antigravity' ? ' is-antigravity' : ''}`}
             style={{ flexBasis: workbench ? `${terminalWidth}%` : '100%' }}
           >
             <div className="terminal-actions" data-terminal-overlay>
@@ -1477,7 +1477,7 @@ export default function App() {
               />
             </div>
             {active && window.claudeDesktop ? (
-              <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} />
+              <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
             ) : active && native ? (
               <div className="terminal-hole" data-terminal-hole />
             ) : (

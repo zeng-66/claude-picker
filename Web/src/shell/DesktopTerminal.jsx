@@ -4,14 +4,23 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { request } from './bridge.js';
 
-export default function DesktopTerminal({ sessionId, fontSize }) {
+export default function DesktopTerminal({ sessionId, fontSize, provider }) {
   const element = useRef(null);
   useEffect(() => {
+    const isAntigravity = provider === 'antigravity';
     const terminal = new Terminal({
       fontSize,
       fontFamily: 'Consolas, monospace',
       cursorBlink: true,
-      theme: { background: '#111214', foreground: '#e0e0e4' },
+      theme: isAntigravity
+        ? {
+            background: '#212734',
+            foreground: '#c5cdd9',
+            blue: '#73b8f2',
+            brightBlue: '#89c4f4',
+            brightWhite: '#cfd7e3',
+          }
+        : { background: '#111214', foreground: '#e0e0e4' },
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -53,7 +62,7 @@ export default function DesktopTerminal({ sessionId, fontSize }) {
       observer.disconnect();
       terminal.dispose();
     };
-  }, [sessionId, fontSize]);
+  }, [sessionId, fontSize, provider]);
   return (
     <div
       ref={element}

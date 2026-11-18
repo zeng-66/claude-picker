@@ -91,6 +91,10 @@ final class Store: ObservableObject {
     private var chatStateObserver: AnyCancellable?
     /// 放进第二栏「洞」里的视图：终端或聊天页
     var activeView: NSView? { chatActive ? chatHost.webView : active?.view }
+    var activeTerminalBackground: NSColor {
+        guard !chatActive, let active else { return kTerminalBackground }
+        return TerminalSession.backgroundColor(for: active.provider)
+    }
     @Published var activeLabel: String = ""
     @Published var activePath: String = ""
     @Published var settings: AppSettings = SettingsStore.load()
@@ -1565,13 +1569,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         shell = ShellView(frame: rect)
         shell.autoresizingMask = [.width, .height]
         window.contentView = shell
-        shell.showTerminal(store.activeView)
+        shell.showTerminal(store.activeView, backgroundColor: store.activeTerminalBackground)
         petController = PetController(store: store, app: self)
 
         store.onFocusTerminal = { [weak self] in self?.focusTerminalSoon() }
         store.onActiveChanged = { [weak self] in
             guard let self else { return }
-            self.shell.showTerminal(self.store.activeView)
+            self.shell.showTerminal(self.store.activeView, backgroundColor: self.store.activeTerminalBackground)
         }
 
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in

@@ -851,3 +851,17 @@ macOS 上桌宠改为整个桌面可见的透明悬浮窗（`Sources/ClaudeDeck/
 - 回归脚本：`./scripts/test-git.sh` 全部通过；`./scripts/check-session-regressions.sh`（Session / Terminal / Bridge，含 Antigravity SQLite 扫描、标签清洗、1M Token 统计、`<thread-handoff>`、`session.handoff`、Swttch 自动降级、Antigravity MCP 导入与 SSE 拦截）全部通过；`./scripts/test-work.sh`（含 `fake-agy-acp.py` ACP 协议替身、跨引擎 `claude → antigravity` 接力、隐藏 Git Ref 检查点回退、`undo` 备份、共享目录外部改动冲突保护与 `<workspace-reverted-notice>` 注入）**213 项全部通过，0 项失败**。
 - 界面与运行验收：无头 Chrome CDP 在构建产物上逐项点击验证侧栏引擎筛选、底部接力切换、新建会话双引擎卡、设置页 CLI 状态、MCP Antigravity 页签与导入按钮、新建 Work 引擎选项，控制台 0 报错；启动 `dist-dev/ClaudePickerDev.app`（PID `54588`），通过 `CGWindowListCopyWindowInfo` 与只读 SQLite 校验确认主窗口（`1360×800`）、桌面悬浮窗（`layer=3`）正常挂载，开发库平滑迁移至 `user_version = 2`（含 `checkpoints`、`thread_segments` 表）。`agent-desktop status` / `snapshot` 当前因系统辅助功能与屏幕录制权限为 `denied` 返回 `PERM_DENIED`；授权后（运行 `agent-desktop permissions --guide`）可继续用 `agent-desktop` 做原生窗口 AX 交互复验。
 
+### 2026-11-18 Antigravity 终端主题配色调整与 `test` 渠道提测交付
+
+- **来源分支 → 目标分支**：`codex/wt-20261118` → `test`（版本 `1.0.0`）
+- **变更摘要**：
+  - `Sources/ClaudeDeck/TerminalPane.swift`：新增 `kAntigravityTerminalBackground`（`#212734`）与 `TerminalSession.backgroundColor(for:)` / `theme(for:)`；Antigravity 会话启用 `#212734` 底色、柔化前景色 `#c5cdd9` 及调色后的 ANSI 16 色（将过饱和深紫蓝 `#492ee1`/`#5833ff` 调整为浅蓝 `#73b8f2`/`#89c4f4` 并柔化高亮白 `#cfd7e3`），Claude 会话保持 `#202122` 原样。
+  - `Sources/ClaudeDeck/ThirdPane/ShellView.swift`、`Sources/ClaudeDeck/main.swift`：通过 `Store.activeTerminalBackground` 与 `ShellView.showTerminal(_:backgroundColor:)` 同步更新窗口外壳与 `terminalHost` 图层底色，消除 `.terminal-hole` 四周留白处的底色接缝。
+  - `Web/src/shell/App.jsx`、`Web/src/shell/style.css`、`Web/src/shell/DesktopTerminal.jsx`：为 `.terminal-pane` 增加 `is-antigravity` 状态类，使空白引导区与 Windows xterm 终端同步应用 `#212734` 与柔化配色。
+  - `Tests/TerminalRegression/main.swift`：新增 Claude（`#202122`）与 Antigravity（`#212734` 及柔化前景）主题回归断言。
+- **验证与产物**：
+  - 回归与构建：`./scripts/check-session-regressions.sh`（Session / Terminal / Bridge）、`npm --prefix Web run build`、`swift build -c release --disable-sandbox` 均通过；开发包 `./scripts/build-app.sh --dev` 与测试包 `./scripts/build-app.sh --test` 均构建并签名通过。
+  - 测试包产物：`dist-test/ClaudePickerTest.app`（`local.zcl.claude-picker.test.dev`）。
+  - 待处理事项：`agent-desktop` 在当前沙盒环境返回 `PERM_DENIED`，测试版 App 启动后的实际界面交互与桌面验收待本机环境打开确认。
+
+

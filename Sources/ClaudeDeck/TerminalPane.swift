@@ -4,6 +4,15 @@ import SwiftTerm
 
 /// 终端底色：与界面第二栏一致（原型 .terminal-pane 的 #202122）。窗口底色与终端视图共用。
 let kTerminalBackground = NSColor(srgbRed: 0x20 / 255.0, green: 0x21 / 255.0, blue: 0x22 / 255.0, alpha: 1)
+/// Antigravity 模式终端底色：#212734，避免纯黑暖灰背景下高亮输出过于刺眼。
+let kAntigravityTerminalBackground = NSColor(srgbRed: 0x21 / 255.0, green: 0x27 / 255.0, blue: 0x34 / 255.0, alpha: 1)
+
+private struct TerminalTheme {
+    let background: NSColor
+    let foreground: NSColor
+    let caret: NSColor
+    let ansiColors: [SwiftTerm.Color]?
+}
 
 /// 一个内嵌终端会话：包装 LocalProcessTerminalView，负责启停 claude。
 final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalViewDelegate, @unchecked Sendable {
@@ -66,12 +75,62 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         start(options: options, agyOptions: agyOptions)
     }
 
+    /// 按运行引擎返回对应的终端底色（Claude 保持 #202122，Antigravity 使用 #212734）。
+    static func backgroundColor(for provider: AgentProvider) -> NSColor {
+        provider == .antigravity ? kAntigravityTerminalBackground : kTerminalBackground
+    }
+
+    /// Antigravity 终端配色：#212734 深蓝灰底 + 柔和前景色 + 柔化 ANSI 16 色，
+    /// 尤其将 Terminal.app 默认过饱和的深紫蓝（#492ee1 / #5833ff）替换为清晰柔和的浅蓝。
+    private static let antigravityAnsiColors: [SwiftTerm.Color] = [
+        // 常规 8 色（黑 / 红 / 绿 / 黄 / 蓝 / 品红 / 青 / 白）
+        SwiftTerm.Color(red8: 0x19, green8: 0x1E, blue8: 0x2A),
+        SwiftTerm.Color(red8: 0xE0, green8: 0x6C, blue8: 0x75),
+        SwiftTerm.Color(red8: 0x98, green8: 0xC3, blue8: 0x79),
+        SwiftTerm.Color(red8: 0xE5, green8: 0xC0, blue8: 0x7B),
+        SwiftTerm.Color(red8: 0x73, green8: 0xB8, blue8: 0xF2),
+        SwiftTerm.Color(red8: 0xC6, green8: 0x78, blue8: 0xDD),
+        SwiftTerm.Color(red8: 0x56, green8: 0xB6, blue8: 0xC2),
+        SwiftTerm.Color(red8: 0xB8, green8: 0xC0, blue8: 0xCC),
+        // 高亮 8 色：降低纯白与原色刺眼度，保证深蓝底下的可读性
+        SwiftTerm.Color(red8: 0x5C, green8: 0x67, blue8: 0x7A),
+        SwiftTerm.Color(red8: 0xEB, green8: 0x82, blue8: 0x8A),
+        SwiftTerm.Color(red8: 0xA9, green8: 0xD0, blue8: 0x8E),
+        SwiftTerm.Color(red8: 0xED, green8: 0xCE, blue8: 0x93),
+        SwiftTerm.Color(red8: 0x89, green8: 0xC4, blue8: 0xF4),
+        SwiftTerm.Color(red8: 0xD3, green8: 0x94, blue8: 0xE5),
+        SwiftTerm.Color(red8: 0x73, green8: 0xC9, blue8: 0xD4),
+        SwiftTerm.Color(red8: 0xCF, green8: 0xD7, blue8: 0xE3),
+    ]
+
+    private static func theme(for provider: AgentProvider) -> TerminalTheme {
+        switch provider {
+        case .claude:
+            return TerminalTheme(
+                background: kTerminalBackground,
+                foreground: NSColor(srgbRed: 0.86, green: 0.85, blue: 0.84, alpha: 1),
+                caret: NSColor(srgbRed: 0.95, green: 0.55, blue: 0.35, alpha: 1),
+                ansiColors: nil
+            )
+        case .antigravity:
+            return TerminalTheme(
+                background: kAntigravityTerminalBackground,
+                foreground: NSColor(srgbRed: 0xC5 / 255.0, green: 0xCD / 255.0, blue: 0xD9 / 255.0, alpha: 1),
+                caret: NSColor(srgbRed: 0.95, green: 0.55, blue: 0.35, alpha: 1),
+                ansiColors: antigravityAnsiColors
+            )
+        }
+    }
+
     private func configure(fontName: String, fontSize: Double) {
-        // 底色与界面第二栏一致（原型 .terminal-pane 的 #202122）
-        view.nativeBackgroundColor = kTerminalBackground
-        view.nativeForegroundColor = NSColor(srgbRed: 0.86, green: 0.85, blue: 0.84, alpha: 1)
+        let theme = Self.theme(for: provider)
+        view.nativeBackgroundColor = theme.background
+        view.nativeForegroundColor = theme.foreground
+        if let ansiColors = theme.ansiColors {
+            view.installColors(ansiColors)
+        }
         applyFont(fontName: fontName, fontSize: fontSize)
-        view.caretColor = NSColor(srgbRed: 0.95, green: 0.55, blue: 0.35, alpha: 1)
+        view.caretColor = theme.caret
     }
 
     func applyFont(fontName: String, fontSize: Double) {

@@ -296,6 +296,9 @@ hr {
   background: #202122;
   overflow: hidden;
 }
+.terminal-pane.is-antigravity {
+  background: #212734;
+}
 .status-dot {
   display: inline-block;
   width: 5px;
@@ -2452,9 +2455,16 @@ hr {
 .terminal-pane {
   background: transparent;
 }
+.terminal-pane.is-antigravity {
+  background: transparent;
+}
 .terminal-content,
 .terminal-dock {
   background: #202122;
+}
+.terminal-pane.is-antigravity .terminal-content,
+.terminal-pane.is-antigravity .terminal-dock {
+  background: #212734;
 }
 .terminal-hole {
   flex: 1;
