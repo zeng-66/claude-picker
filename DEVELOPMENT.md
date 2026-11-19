@@ -865,3 +865,10 @@ macOS 上桌宠改为整个桌面可见的透明悬浮窗（`Sources/ClaudeDeck/
   - 待处理事项：`agent-desktop` 在当前沙盒环境返回 `PERM_DENIED`，测试版 App 启动后的实际界面交互与桌面验收待本机环境打开确认。
 
 
+### 2026-11-19 macOS 测试包交付
+
+- 从 `test` 的 `3500532` 构建 `1.0.0 (20261119)`。该提交已包含 `codex/agent-workspace-development-spec` 的桌宠和图形聊天调整，以及 `codex/wt-20261118` 的 Antigravity CLI 集成和终端配色。
+- 使用 `./scripts/build-app.sh --test --with-chat --dmg` 生成 `dist-test/ClaudePickerTest-1.0.0.dmg`。图形聊天从 Swttch 基线 `3285a17` 应用仓库记录的四个补丁后重建。App 深度签名和 DMG 校验均通过。
+- Git、会话、终端及桥接回归通过，Work 213 项和图形聊天定向回归 8 项通过。
+- 从 `/Applications/ClaudePickerTest.app` 使用独立临时状态目录启动，确认测试渠道和主窗口显示。辅助功能权限未授予，使用系统窗口截图核对主界面，未执行控件级验收。
+- 验收后退出测试版，移除本机发现的旧 App 副本。复查仅保留测试版 App，未发现相关进程或 launchd 任务。
