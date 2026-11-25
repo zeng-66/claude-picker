@@ -171,7 +171,30 @@ MainActor.assumeIsolated {
     let sent = (try? String(contentsOf: capture, encoding: .utf8)) ?? ""
     check(sent.contains("\u{1b}[<64;"), "a full-screen app receives a small wheel report for scrolling")
     check(!sent.contains("\u{1b}[5~"), "wheel input does not jump a full page when the app supports mouse reporting")
-    check(!session.view.allowMouseReporting, "text selection keeps local mouse handling")
+    check(session.view.allowMouseReporting, "clicks reach a CLI that turned on mouse reporting")
+    check(session.view.linkHighlightMode == .hover, "links open on a plain click")
+
+    // 全屏 CLI 开着鼠标模式：单击要原样发给它（展开工具调用、Jump to bottom 靠这个）
+    func mouse(_ type: NSEvent.EventType, _ flags: NSEvent.ModifierFlags = []) -> NSEvent {
+        session.view.frame = NSRect(x: 0, y: 0, width: 640, height: 400)
+        return NSEvent.mouseEvent(with: type, location: NSPoint(x: 40, y: 300), modifierFlags: flags,
+                                  timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0,
+                                  clickCount: 1, pressure: 1)!
+    }
+    let beforeClick = ((try? String(contentsOf: capture, encoding: .utf8)) ?? "").count
+    session.view.mouseDown(with: mouse(.leftMouseDown))
+    session.view.mouseUp(with: mouse(.leftMouseUp))
+    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    let clickSent = String(((try? String(contentsOf: capture, encoding: .utf8)) ?? "").dropFirst(beforeClick))
+    check(clickSent.contains("\u{1b}[<0;") && clickSent.contains("m"), "a click reaches the full-screen CLI as press and release")
+
+    // Shift 按住时强制本地选中，不发给 CLI
+    let beforeShift = ((try? String(contentsOf: capture, encoding: .utf8)) ?? "").count
+    session.view.mouseDown(with: mouse(.leftMouseDown, .shift))
+    session.view.mouseUp(with: mouse(.leftMouseUp, .shift))
+    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    let shiftSent = String(((try? String(contentsOf: capture, encoding: .utf8)) ?? "").dropFirst(beforeShift))
+    check(!shiftSent.contains("\u{1b}[<"), "shift-click stays local for text selection")
 }
 MainActor.assumeIsolated {
     // 图形聊天：路由拼装 / 解析与就绪信号解析，不启动 Node。

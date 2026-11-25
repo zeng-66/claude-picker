@@ -668,7 +668,11 @@ SwiftTerm 会向 CLI 声明支持 OSC 7501，新版 Claude 协商成功后会省
 
 运行指示依赖 CLI 的任务状态或终端标题报告，设置 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` 会停用这些报告。
 
-终端滚轮灵敏度设为 `0.25`，通过独立的 `allowMouseWheelReporting` 使用 CLI 的鼠标滚动上报，文本拖选保留本地处理。普通滚轮在低灵敏度下累计不足一行的距离，避免最小一步抵消减速设置。
+终端滚轮灵敏度设为 `0.25`，通过独立的 `allowMouseWheelReporting` 使用 CLI 的鼠标滚动上报。普通滚轮在低灵敏度下累计不足一行的距离，避免最小一步抵消减速设置。
+
+鼠标点击同样上报给 CLI（`allowMouseReporting = true`）。Claude Code 全屏界面里点击折叠的工具调用行（如「Searched for 1 pattern, read 1 file」）展开、点击「Jump to bottom」回到底部，都依赖这个上报。CLI 没开鼠标模式时，拖动仍由终端本地选中文字；开了以后按住 Shift 或 Option 拖动强制本地选中。右键由 `CopyableTerminalView.rightMouseDown` 固定弹出「复制 / 粘贴 / 全选」菜单，不发给 CLI。
+
+链接使用 `linkHighlightMode = .hover`：鼠标悬停识别链接，普通单击打开，不需要按住 ⌘。打开前仍经过 SwiftTerm 的链接安全检查。
 
 回归验证运行 `./scripts/check-session-regressions.sh`，覆盖总结解析、打开时刷新、忙闲切换和后台未读条件。测试子进程使用隔离的替身命令。
 

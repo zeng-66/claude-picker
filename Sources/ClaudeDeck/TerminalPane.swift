@@ -47,9 +47,12 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         self.displayName = name
         self.initialPrompt = prompt
         self.view = CopyableTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
-        // 文本选中保留本地处理，滚轮单独使用应用的滚动协议。
-        self.view.allowMouseReporting = false
+        // 鼠标点击交给 CLI：Claude Code 全屏界面里的「展开工具调用」「Jump to bottom」等
+        // 都靠鼠标上报实现。CLI 没开鼠标模式时仍由终端本地选字；开了以后按住 Shift 或 Option 拖动强制本地选中。
+        self.view.allowMouseReporting = true
         self.view.allowMouseWheelReporting = true
+        // 链接悬停即高亮，普通单击直接打开（默认要按住 ⌘）。拖动仍是选中文字。
+        self.view.linkHighlightMode = .hover
         self.view.scrollSensitivity = 0.25
         super.init()
         configure(fontName: fontName, fontSize: fontSize)
@@ -215,6 +218,14 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
 /// 终端视图：SwiftTerm 默认不给右键菜单，这里补上「复制 / 粘贴 / 全选」，
 /// 否则选中文本后没有任何途径把内容放进剪贴板。
 final class CopyableTerminalView: LocalProcessTerminalView {
+    /// 开启鼠标上报后，CLI 进入鼠标模式时 SwiftTerm 会把右键发给 CLI，菜单弹不出来。
+    /// 右键始终留给本地菜单，保证选中后能复制。
+    override func rightMouseDown(with event: NSEvent) {
+        guard let menu = menu(for: event) else { return super.rightMouseDown(with: event) }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+    override func rightMouseUp(with event: NSEvent) {}
+
     /// SwiftTerm 默认没有右键菜单，选中文本后无处可放；补上「复制 / 粘贴 / 全选」。
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
