@@ -261,16 +261,16 @@ export function BranchesTab({
 
 // ---------- 工作树 ----------
 
-export function WorktreeTab({ projectPath, home, epoch, onNewSession, runGit }) {
+export function WorktreeTab({ projectPath, home, epoch, onCreateWorktree, runGit }) {
   const { data, error, loading } = useGitData('git.worktrees', projectPath, epoch);
   const [confirming, setConfirming] = useState(null);
   return (
     <div className="history-page">
       <div className="page-heading">
         <h2>工作树</h2>
-        <button onClick={() => onNewSession('worktree')}>
+        <button onClick={onCreateWorktree}>
           <Plus size={14} />
-          新建工作树会话
+          创建工作树
         </button>
       </div>
       {error && <PageError text={error} />}

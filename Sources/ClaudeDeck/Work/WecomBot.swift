@@ -12,10 +12,123 @@ import Foundation
 /// - 一个机器人同一时间只保留一条长连接：别处用同一组凭据连上来时，旧连接收到 `disconnected_event`。
 ///   被顶替后不自动重连，避免两边互相把对方挤下线。
 ///
-/// 默认直接连接 Claude 的持续会话。旧 Work 接入保留为显式 work 模式。
+/// 默认直接连接 CLI 的持续会话。旧 Work 接入保留为显式 work 模式。
 /// 发送人身份来自平台回调（from.userid），记为已验证。
+///
+/// 多机器人：`WecomBot.shared` 按 `WecomBotConfig` 为每个 Bot 维护一条独立连接（`WecomBotConnection`），
+/// 各自的凭据、状态、重连与被顶替语义互不影响；每组凭据只由一条连接持有。
 final class WecomBot: @unchecked Sendable {
     static let shared = WecomBot()
+
+    private let queue = DispatchQueue(label: "claude-picker.wecom-bots")
+    private var core: WorkCore?
+    private var connections: [String: WecomBotConnection] = [:]
+    private var order: [String] = []
+    let chat = WecomClaudeChat()
+
+    func start(core: WorkCore) {
+        queue.async {
+            guard self.core == nil else { return }
+            self.core = core
+            core.observe { [weak self] notification in
+                guard case .changed = notification else { return }
+                self?.queue.async { self?.connections.values.forEach { $0.notificationsChanged() } }
+            }
+            self.reconcile(force: false)
+        }
+    }
+
+    /// 设置或凭据变化后调用：按当前 Bot 列表新增、刷新或关闭连接。
+    func refresh(force: Bool = false) {
+        queue.async { self.reconcile(force: force) }
+    }
+
+    /// 只刷新某一个 Bot（保存它的 Secret 或手动重连）。
+    func refresh(botLocalId: String, force: Bool) {
+        queue.async { self.connections[botLocalId]?.refresh(force: force) }
+    }
+
+    private func reconcile(force: Bool) {
+        guard let core else { return }
+        let configs = WecomBotConfig.all(core)
+        let ids = Set(configs.map(\.id))
+        for (id, connection) in connections where !ids.contains(id) {
+            connection.stop()
+            connections.removeValue(forKey: id)
+        }
+        // 同一组 Bot ID 只允许一条连接，重复登记的后一个保持停用，避免两条连接互相顶替。
+        var claimed = Set<String>()
+        for config in configs {
+            let duplicate = config.botId.map { !claimed.insert($0).inserted } ?? false
+            let connection = connections[config.id] ?? {
+                let created = WecomBotConnection(localId: config.id, core: core, chat: chat)
+                created.arbiter = { [weak self] key, bot, authorized, done in
+                    self?.arbitrate(key: key, bot: bot, authorized: authorized, done: done)
+                }
+                connections[config.id] = created
+                return created
+            }()
+            connection.refresh(force: force, duplicate: duplicate)
+        }
+        order = configs.map(\.id)
+    }
+
+    func stop() {
+        queue.sync {
+            for connection in connections.values { connection.stop() }
+        }
+        chat.stop()
+    }
+
+    private final class Claim {
+        var entries: [(bot: String, authorized: Bool, done: (String?) -> Void)] = []
+        var settled = false
+    }
+    private var claims: [String: Claim] = [:]
+    static let arbitrationWindow: TimeInterval = 1.5
+
+    /// 收集同一条群消息在各 Bot 上的回调，窗口结束后按列表顺序选第一个有权限的 Bot。
+    private func arbitrate(key: String, bot: String, authorized: Bool, done: @escaping (String?) -> Void) {
+        queue.async {
+            let claim = self.claims[key] ?? Claim()
+            if claim.settled {
+                // 窗口之后才到的回调：沿用已有结果。
+                done(claim.entries.first { $0.authorized }.map { _ in self.winner(of: claim) } ?? nil)
+                return
+            }
+            claim.entries.append((bot, authorized, done))
+            if self.claims[key] == nil {
+                self.claims[key] = claim
+                self.queue.asyncAfter(deadline: .now() + Self.arbitrationWindow) { self.settle(key) }
+            }
+        }
+    }
+
+    private func winner(of claim: Claim) -> String? {
+        claim.entries.filter(\.authorized).map(\.bot).min { (order.firstIndex(of: $0) ?? .max) < (order.firstIndex(of: $1) ?? .max) }
+    }
+
+    private func settle(_ key: String) {
+        guard let claim = claims[key], !claim.settled else { return }
+        claim.settled = true
+        let winner = winner(of: claim)
+        for entry in claim.entries { entry.done(winner) }
+        queue.asyncAfter(deadline: .now() + 60) { self.claims.removeValue(forKey: key) }
+    }
+
+    /// 顶层字段沿用第一个 Bot 的状态（兼容单 Bot 界面），`bots` 列出全部。
+    func status() -> JSONValue {
+        queue.sync {
+            let list = order.compactMap { connections[$0]?.status() }
+            var first = list.first?.objectValue ?? ["state": .string("disabled"), "message": .null, "botId": .null,
+                                                    "secretSaved": .bool(Keychain.has(.wecomBotSecret))]
+            first["bots"] = .array(list)
+            return .object(first)
+        }
+    }
+}
+
+final class WecomBotConnection: @unchecked Sendable {
 
     enum State: String, Sendable {
         case disabled, connecting, connected
@@ -23,9 +136,14 @@ final class WecomBot: @unchecked Sendable {
         case kicked, error
     }
 
-    private let queue = DispatchQueue(label: "claude-picker.wecom-bot")
+    let localId: String
+    private let queue: DispatchQueue
     private let worker = DispatchQueue(label: "claude-picker.wecom-bot.worker", attributes: .concurrent)
     private var core: WorkCore?
+    private var config: WecomBotConfig?
+    /// 同群多 Bot 裁决：(消息键, 本 Bot, 是否有权限, 回调胜出的 Bot)。
+    var arbiter: ((String, String, Bool, @escaping (String?) -> Void) -> Void)?
+    private var arbitrated = Set<String>()
     private lazy var session = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
     private var generation = 0
@@ -40,7 +158,14 @@ final class WecomBot: @unchecked Sendable {
     private var replyInFlight: [String: DispatchWorkItem] = [:]
     private var pendingAcks: [String: (JSONValue?) -> Void] = [:]
     private var notifyScheduled = false
-    private let chat = WecomClaudeChat()
+    private let chat: WecomClaudeChat
+
+    init(localId: String, core: WorkCore, chat: WecomClaudeChat) {
+        self.localId = localId
+        self.core = core
+        self.chat = chat
+        queue = DispatchQueue(label: "claude-picker.wecom-bot.\(localId)")
+    }
 
     static var endpoint: URL {
         if let custom = ProcessInfo.processInfo.environment["CLAUDE_PICKER_WECOM_WS_URL"], let url = URL(string: custom) { return url }
@@ -49,44 +174,40 @@ final class WecomBot: @unchecked Sendable {
 
     // MARK: 生命周期
 
-    func start(core: WorkCore) {
-        queue.async {
-            guard self.core == nil else { return }
-            self.core = core
-            core.observe { [weak self] notification in
-                // 回调在领域队列上：切回机器人自己的队列再动内部状态。
-                if case .changed = notification { self?.queue.async { self?.scheduleNotificationFlush() } }
-            }
-            self.refreshLocked()
-        }
+    func refresh(force: Bool = false, duplicate: Bool = false) {
+        queue.async { self.refreshLocked(force: force, duplicate: duplicate) }
     }
 
-    /// 设置或凭据变化后调用：按当前配置连接、重连或断开。
-    func refresh(force: Bool = false) {
-        queue.async { self.refreshLocked(force: force) }
+    func notificationsChanged() {
+        queue.async { self.scheduleNotificationFlush() }
     }
 
     func stop() {
         queue.sync { self.disconnect(state: .disabled, message: nil, persist: false) }
-        chat.stop()
     }
 
     func status() -> JSONValue {
         queue.sync {
-            .obj(["state": .string(state.rawValue), "message": .str(message),
-                  "botId": .str(credentials?.botId), "secretSaved": .bool(Keychain.has(.wecomBotSecret))])
+            .obj(["id": .string(localId), "name": .str(config?.name), "enabled": .bool(config?.enabled == true),
+                  "state": .string(state.rawValue), "message": .str(message),
+                  "botId": .str(credentials?.botId ?? config?.botId),
+                  "secretSaved": .bool(WecomBotConfig.secret(localId) != nil)])
         }
     }
 
-    private func refreshLocked(force: Bool = false) {
+    private func refreshLocked(force: Bool = false, duplicate: Bool = false) {
         guard let core else { return }
-        let config = SourceGateway.settings(core)
-        let botId = config["botId"]?.text
-        let secret = Keychain.get(.wecomBotSecret)
-        guard config["enabled"]?.boolValue == true, let botId, let secret else {
-            let reason = config["enabled"]?.boolValue != true ? "对话入口未启用" : (botId == nil ? "还没有填写 Bot ID" : "还没有保存 Secret")
+        guard let config = WecomBotConfig.all(core).first(where: { $0.id == localId }) else {
+            disconnect(state: .disabled, message: "机器人已删除", persist: false)
+            return
+        }
+        self.config = config
+        let botId = config.botId
+        let secret = WecomBotConfig.secret(localId)
+        guard config.enabled, let botId, let secret, !duplicate else {
+            let reason = duplicate ? "同一个 Bot ID 已由其它机器人配置连接"
+                : !config.enabled ? "对话入口未启用" : (botId == nil ? "还没有填写 Bot ID" : "还没有保存 Secret")
             disconnect(state: .disabled, message: reason, persist: true)
-            chat.stop()
             return
         }
         let same = credentials?.botId == botId && credentials?.secret == secret
@@ -103,7 +224,7 @@ final class WecomBot: @unchecked Sendable {
         guard let core else { return }
         let value: JSONValue = .obj(["state": .string(next.rawValue), "message": .str(text),
                                      "botId": .str(credentials?.botId), "at": .string(WorkClock.iso())])
-        try? core.putSetting("robot.status", value)
+        try? core.putSetting(config?.statusKey ?? "robot.status", value)
     }
 
     private func connect() {
@@ -258,12 +379,15 @@ final class WecomBot: @unchecked Sendable {
             disconnect(state: .kicked,
                        message: "同一个机器人在别处建立了新连接，这里已断开（不会自动重连，避免互相顶替）。确认后可在设置里重新连接。",
                        persist: true)
+        case "template_card_event":
+            handleCardEvent(frame, reqId: reqId)
         case "enter_chat":
             // 欢迎语必须在 5 秒内用这个事件的 req_id 回复。
-            let name = core.map { SourceGateway.settings($0)["name"]?.text ?? "开发协作助手" } ?? "开发协作助手"
-            let direct = core.map { SourceGateway.settings($0)["mode"]?.text != "work" } ?? true
+            let name = config?.name ?? "开发协作助手"
+            let direct = config?.direct ?? true
+            let engine = config?.defaultCli.label ?? "Claude"
             let greeting = direct
-                ? "你好，我是\(name)。可以直接和 Claude 连续对话，也可以告诉我在哪个项目里做什么。"
+                ? "你好，我是\(name)。可以直接和 \(engine) 连续对话，也可以告诉我在哪个项目里做什么。"
                 : "你好，我是\(name)。告诉我要在哪个项目里做什么，我会整理成 Work 交给 Claude Picker。"
             send(.obj(["cmd": .string("aibot_respond_welcome_msg"), "headers": .obj(["req_id": .string(reqId)]),
                        "body": .obj(["msgtype": .string("text"),
@@ -336,14 +460,49 @@ final class WecomBot: @unchecked Sendable {
     }
 
     private func handleMessage(_ frame: JSONValue, reqId: String) {
-        guard let core, let credentials, let body = frame["body"] else { return }
+        // 每条消息读取最新配置：模式、范围与默认 CLI 的修改即时生效，无需重连。
+        guard let core, let credentials, let body = frame["body"],
+              let config = WecomBotConfig.all(core).first(where: { $0.id == localId }) ?? self.config else { return }
+        self.config = config
         let chatType = body["chattype"]?.stringValue ?? "single"
         let userId = body["from"]?["userid"]?.stringValue ?? ""
-        let conversation = chatType == "group" ? (body["chatid"]?.stringValue ?? "") : userId
+        let chatId = body["chatid"]?.stringValue ?? ""
+        let conversation = chatType == "group" ? chatId : userId
         let messageId = body["msgid"]?.stringValue ?? reqId
         let text = Self.stripMention(Self.extractText(body))
         let streamId = Self.reqId("stream")
         guard !conversation.isEmpty else { return }
+        // 先验证 Bot 与发送者：人员、场景须同时命中；没有授权时只回原因，不读代码、不建会话。
+        let decision = config.authorize(userId: userId, chatType: chatType, chatId: chatId)
+        if !arbitrated.contains(messageId) {
+            noteInbound(core, chatType: chatType, messageId: messageId, outcome: decision == .allowed ? "allowed" : "denied")
+        }
+        // 同一条群消息同时 @ 了多个本机机器人：按机器人列表顺序只让第一个有权限的处理，其余说明由谁处理。
+        if chatType == "group", !arbitrated.contains(messageId),
+           WecomBotConfig.all(core).filter({ $0.botId != nil && $0.covers(group: chatId) }).count > 1 {
+            let key = WorkText.sha256([chatId, userId, text].joined(separator: "\n"))
+            arbiter?(key, localId, decision == .allowed) { [weak self] winner in
+                guard let self else { return }
+                self.queue.async {
+                    self.noteInbound(core, chatType: chatType, messageId: messageId,
+                                     outcome: winner == self.localId ? "arbitration-won" : "arbitration-yielded:\(winner ?? "none")")
+                    if winner == self.localId {
+                        self.arbitrated.insert(messageId)
+                        self.handleMessage(frame, reqId: reqId)
+                        self.arbitrated.remove(messageId)
+                    } else if let winner, let name = WecomBotConfig.all(core).first(where: { $0.id == winner })?.name {
+                        self.stream(reqId, id: streamId, content: "这条消息已由「\(name)」处理。", finish: true)
+                    } else if case .denied(let reason) = decision {
+                        self.stream(reqId, id: streamId, content: reason, finish: true)
+                    }
+                }
+            }
+            return
+        }
+        if case .denied(let reason) = decision {
+            stream(reqId, id: streamId, content: reason, finish: true)
+            return
+        }
         guard !text.isEmpty else {
             stream(reqId, id: streamId, content: "目前只能处理文字消息。", finish: true)
             return
@@ -352,15 +511,38 @@ final class WecomBot: @unchecked Sendable {
                                           conversationId: conversation, threadId: "", messageId: messageId,
                                           actorId: userId,
                                           title: chatType == "group" ? "群聊 \(conversation.prefix(8))" : "与 \(userId) 的单聊")
-        if SourceGateway.settings(core)["mode"]?.text != "work" {
-            stream(reqId, id: streamId, content: "收到，Claude 正在处理…", finish: false)
+        if config.direct {
+            let projects = config.projects(from: (try? core.read { $0.projects() }) ?? [])
+            guard !projects.isEmpty || config.scope.allProjects else {
+                stream(reqId, id: streamId, content: "「\(config.name)」生效范围内没有可用的项目。", finish: true)
+                return
+            }
+            // 单项目：直接在该项目目录对话；多项目：在独立聊天目录对话，只告知授权项目。
+            let single = projects.count == 1 ? projects.first : nil
+            let projectKey = single?.id ?? "multi"
+            let chatRoot = AppDataDir.url.appendingPathComponent("wecom-chats", isDirectory: true).path
+            let binding = WecomClaudeChat.Binding(
+                key: WecomBotConfig.bindingKey(corpId: config.corpId, botId: credentials.botId, chatType: chatType,
+                                               conversationId: conversation, actorId: userId, projectId: projectKey),
+                legacyKey: config.legacy && single == nil
+                    ? "wecom.claude." + WorkText.sha256([source.accountId, source.conversationId, source.actorId].joined(separator: "\n"))
+                    : nil,
+                engine: config.defaultCli,
+                cwd: single?.path ?? chatRoot,
+                projectsPrompt: projects.map { "\($0.name) → \($0.path)" }.joined(separator: "\n"),
+                actorId: userId, deciders: config.cardDeciders(actor: userId), botLocalId: localId, chatId: conversation,
+                meta: .obj(["corpId": .string(config.corpId), "botId": .string(credentials.botId), "chatType": .string(chatType),
+                            "conversationId": .string(conversation), "actorId": .string(userId), "projectId": .string(projectKey)]))
+            stream(reqId, id: streamId, content: "收到，\(config.defaultCli.shortLabel) 正在处理…", finish: false)
             let connection = generation
-            chat.send(core: core, source: source, text: text) { [weak self] content, finish in
+            chat.send(core: core, binding: binding, messageId: messageId, text: text, reply: { [weak self] content, finish in
                 self?.queue.async {
                     guard let self, self.generation == connection else { return }
                     self.stream(reqId, id: streamId, content: content, finish: finish)
                 }
-            }
+            }, card: { [weak self] record in
+                self?.queue.async { self?.pushCard(record) }
+            })
             return
         }
         if let previous = SourceGateway.previousResult(core, source: source) {
@@ -368,14 +550,128 @@ final class WecomBot: @unchecked Sendable {
             return
         }
         stream(reqId, id: streamId, content: "收到，正在处理…", finish: false)
+        let allowed = config
         worker.async { [weak self] in
-            let answer = Self.process(core, source: source, text: text)
-            self?.queue.async { self?.stream(reqId, id: streamId, content: answer, finish: true) }
+            let (answer, result) = Self.process(core, source: source, text: text, allowed: allowed)
+            self?.queue.async {
+                guard let self else { return }
+                self.stream(reqId, id: streamId, content: answer, finish: true)
+                // 新建且等待启动的 Work：推送任务确认卡给发起人。
+                if result?["state"]?.stringValue == "created", result?["startAuthorized"]?.boolValue != true,
+                   let workId = result?["workId"]?.text {
+                    self.offerTaskCard(core: core, workId: workId, displayId: result?["displayId"]?.text ?? "Work",
+                                       project: result?["project"]?.text ?? "", chatId: conversation, actor: userId)
+                }
+            }
         }
     }
 
+    /// 入站诊断：每个机器人最近 20 条消息的元数据（时间、会话类型、消息 ID 摘要、授权与裁决结果），不含内容。
+    private func noteInbound(_ core: WorkCore, chatType: String, messageId: String, outcome: String) {
+        let key = "robot.inbound.\(localId)"
+        var list = core.getSetting(key)?.arrayValue ?? []
+        list.append(.obj(["at": .string(WorkClock.iso()), "chatType": .string(chatType),
+                          "message": .string(String(WorkText.sha256(messageId).prefix(10))), "outcome": .string(outcome)]))
+        try? core.putSetting(key, .array(Array(list.suffix(20))))
+    }
+
+    // MARK: 决策卡
+
+    private func pushCard(_ record: JSONValue) {
+        guard let chatId = record["chatId"]?.text else { return }
+        let reqId = Self.reqId("aibot_send_msg")
+        pendingAcks[reqId] = { [weak self] frame in
+            // 卡片发不出去（客户端或场景不支持）：编号选项已经在文字回复里，无需重复。
+            if let code = frame?["errcode"]?.intValue, code != 0 {
+                NSLog("ClaudePicker 企业微信卡片发送失败：%d", code)
+            }
+            _ = self
+        }
+        send(.obj(["cmd": .string("aibot_send_msg"), "headers": .obj(["req_id": .string(reqId)]),
+                   "body": .obj(["chatid": .string(chatId), "msgtype": .string("template_card"),
+                                 "template_card": WecomCards.template(record)])]))
+    }
+
+    private func offerTaskCard(core: WorkCore, workId: String, displayId: String, project: String, chatId: String, actor: String) {
+        guard let record = try? WecomCards.create(
+            core, kind: "task", botLocalId: localId, chatId: chatId, bindingKey: "",
+            title: "确认 \(displayId)", detail: project.isEmpty ? "确认后等待在 Claude Picker 中执行" : "项目 \(project)",
+            options: [.init(key: "confirm", label: "确认"), .init(key: "later", label: "稍后决定"), .init(key: "cancel", label: "取消")],
+            allowed: (WecomBotConfig.all(core).first { $0.id == localId } ?? config)?.cardDeciders(actor: actor) ?? [actor],
+            subject: .obj(["workId": .string(workId), "displayId": .string(displayId)])) else { return }
+        pushCard(record)
+    }
+
+    private func handleCardEvent(_ frame: JSONValue, reqId: String) {
+        guard let core, let body = frame["body"] else { return }
+        // 真实回调把卡片字段放在 `event.template_card_event` 下（SDK 类型定义里是平铺的），两种都认。
+        let raw = body["event"] ?? .null
+        let event = raw["template_card_event"].flatMap { $0.isNull ? nil : $0 } ?? raw
+        let taskId = event["task_id"]?.text ?? raw["task_id"]?.text ?? ""
+        let key = event["event_key"]?.text ?? raw["event_key"]?.text ?? ""
+        let actor = body["from"]?["userid"]?.stringValue ?? ""
+        // 只记录结构（字段名与是否带值），便于真实租户排查，不保存内容。
+        func shape(_ value: JSONValue) -> JSONValue {
+            guard case .object(let dict) = value else { return .string(value.isNull ? "null" : "value") }
+            return .object(dict.mapValues(shape))
+        }
+        try? core.putSetting("robot.lastCardEvent", .obj(["at": .string(WorkClock.iso()), "bot": .string(localId),
+                                                          "shape": shape(raw), "matched": .bool(!taskId.isEmpty)]))
+        guard !taskId.isEmpty, key != "noop" else { return }
+        let outcome = WecomCards.resolve(core, taskId: taskId, key: key, actor: actor)
+        let chatId = body["chattype"]?.stringValue == "group" ? (body["chatid"]?.stringValue ?? actor) : actor
+        switch outcome {
+        case .rejected(let reason):
+            // 无权或过期：卡片保持原状，只在原会话说明原因。
+            sendMarkdown(chatId: chatId, content: reason)
+        case .duplicate(let record):
+            updateCard(reqId: reqId, record: record)
+        case .accepted(let record, let choice):
+            // 回调时限内先更新卡片，耗时处理异步进行，结果回到原归属。
+            updateCard(reqId: reqId, record: record)
+            let target = record["chatId"]?.text ?? chatId
+            if record["kind"]?.stringValue == "task" {
+                let workId = record["subject"]?["workId"]?.text ?? ""
+                let display = record["subject"]?["displayId"]?.text ?? "Work"
+                worker.async { [weak self] in
+                    let text: String
+                    switch choice {
+                    case "cancel":
+                        do {
+                            _ = try core.cancel(workId: workId, revision: nil, requestId: "wecom-card-\(taskId)")
+                            text = "已取消 \(display)。"
+                        } catch {
+                            text = "取消 \(display) 失败：\((error as? WorkError)?.message ?? "\(error)")"
+                        }
+                    case "confirm": text = "已确认 \(display)，等待在 Claude Picker 中执行。"
+                    default: text = "好的，\(display) 暂不处理，之后可在原会话或 Claude Picker 中决定。"
+                    }
+                    self?.queue.async { self?.sendMarkdown(chatId: target, content: text) }
+                }
+            } else {
+                chat.answerCard(core: core, record: record, choice: choice) { [weak self] content, finish in
+                    guard finish else { return }
+                    self?.queue.async { self?.sendMarkdown(chatId: target, content: content) }
+                }
+            }
+        }
+    }
+
+    private func updateCard(reqId: String, record: JSONValue) {
+        send(.obj(["cmd": .string("aibot_respond_update_msg"), "headers": .obj(["req_id": .string(reqId)]),
+                   "body": .obj(["response_type": .string("update_template_card"),
+                                 "template_card": WecomCards.template(record)])]))
+    }
+
+    private func sendMarkdown(chatId: String, content: String) {
+        send(.obj(["cmd": .string("aibot_send_msg"), "headers": .obj(["req_id": .string(Self.reqId("aibot_send_msg"))]),
+                   "body": .obj(["chatid": .string(chatId), "msgtype": .string("markdown"),
+                                 "markdown": .obj(["content": .string(Self.limit(content))])])]))
+    }
+
     /// 理解消息并交给网关；返回要回给用户的文字。在后台线程运行（理解一条消息要调用一次 Claude，耗时数秒）。
-    static func process(_ core: WorkCore, source: SourceGateway.Source, text: String) -> String {
+    static func process(_ core: WorkCore, source: SourceGateway.Source, text: String,
+                        allowed: WecomBotConfig? = nil) -> (String, JSONValue?) {
         let sourceJSON: JSONValue = .obj(["accountId": .string(source.accountId), "conversationId": .string(source.conversationId),
                                           "messageId": .string(source.messageId), "actorId": .string(source.actorId),
                                           "conversationTitle": .string(source.title)])
@@ -384,15 +680,22 @@ final class WecomBot: @unchecked Sendable {
             resolved = try IntentResolver.resolve(core, source: source, text: text)
         } catch let error as WorkError {
             NSLog("ClaudePicker 企业微信机器人：%@ %@", error.message, error.detail ?? "")
-            return "暂时没法处理这条消息：\(error.message)" + (error.detail.map { "（\(String($0.prefix(160))))" } ?? "")
+            return ("暂时没法处理这条消息：\(error.message)" + (error.detail.map { "（\(String($0.prefix(160))))" } ?? ""), nil)
         } catch {
-            return "暂时没法处理这条消息：\(error)"
+            return ("暂时没法处理这条消息：\(error)", nil)
         }
         let reply = resolved["reply"]?.text ?? ""
         let channel = "企业微信机器人"
         do {
             switch resolved["kind"]?.stringValue {
             case "work", "follow_up", "clarify_reply":
+                // 项目超出该机器人的生效范围：停止路径并说明，不建 Work。
+                if let allowed, !allowed.canInitiate(source.actorId) {
+                    return ("你可以在这里提问，但还不是「\(allowed.name)」的任务发起人，不能创建或追加 Work。", nil)
+                }
+                if let allowed, let projectId = resolved["projectId"]?.text, !allowed.allows(projectId: projectId) {
+                    return ("这个项目不在「\(allowed.name)」的生效范围内，请联系管理员或换用对应的机器人。", nil)
+                }
                 var intent: [String: JSONValue] = [
                     "objective": resolved["objective"] ?? .string(text),
                     "title": resolved["title"] ?? .null,
@@ -408,7 +711,7 @@ final class WecomBot: @unchecked Sendable {
                     params["intentId"] = .string(intentId)
                 }
                 let result = try SourceGateway.submitIntent(core, params: .object(params), verifiedActor: true, via: channel)
-                return describe(result)
+                return (describe(result), result)
             case "answer":
                 let answers = (resolved["answers"]?.arrayValue ?? []).reduce(into: [String: JSONValue]()) { map, item in
                     if let q = item["question"]?.text, let a = item["answer"]?.text { map[q] = .string(a) }
@@ -418,18 +721,18 @@ final class WecomBot: @unchecked Sendable {
                     "answer": .obj(["answers": .object(answers)]),
                 ]), verifiedActor: true, via: channel)
                 switch result["state"]?.stringValue {
-                case "recorded": return "已记录你的回答，Work 会继续执行。"
-                default: return result["message"]?.text ?? "这个问题现在不能在这里回答，请在 Claude Picker 中处理。"
+                case "recorded": return ("已记录你的回答，Work 会继续执行。", result)
+                default: return (result["message"]?.text ?? "这个问题现在不能在这里回答，请在 Claude Picker 中处理。", result)
                 }
             default:
                 let answer = reply.isEmpty ? "收到。" : reply
                 SourceGateway.recordChat(core, source: source, text: text, reply: answer, verifiedActor: true)
-                return answer
+                return (answer, nil)
             }
         } catch let error as WorkError {
-            return error.message
+            return (error.message, nil)
         } catch {
-            return "处理失败：\(error)"
+            return ("处理失败：\(error)", nil)
         }
     }
 
@@ -469,8 +772,10 @@ final class WecomBot: @unchecked Sendable {
 
     private func flushNotifications() {
         guard state == .connected, let core else { return }
-        guard let rows = try? SourceGateway.claimNotifications(core, botOwned: true, limit: 10,
-                                                               note: "已通过企业微信机器人发送，等待回执") else { return }
+        guard let account = credentials.map({ SourceGateway.botAccountPrefix + $0.botId }),
+              let rows = try? SourceGateway.claimNotifications(core, botOwned: true, limit: 10,
+                                                               note: "已通过企业微信机器人发送，等待回执",
+                                                               accountId: account) else { return }
         for row in rows {
             let id = row.text("id")
             let chatId = row.text("remote_conversation_id")

@@ -42,6 +42,7 @@ if [[ -f "$build_dir/SwiftTerm.o" ]]; then
 fi
 swiftc -module-cache-path "$CLANG_MODULE_CACHE_PATH" -I "$module_dir" \
     Sources/ClaudeDeck/Models.swift Sources/ClaudeDeck/AgentProviders.swift \
+    Sources/ClaudeDeck/*SessionScanner.swift Sources/ClaudeDeck/SessionChat.swift \
     Sources/ClaudeDeck/Git/*.swift Sources/ClaudeDeck/ThirdPane/*.swift Sources/ClaudeDeck/Chat*.swift \
     Sources/ClaudeDeck/Work/*.swift \
     "$check_dir/TerminalPane.swift" \
@@ -49,6 +50,7 @@ swiftc -module-cache-path "$CLANG_MODULE_CACHE_PATH" -I "$module_dir" \
     || { (grep -n -C 3 "error:" "$check_dir/terminal-build.log" || tail -20 "$check_dir/terminal-build.log"); exit 1; }
 swiftc -module-cache-path "$CLANG_MODULE_CACHE_PATH" -I "$module_dir" \
     Sources/ClaudeDeck/Models.swift Sources/ClaudeDeck/AgentProviders.swift \
+    Sources/ClaudeDeck/*SessionScanner.swift Sources/ClaudeDeck/SessionChat.swift \
     Sources/ClaudeDeck/Git/*.swift Sources/ClaudeDeck/ThirdPane/*.swift Sources/ClaudeDeck/Chat*.swift \
     Sources/ClaudeDeck/Work/*.swift \
     "$check_dir/TerminalPane.swift" \

@@ -1,4 +1,5 @@
 // 工作空间右侧的详情栏：任务详情 / 变更文件 / 活动。各标签的数据都属于当前选中的对象，独立滚动。
+import EngineIcon from '../EngineIcon.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowCounterClockwise,
@@ -399,9 +400,7 @@ function SessionInfo({ active, project, status, home, onOpenGit, onContinueAsWor
           <>
             <button className="source-box" disabled>
               <strong>
-                <em className={`provider-badge ${active.provider ?? 'claude'}`}>
-                  {active.provider === 'antigravity' ? 'A' : 'C'}
-                </em>
+                <EngineIcon id={active.provider ?? 'claude'} />
                 {active.label}
               </strong>
               <small>{tildePath(active.cwd, home)}</small>

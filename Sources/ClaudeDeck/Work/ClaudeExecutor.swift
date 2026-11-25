@@ -303,6 +303,17 @@ final class ClaudeProcess: AgentExecutorProcess, @unchecked Sendable {
     @discardableResult
     func interrupt(requestId: String) -> Bool { control(subtype: "interrupt", requestId: requestId) }
 
+    /// stream-json 支持热切换权限模式与模型；推理强度只在启动参数里，需要按原 ID 重启。
+    @discardableResult
+    func updateRuntime(key: String, value: String) -> Bool {
+        let requestId = "picker-runtime-\(UUID().uuidString.prefix(8))"
+        switch key {
+        case "mode": return control(subtype: "set_permission_mode", requestId: requestId, extra: ["mode": .string(value)])
+        case "model": return control(subtype: "set_model", requestId: requestId, extra: ["model": .string(value)])
+        default: return false
+        }
+    }
+
     /// 结束进程：先关 stdin 让 CLI 自己收尾，超时后 SIGTERM，再超时 SIGKILL。只动自己启动的这一个进程。
     func shutdown(grace: TimeInterval = 4) {
         let alreadyGone: Bool = queue.sync {

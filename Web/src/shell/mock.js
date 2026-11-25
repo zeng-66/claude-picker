@@ -209,11 +209,19 @@ function snapshot() {
   return JSON.parse(
     JSON.stringify({
       home: HOME,
-      projects: db.projects,
+      projects: db.projects.map((project) => ({
+        ...project,
+        sessions: project.sessions.map((session) => ({
+          ...session, originalSessionId: session.id,
+          branch: session.branch ?? projectSeed.find(([name]) => P(name) === project.path)?.[1],
+        })),
+      })),
       active: db.active,
       providers: [
         { id: 'claude', label: 'Claude Code', command: 'claude', available: true, path: '/usr/local/bin/claude' },
         { id: 'antigravity', label: 'Antigravity', command: 'agy', available: true, path: '/Users/demo/.local/bin/agy' },
+        { id: 'codex', label: 'Codex CLI', command: 'codex', available: true, path: '/usr/local/bin/codex' },
+        { id: 'dsh', label: 'DeepSeek Harness', command: 'dsh-tui', available: false, status: '缺少 dsh 后端' },
       ],
       runtime: {
         ...db.runtime,
@@ -311,6 +319,8 @@ const handlers = {
     window.open(url, '_blank', 'noopener');
     return null;
   },
+  'app.copyText': ({ text }) => navigator.clipboard.writeText(text),
+  'app.refreshUsage': () => null,
   'app.settings': (params) => {
     Object.assign(db.settings, params);
     return null;
@@ -455,9 +465,9 @@ const handlers = {
     push();
     return null;
   },
-  'session.create': ({ projectPath, title, mode, branch, provider = 'claude' }) => {
+  'session.create': ({ projectPath, title, mode, branch, workspace, provider = 'claude' }) => {
     const p = project(projectPath);
-    let cwd = projectPath;
+    let cwd = workspace?.worktreePath ?? projectPath;
     if (mode === 'worktree') {
       const r = requireRepo(projectPath);
       if (r.branches.includes(branch)) throw fail('BRANCH_EXISTS', `分支已存在：${branch}`);
@@ -467,12 +477,12 @@ const handlers = {
     }
     const id = `demo-new-${++seq}`;
     const label = title || '新建会话';
-    p.sessions.unshift({ id, title: label, named: Boolean(title), cwd, provider, time: '刚刚', running: false, unread: false });
+    p.sessions.unshift({ id, title: label, named: Boolean(title), cwd, provider, branch: workspace?.branch ?? branch ?? repo(projectPath)?.branch, time: '刚刚', running: false, unread: false });
     p.expanded = true;
     db.active = { sessionId: id, cwd, projectPath, label, provider, busy: false };
     db.runtime.provider = provider;
     push();
-    return { sessionId: id, cwd, provider };
+    return { sessionId: id, cwd, provider, mode };
   },
   'session.handoff': ({ sessionId, sourceProvider = 'claude', targetProvider = 'antigravity', projectPath }) => {
     const p = project(projectPath);
@@ -572,6 +582,23 @@ const handlers = {
     if (!r.branches.includes(local)) r.branches.push(local);
     r.branch = local;
     return { ok: true };
+  },
+  'git.switchWorkspaceBranch': ({ projectPath, branch }) => {
+    const r = requireRepo(projectPath);
+    if (r.branch !== branch && r.files.length) throw fail('COMMAND_FAILED', '当前工作区有未提交改动');
+    r.branch = branch;
+    return { ok: true };
+  },
+  'git.createWorktree': ({ input }) => {
+    const { projectPath, branch } = input;
+    const r = requireRepo(projectPath);
+    if (r.branches.includes(branch)) throw fail('BRANCH_EXISTS', `分支已存在：${branch}`);
+    const path = `${projectPath}/.worktrees/${branch.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+    const tree = { path, branch, head: 'a84c2e1', isLocked: false, isPrunable: false, isBare: false };
+    r.branches.push(branch);
+    r.worktrees.push(tree);
+    db.repos[path] = { ...r, branch, files: [], contents: {} };
+    return tree;
   },
   'git.fetch': () => ({ ok: true }),
   'git.pull': () => ({ ok: true }),

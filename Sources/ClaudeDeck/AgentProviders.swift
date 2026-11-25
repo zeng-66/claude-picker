@@ -6,11 +6,15 @@ import SQLite3
 enum AgentProvider: String, Codable, Sendable, CaseIterable {
     case claude
     case antigravity
+    case codex
+    case dsh
 
     var label: String {
         switch self {
         case .claude: return "Claude Code"
         case .antigravity: return "Antigravity"
+        case .codex: return "Codex CLI"
+        case .dsh: return "DeepSeek Harness"
         }
     }
 
@@ -18,6 +22,8 @@ enum AgentProvider: String, Codable, Sendable, CaseIterable {
         switch self {
         case .claude: return "Claude"
         case .antigravity: return "Antigravity"
+        case .codex: return "Codex"
+        case .dsh: return "DeepSeek"
         }
     }
 
@@ -25,6 +31,8 @@ enum AgentProvider: String, Codable, Sendable, CaseIterable {
         switch self {
         case .claude: return "C"
         case .antigravity: return "A"
+        case .codex: return "Cx"
+        case .dsh: return "Ds"
         }
     }
 
@@ -32,12 +40,16 @@ enum AgentProvider: String, Codable, Sendable, CaseIterable {
         switch self {
         case .claude: return "claude"
         case .antigravity: return "agy"
+        case .codex: return "codex"
+        case .dsh: return "dsh-tui"
         }
     }
 
     var supportsFast: Bool { self == .claude }
     var hotModeSwitchable: Bool { self == .claude }
     var supportsGraphicalChat: Bool { self == .claude }
+    /// 可由结构化协议驱动：Claude stream-json、Antigravity ACP、Codex App Server。DeepSeek 只走终端。
+    var supportsStructuredChat: Bool { self != .dsh }
 
     static func parse(_ raw: String?) -> AgentProvider {
         guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else {
@@ -72,6 +84,8 @@ enum CliBinaryLocator {
         switch provider {
         case .claude: return findClaude()
         case .antigravity: return findAgy()
+        case .codex: return findCommand("codex", override: "CLAUDE_PICKER_CODEX_BIN")
+        case .dsh: return findCommand("dsh-tui", override: "CLAUDE_PICKER_DSH_TUI_BIN")
         }
     }
 
@@ -115,15 +129,36 @@ enum CliBinaryLocator {
         return candidates.first { fm.isExecutableFile(atPath: $0) }
     }
 
+    static func findCommand(_ command: String, override: String? = nil) -> String? {
+        let fm = FileManager.default
+        let env = ProcessInfo.processInfo.environment
+        if let override, let path = env[override], !path.isEmpty {
+            return fm.isExecutableFile(atPath: path) ? path : nil
+        }
+        let directories = ["\(NSHomeDirectory())/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+            + (env["PATH"] ?? "").split(separator: ":").map(String.init)
+            + loginPathCache.split(separator: ":").map(String.init)
+        return directories.map { "\($0)/\(command)" }.first { fm.isExecutableFile(atPath: $0) }
+    }
+
+    static func launchError(_ provider: AgentProvider) -> String? {
+        if find(provider) == nil { return "未检测到 \(provider.commandName)" }
+        if provider == .dsh, findCommand("dsh") == nil { return "缺少 dsh 后端" }
+        return nil
+    }
+
     static func diagnostics() -> [[String: Any]] {
         AgentProvider.allCases.map { p in
             let found = find(p)
+            let error = launchError(p)
             return [
                 "id": p.rawValue,
                 "label": p.label,
                 "shortLabel": p.shortLabel,
                 "command": p.commandName,
-                "available": found != nil,
+                "available": error == nil,
+                "status": error ?? "可启动",
+                "supportsChat": p.supportsGraphicalChat,
                 "path": found ?? NSNull(),
             ]
         }

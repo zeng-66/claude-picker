@@ -14,13 +14,19 @@ export FAKE_AGY_LOG="$test_dir/fake-agy.log"
 export FAKE_AGY_STATE="$test_dir/fake-agy-state"
 export CLAUDE_PICKER_AGY_BIN="$test_dir/agy"
 export CLAUDE_PICKER_AGY_DIR="$test_dir/agy-home"
+export FAKE_CODEX_LOG="$test_dir/fake-codex.log"
+export CLAUDE_PICKER_CODEX_BIN="$test_dir/codex"
+export FAKE_TAPD_MCP_LOG="$test_dir/fake-tapd-mcp.log"
+export CLAUDE_PICKER_TAPD_MCP_BIN="$test_dir/tapd-mcp"
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$test_dir/clang-cache}"
 # 凭据走进程内存储，不碰真实钥匙串。
 export CLAUDE_PICKER_KEYCHAIN=memory
 mkdir -p "$WORK_TEST_DIR" "$FAKE_CLAUDE_STATE" "$FAKE_AGY_STATE" "$CLAUDE_PICKER_AGY_DIR"
 cp "$repo_dir/Tests/WorkRegression/fake-claude.py" "$CLAUDE_PICKER_CLAUDE_BIN"
 cp "$repo_dir/Tests/WorkRegression/fake-agy-acp.py" "$CLAUDE_PICKER_AGY_BIN"
-chmod +x "$CLAUDE_PICKER_CLAUDE_BIN" "$CLAUDE_PICKER_AGY_BIN"
+cp "$repo_dir/Tests/WorkRegression/fake-codex-app-server.py" "$CLAUDE_PICKER_CODEX_BIN"
+cp "$repo_dir/Tests/WorkRegression/fake-tapd-mcp.py" "$CLAUDE_PICKER_TAPD_MCP_BIN"
+chmod +x "$CLAUDE_PICKER_CLAUDE_BIN" "$CLAUDE_PICKER_AGY_BIN" "$CLAUDE_PICKER_CODEX_BIN" "$CLAUDE_PICKER_TAPD_MCP_BIN"
 swiftc -swift-version 6 -module-cache-path "$CLANG_MODULE_CACHE_PATH" \
   "$repo_dir/Sources/ClaudeDeck/Models.swift" \
   "$repo_dir/Sources/ClaudeDeck/AgentProviders.swift" \

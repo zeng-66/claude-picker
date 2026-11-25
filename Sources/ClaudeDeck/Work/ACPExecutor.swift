@@ -16,6 +16,12 @@ protocol AgentExecutorProcess: AnyObject, Sendable {
     @discardableResult func interrupt(requestId: String) -> Bool
     func shutdown(grace: TimeInterval)
     func terminateAndWait(timeout: TimeInterval) -> Bool
+    /// 运行中修改权限模式（mode）、模型（model）或推理强度（effort）。返回 false 表示需要下一次启动才生效。
+    @discardableResult func updateRuntime(key: String, value: String) -> Bool
+}
+
+extension AgentExecutorProcess {
+    @discardableResult func updateRuntime(key: String, value: String) -> Bool { false }
 }
 
 /// 标准 Agent Client Protocol (ACP, JSON-RPC 2.0 NDJSON over stdio) 执行器。
@@ -210,6 +216,9 @@ final class ACPProcess: AgentExecutorProcess, @unchecked Sendable {
                 "permissionMode": .str(config.permissionMode ?? currentMode),
                 "cwd": .string(config.cwd),
                 "cliVersion": .str(agentVersion),
+                // 可选模式与模型以 ACP 会话自己报告的为准，供界面快捷切换。
+                "availableModes": resultObj?["modes"]?["availableModes"] ?? .null,
+                "availableModels": resultObj?["models"]?["availableModels"] ?? .null,
             ])))
             if !readySent {
                 readySent = true
@@ -407,6 +416,18 @@ final class ACPProcess: AgentExecutorProcess, @unchecked Sendable {
                 return hit
             }
             return nil
+        }
+    }
+
+    @discardableResult
+    func updateRuntime(key: String, value: String) -> Bool {
+        queue.sync {
+            guard !sessionIdValue.isEmpty, key == "mode" || key == "model" else { return false }
+            nextRpcId += 1
+            return sendRpc(id: nextRpcId, method: key == "mode" ? "session/set_mode" : "session/set_model", params: .obj([
+                "sessionId": .string(sessionIdValue),
+                key == "mode" ? "modeId" : "modelId": .string(value),
+            ]))
         }
     }
 

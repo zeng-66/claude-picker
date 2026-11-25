@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
+  ChatCircleDots,
   ArrowUp,
   ArrowsClockwise,
   CaretDoubleLeft,
@@ -32,6 +33,7 @@ import './style.css';
 import appIcon from './clawd-mark.png';
 import { errorText, isNative, on, request } from './bridge.js';
 import { IconButton, tildePath, useStored } from './ui.jsx';
+import { resumeCommand } from './session-info.js';
 import Sidebar from './Sidebar.jsx';
 import {
   GIT_SECTIONS,
@@ -52,8 +54,10 @@ import DesktopPet from './pet/DesktopPet.jsx';
 import { petEvent, usePetSignals } from './pet/usePetSignals.js';
 import WorkspaceTab from './WorkspaceTab.jsx';
 import { BranchesTab, HistoryTab, MoreTab, WorktreeTab } from './GitPages.jsx';
-import { ContextModal, DirectoryModal, McpModal, RenameSessionModal, SessionModal } from './Modals.jsx';
+import { ContextModal, CreateWorktreeModal, DirectoryModal, McpModal, RenameSessionModal, SessionInfoModal, SessionModal } from './Modals.jsx';
 import './work/work.css';
+import SessionChat from './SessionChat.jsx';
+import { DeepSeekBanner } from './work/DeepSeekMaintenance.jsx';
 import { needsAttention, useWorks } from './work/useWorks.js';
 import WorkChat from './work/WorkChat.jsx';
 import ContextPanel from './work/ContextPanel.jsx';
@@ -62,7 +66,7 @@ import TapdModule from './work/TapdModule.jsx';
 import ReviewTab from './work/ReviewTab.jsx';
 import FloatingWork from './work/FloatingWork.jsx';
 import SettingsModal from './work/SettingsModal.jsx';
-import { ConfirmHost } from './work/confirm.jsx';
+import { ConfirmHost, confirmAction } from './work/confirm.jsx';
 import { DeliveryModal, ExportModal, NewWorkModal, SearchModal, SourceModal } from './work/WorkModals.jsx';
 
 const PAGES = [
@@ -101,6 +105,9 @@ function countWorkSections(works) {
 const native = isNative();
 if (native) document.documentElement.classList.add('native');
 
+const OPEN_MODE_ACTIONS = { '改用终端打开': 'terminal', '改用结构化聊天': 'structured', '改用 Swttch 图形聊天': 'chat' };
+const OPEN_MODE_LABEL = { terminal: '原生终端', structured: '结构化聊天', chat: 'Swttch 图形聊天' };
+
 export default function App() {
   const [state, setState] = useState(null);
   const [settings, setSettings] = useState(null);
@@ -108,26 +115,32 @@ export default function App() {
   const [tab, setTab] = useStored('tab', '工作区');
   const [morePage, setMorePage] = useState(null);
 
-  const [status, setStatus] = useState(null);
-  const [statusError, setStatusError] = useState(null);
+  const [statusResult, setStatus] = useState(null);
+  const [statusErrorResult, setStatusError] = useState(null);
   const [stamp, setStamp] = useState(0);
-  const [branches, setBranches] = useState(null);
-  const [branchesError, setBranchesError] = useState(null);
+  const [branchesResult, setBranches] = useState(null);
+  const [branchesErrorResult, setBranchesError] = useState(null);
   const [epoch, setEpoch] = useState(0);
   const [gitBusy, setGitBusy] = useState(false);
   const gitBusyRef = useRef(false);
 
   const [menu, setMenu] = useState(null);
   const [branchFilter, setBranchFilter] = useState('');
-  const [pickedBranch, setPickedBranch] = useState('');
   const [branchContext, setBranchContext] = useState(null);
   const [treeContext, setTreeContext] = useState(null);
+  const [diffWorkspace, setDiffWorkspace] = useState(null);
   const [treeCursor, setTreeCursor] = useState(null);
   const [runtimeMenu, setRuntimeMenu] = useState(null);
   const [modal, setModal] = useState(null);
+  useEffect(() => {
+    const open = () => setModal({ kind: 'settings', page: 'cli' });
+    window.addEventListener('claude-picker:open-cli-settings', open);
+    return () => window.removeEventListener('claude-picker:open-cli-settings', open);
+  }, []);
   const [toast, setToast] = useState(null);
   const [log, setLog] = useState([]);
   const [followBanner, setFollowBanner] = useState(null);
+  const [deepseekReport, setDeepseekReport] = useState(null);
 
   // ---------- Work ----------
   const { snapshot: workSnap } = useWorks();
@@ -253,8 +266,26 @@ export default function App() {
   const projects = state?.projects ?? [];
   const active = state?.active ?? null;
   const project = projects.find((item) => item.path === workbenchPath) ?? null;
-  const pathRef = useRef(workbenchPath);
-  pathRef.current = workbenchPath;
+  const gitPath = diffWorkspace?.projectPath === workbenchPath ? diffWorkspace.worktree : workbenchPath;
+  const [worktreesByProject, setWorktreesByProject] = useState({});
+  const projectPaths = JSON.stringify(projects.filter((item) =>
+    !item.isHome && (item.expanded || item.path === workbenchPath)).map((item) => item.path));
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(JSON.parse(projectPaths).map(async (projectPath) => {
+      try {
+        const list = await request('git.worktrees', { projectPath });
+        return [projectPath, list.filter((item, index) => index !== 0 && item.path !== projectPath && !item.isPrunable && !item.isBare)];
+      } catch {
+        return [projectPath, null];
+      }
+    })).then((entries) => {
+      if (!cancelled) setWorktreesByProject(Object.fromEntries(entries));
+    });
+    return () => { cancelled = true; };
+  }, [projectPaths, epoch]);
+  const pathRef = useRef(gitPath);
+  pathRef.current = gitPath;
 
   // 工作台项目：记住上次的；不在列表里了就跟当前会话走，再不行取第一个普通项目。
   useEffect(() => {
@@ -267,43 +298,52 @@ export default function App() {
   }, [projects.length, project?.path, active?.projectPath]);
 
   // ---------- Git 状态 ----------
+  const status = statusResult?.path === gitPath ? statusResult.value : null;
+  const statusError = statusErrorResult?.path === gitPath ? statusErrorResult.value : null;
+  const branches = branchesResult?.path === gitPath ? branchesResult.value : null;
+  const branchesError = branchesErrorResult?.path === gitPath ? branchesErrorResult.value : null;
+  const navigationRef = useRef(0);
+  useEffect(() => { navigationRef.current += 1; }, [gitPath]);
+
   const statusLoading = useRef(false);
   const loadStatus = useCallback(() => {
     const path = pathRef.current;
     if (!path || statusLoading.current) return;
     statusLoading.current = true;
+    const navigation = navigationRef.current;
     request('git.status', { projectPath: path }, { timeoutMs: 60000 })
       .then((snapshot) => {
-        if (pathRef.current !== path) return;
-        setStatus(snapshot);
+        if (pathRef.current !== path || navigationRef.current !== navigation) return;
+        setStatus({ path, value: snapshot });
         setStatusError(null);
         setStamp((value) => value + 1);
       })
       .catch((error) => {
-        if (pathRef.current !== path) return;
+        if (pathRef.current !== path || navigationRef.current !== navigation) return;
         setStatus(null);
-        setStatusError({ code: error.code, text: errorText(error) });
+        setStatusError({ path, value: { code: error.code, text: errorText(error) } });
       })
       .finally(() => {
         statusLoading.current = false;
         // 加载期间切了项目：给新项目补一次
-        if (pathRef.current !== path) loadStatus();
+        if (pathRef.current !== path || navigationRef.current !== navigation) loadStatus();
       });
   }, []);
 
   const loadBranches = useCallback(() => {
     const path = pathRef.current;
     if (!path) return;
+    const navigation = navigationRef.current;
     request('git.branches', { projectPath: path }, { timeoutMs: 60000 })
       .then((list) => {
-        if (pathRef.current !== path) return;
-        setBranches(list);
+        if (pathRef.current !== path || navigationRef.current !== navigation) return;
+        setBranches({ path, value: list });
         setBranchesError(null);
       })
       .catch((error) => {
-        if (pathRef.current !== path) return;
+        if (pathRef.current !== path || navigationRef.current !== navigation) return;
         setBranches(null);
-        setBranchesError(errorText(error));
+        setBranchesError({ path, value: errorText(error) });
       });
   }, []);
 
@@ -313,13 +353,13 @@ export default function App() {
     setBranches(null);
     setBranchesError(null);
     setFollowBanner((banner) => (banner && banner.projectPath !== workbenchPath ? null : banner));
-  }, [workbenchPath]);
+  }, [gitPath]);
 
   useEffect(() => {
-    if (!workbenchPath) return;
+    if (!gitPath) return;
     loadStatus();
     loadBranches();
-  }, [workbenchPath, epoch]);
+  }, [gitPath, epoch]);
 
   const workbenchVisible = Boolean(settings?.workbench);
   useEffect(() => {
@@ -405,11 +445,12 @@ export default function App() {
   const notRepository = statusError?.code === 'NOT_A_REPOSITORY';
 
   function selectProject(path) {
+    navigationRef.current += 1;
+    setDiffWorkspace(null);
     if (path !== workbenchPath) setWorkbenchPath(path);
     setMenu(null);
     setBranchContext(null);
     setBranchFilter('');
-    setPickedBranch('');
     setMorePage(null);
   }
 
@@ -464,15 +505,16 @@ export default function App() {
       runGit('git.merge', { branch: name }, `已将 ${name} 合并到 ${currentBranch ?? '当前分支'}`);
   }
 
-  function openTreeContext(event, target, session = null) {
+  function openTreeContext(event, target, session = null, group = null) {
     event.preventDefault();
     setMenu(null);
     setBranchContext(null);
     setTreeContext({
       project: target,
       session,
+      group,
       x: Math.min(event.clientX, window.innerWidth - 218),
-      y: Math.min(event.clientY, window.innerHeight - 240),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - (session ? 330 : 200))),
     });
   }
 
@@ -496,13 +538,100 @@ export default function App() {
     }
   }
 
-  function treeAction(action) {
-    const { project: target, session } = treeContext;
-    setTreeContext(null);
-    if (action === '新建对话') {
+  async function openBranchDiff(target, group) {
+    if (!group?.branch && !group?.worktree) return;
+    const navigation = ++navigationRef.current;
+    try {
+      const cwd = group.worktree ?? target.path;
+      const status = await request('git.status', { projectPath: cwd });
+      if (navigationRef.current !== navigation) return;
+      if (!group.worktree && status.branch !== group.branch) {
+        await request('git.switchWorkspaceBranch', { projectPath: cwd, branch: group.branch });
+      }
+      if (navigationRef.current !== navigation) return;
       selectProject(target.path);
+      setDiffWorkspace(group.worktree ? { projectPath: target.path, worktree: cwd } : null);
+      setSelectedWorkId(null);
+      revealPage('workspace');
+      setPage('workspace');
+      setTab('工作区');
+      setConsoleOpen(false);
+      updateSettings({ terminal: false, workbench: true });
+      setEpoch((value) => value + 1);
+    } catch (error) {
+      notify(errorText(error), true);
+    }
+  }
+
+  async function copyTreeValue(value, label, sessionInfo = null) {
+    if (!value) return;
+    try {
+      await request('app.copyText', { text: value });
+      notify(`已复制${label}`);
+    } catch {
+      if (sessionInfo) setModal({ kind: 'session-info', ...sessionInfo });
+      notify('无法写入剪贴板，请手动复制', true);
+    }
+  }
+
+  function openModeMenu(session) {
+    const provider = session.provider ?? 'claude';
+    const supported = settings.cliPreferences?.[provider]?.modes ?? ['terminal'];
+    const current = session.openMode ?? 'terminal';
+    return Object.entries(OPEN_MODE_ACTIONS)
+      .filter(([, mode]) => mode !== current && supported.includes(mode))
+      .map(([label]) => [label, !session.originalSessionId]);
+  }
+
+  async function switchOpenMode(session, mode) {
+    if (session.running) {
+      const ok = await confirmAction({
+        title: '切换打开方式',
+        text: '这条会话的当前回合还在进行。切换前会先中断这一轮并等待执行器释放会话，未完成的输出不会继续。',
+        confirmLabel: '中断并切换',
+        cancelLabel: '取消',
+      });
+      if (!ok) return;
+    }
+    notify(`正在切换为「${OPEN_MODE_LABEL[mode]}」…`);
+    try {
+      await request('session.setOpenMode', { sessionId: session.id, mode }, { timeoutMs: 45000 });
+      notify(`已用「${OPEN_MODE_LABEL[mode]}」打开`);
+    } catch (cause) {
+      notify(`切换失败，已保留原界面：${errorText(cause)}`, true);
+    }
+  }
+
+  function treeAction(action) {
+    const { project: target, session, group } = treeContext;
+    setTreeContext(null);
+    if (action === '复制分支名') { copyTreeValue(group?.branch, '分支名'); return; }
+    if (action === '复制工作目录') { copyTreeValue(group?.worktree ?? target.path, '工作目录'); return; }
+    if (session && ['查看会话信息', '复制会话 ID', '复制恢复命令'].includes(action)) {
+      const info = { session, projectPath: target.path };
+      if (action === '查看会话信息') setModal({ kind: 'session-info', ...info });
+      if (action === '复制会话 ID') copyTreeValue(session.originalSessionId, '会话 ID', info);
+      if (action === '复制恢复命令') copyTreeValue(resumeCommand(session.provider ?? 'claude', session.originalSessionId), '恢复命令', info);
+      return;
+    }
+    if (action === '在工作区查看 Diff') {
+      openBranchDiff(target, group);
+      return;
+    }
+    if (action === '创建工作树') {
+      setModal({ kind: 'create-worktree', projectPath: target.path });
+      return;
+    }
+    if (action === '新建对话') {
+      if (!group) selectProject(target.path);
       if (!target.expanded) request('app.toggleProject', { path: target.path });
-      setModal({ kind: 'session', mode: 'current', projectPath: target.path });
+      setModal({ kind: 'session', mode: 'current', projectPath: target.path,
+        workspace: group ? { branch: group.branch, worktreePath: group.worktree } : null });
+      return;
+    }
+    if (session && OPEN_MODE_ACTIONS[action]) {
+      switchOpenMode(session, OPEN_MODE_ACTIONS[action]);
+      return;
     }
     if (action === '重命名' && session) setModal({ kind: 'rename', session });
     if (action === '转到 Antigravity 继续' && session) {
@@ -551,16 +680,25 @@ export default function App() {
   }
 
   function openSession(target, session) {
+    const provider = session.provider ?? 'claude';
+    if (settings.cliPreferences?.[provider]?.enabled === false) {
+      const engine = state.providers?.find((item) => item.id === provider)?.label ?? provider;
+      notify(`${engine} 已停用，请在 CLI 引擎设置中启用。`, true);
+      return;
+    }
     setSelectedWorkId(null);
     revealPage('workspace');
     setPage('workspace');
-    if (target.path !== workbenchPath) selectProject(target.path);
+    selectProject(target.path);
+    const tree = worktreesByProject[target.path]?.find((item) =>
+      session.cwd === item.path || session.cwd?.startsWith(item.path + '/'));
+    if (tree) setDiffWorkspace({ projectPath: target.path, worktree: tree.path });
     if (!settings.terminal) updateSettings({ terminal: true });
     request('session.open', {
       projectPath: target.path,
       cwd: session.cwd,
       sessionId: session.id,
-      provider: session.provider ?? 'claude',
+      provider,
     }).catch((error) => notify(errorText(error), true));
   }
 
@@ -635,6 +773,18 @@ export default function App() {
     const offCommand = on('command', (detail) => {
       if (detail.name === 'openWork') return workCommands.current.openByDisplayId(detail.displayId);
       if (detail.name === 'sessionHeldByWork') return workCommands.current.heldByWork(detail.sessionId);
+      if (detail.name === 'deepseekMaintenance' && detail.report) {
+        setDeepseekReport(detail.report);
+        return;
+      }
+      if (detail.name === 'structuredFallback') {
+        notify(`${detail.provider ?? 'CLI'} 结构化聊天未能启动，已改用终端：${detail.message ?? ''}`, true);
+        return;
+      }
+      if (detail.name === 'toast' && detail.text) {
+        notify(detail.text, true);
+        return;
+      }
       if (detail.name === 'chatFallbackForProvider') {
         notify(`${detail.provider ?? 'Antigravity'} 会话暂不支持图形聊天，已自动用原生终端打开`);
         return;
@@ -818,8 +968,38 @@ export default function App() {
   const petOn = settings.pet?.enabled !== false;
   // macOS 原生由桌面悬浮窗显示桌宠（state.desktopPet），主窗口里不再画一份。
   const petEnabled = petOn && !state.desktopPet;
+  const structuredActive = active?.surface === 'structured';
+  // 右上角的打开方式切换：终端 ↔ 结构化聊天（引擎不支持结构化聊天或尚无原始 ID 时不显示）。
+  const activeModes = settings.cliPreferences?.[active?.provider ?? 'claude']?.modes ?? ['terminal'];
+  const surfaceToggle = !active || !active.sessionId || active.sessionId.startsWith('pending-')
+    ? null
+    : structuredActive
+      ? { mode: 'terminal', icon: Terminal, label: '切换为终端' }
+      : activeModes.includes('structured')
+        ? { mode: 'structured', icon: ChatCircleDots, label: '切换为结构化聊天' }
+        : null;
+  async function switchSurfaceOfActive(mode) {
+    if (!active) return;
+    if (active.busy) {
+      const ok = await confirmAction({
+        title: '切换打开方式',
+        text: '当前回合还在进行。切换前会先中断这一轮并等待执行器释放会话。',
+        confirmLabel: '中断并切换',
+        cancelLabel: '取消',
+      });
+      if (!ok) return;
+    }
+    try {
+      await request('session.setOpenMode', { sessionId: active.sessionId, mode }, { timeoutMs: 45000 });
+    } catch (cause) {
+      notify(`切换失败，已保留原界面：${errorText(cause)}`, true);
+    }
+  }
   const consoleTerminal =
-    active && window.claudeDesktop ? (
+    structuredActive ? (
+      <SessionChat sessionId={active.sessionId} provider={active.provider} label={active.label}
+        supportedModes={settings.cliPreferences?.[active.provider]?.modes ?? ['terminal']} />
+    ) : active && window.claudeDesktop ? (
       <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
     ) : active && native ? (
       consoleOpen && consoleAllowed ? <div className="terminal-hole" data-terminal-hole /> : null
@@ -841,9 +1021,10 @@ export default function App() {
     (item) => item.enabled !== false,
   );
   // 图形聊天模式：第二栏里是 Swttch 自己的输入区（仅 Claude 会话走图形聊天，Antigravity 自动回退原生终端）。
-  const chatMode =
-    settings.interactionMode === 'chat' &&
-    (active?.provider ?? state.runtime?.provider ?? 'claude') === 'claude';
+  // 打开方式按会话决定：结构化聊天与 Swttch 都自带输入区，不再显示外壳输入区和终端运行参数。
+  const chatMode = active
+    ? active.surface === 'chat' || active.surface === 'structured'
+    : settings.interactionMode === 'chat' && (state.runtime?.provider ?? 'claude') === 'claude';
   const terminalWidth = settings.terminalWidth ?? DEFAULT_TERMINAL_WIDTH;
   const runtime = state.runtime;
   const modelLabel =
@@ -885,140 +1066,92 @@ export default function App() {
     items: (branches ?? []).filter(
       (item) =>
         item.isRemote === (group === '远程分支') &&
-        item.name.toLowerCase().includes(branchFilter.toLowerCase()),
+        item.name.toLowerCase().includes(branchFilter.trim().toLowerCase()),
     ),
   }));
 
+  function chooseBranch(item) {
+    if (!item) return;
+    if (item.isCurrent) { setMenu(null); return; }
+    checkoutBranch(item.name);
+  }
+
+  function branchPickerKeys(event) {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      setMenu(null);
+      event.currentTarget.parentElement.querySelector('.branch-picker')?.focus();
+      return;
+    }
+    const buttons = [...event.currentTarget.querySelectorAll('[data-branch-option]:not(:disabled)')];
+    if (event.key === 'Enter' && event.target.tagName === 'INPUT') {
+      event.preventDefault();
+      buttons[0]?.click();
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const index = buttons.indexOf(event.target);
+      if (event.key === 'ArrowUp' && index === 0) {
+        event.currentTarget.querySelector('input')?.focus();
+        return;
+      }
+      const next = index + (event.key === 'ArrowDown' ? 1 : -1);
+      buttons[Math.max(0, Math.min(buttons.length - 1, next))]?.focus();
+    }
+  }
+
   const branchPicker = (
-    <div className="project-menu-wrap">
-      {page === 'git' && (
-        <label className="search sidebar-branch-search">
-          <MagnifyingGlass size={13} />
-          <input
-            aria-label="搜索分支"
-            placeholder="搜索分支…"
-            value={branchFilter}
-            onFocus={() => {
-              setMenu('branch');
-              loadBranches();
-            }}
-            onChange={(event) => {
-              setBranchFilter(event.target.value);
-              setMenu('branch');
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                setMenu(null);
-                event.stopPropagation();
-              }
-            }}
-          />
-        </label>
-      )}
+    <div className="project-menu-wrap cli-branch-picker">
+      <label className="cli-project-picker">
+        <Folder size={14} />
+        <select aria-label="选择项目" value={workbenchPath}
+          onChange={(event) => selectProject(event.target.value)}>
+          {projects.map((item) => <option key={item.path} value={item.path}>{item.title}</option>)}
+        </select>
+      </label>
       <button
         className="branch-picker"
         aria-label="选择分支"
-        title={project ? `${project.title} · ${tildePath(project.path, state.home)}` : ''}
+        aria-expanded={menu === 'branch'}
+        title={gitPath}
         onClick={() => {
-          setMenu(menu === 'branch' ? null : 'branch');
-          setPickedBranch(currentBranch ?? '');
-          if (menu !== 'branch') loadBranches();
+          if (menu === 'branch') { setMenu(null); return; }
+          setBranchFilter('');
+          setMenu('branch');
+          loadBranches();
         }}
         onContextMenu={(event) => openBranchContext(event, currentBranch)}
       >
-        <GitBranch size={15} />
-        <b>{branchLabel}</b>
-        <CaretDown size={12} />
+        <GitBranch size={15} /><b>{branchLabel}</b><CaretDown size={12} />
       </button>
       {menu === 'branch' && (
-        <div
-          className="dropdown project-branch-dropdown"
-          role="dialog"
-          aria-label="项目与分支"
-          data-blocking
-        >
-          <div className="branch-project-list">
-            <div className="menu-title">项目</div>
-            {projects.map((item) => (
-              <button
-                key={item.path}
-                className={workbenchPath === item.path ? 'selected' : ''}
-                title={tildePath(item.path, state.home)}
-                onClick={() => {
-                  selectProject(item.path);
-                  setMenu('branch');
-                }}
-              >
-                {item.isHome ? (
-                  <House
-                    size={14}
-                    weight={workbenchPath === item.path ? 'fill' : 'regular'}
-                  />
-                ) : (
-                  <Folder
-                    size={14}
-                    weight={workbenchPath === item.path ? 'fill' : 'regular'}
-                  />
-                )}
-                <span>{item.title}</span>
-              </button>
-            ))}
-          </div>
+        <div className="dropdown project-branch-dropdown cli-branch-menu" role="dialog"
+          aria-label="切换分支" data-blocking onKeyDown={branchPickerKeys}>
           <div className="branch-options">
-            {page !== 'git' && (
-              <label className="search">
-                <MagnifyingGlass size={13} />
-                <input
-                  aria-label="筛选分支"
-                  placeholder="筛选分支…"
-                  value={branchFilter}
-                  onChange={(event) => setBranchFilter(event.target.value)}
-                />
-              </label>
-            )}
+            <label className="search">
+              <MagnifyingGlass size={13} />
+              <input autoFocus aria-label="搜索分支" placeholder="搜索本地或远程分支…"
+                value={branchFilter} onChange={(event) => setBranchFilter(event.target.value)} />
+            </label>
             {notRepository && <div className="pane-note">这个目录不是 Git 仓库</div>}
-            {branchesError && !notRepository && (
-              <div className="pane-note error">{branchesError}</div>
-            )}
-            {!branches && !branchesError && !notRepository && (
-              <div className="pane-note">正在读取分支…</div>
-            )}
+            {branchesError && !notRepository && <div className="pane-note error">{branchesError}</div>}
+            {!branches && !branchesError && !notRepository && <div className="pane-note">正在读取分支…</div>}
             {branches && !branchesError && !notRepository && branchGroups.every(({ items }) => !items.length) && (
               <div className="pane-note">没有匹配的分支</div>
             )}
-            {branches &&
-              branchGroups.map(({ group, items }) => (
-                <div key={group}>
-                  <div className="menu-title">{group}</div>
-                  {items.map((item) => (
-                    <button
-                      key={item.name}
-                      className={`${pickedBranch === item.name ? 'picked' : ''} ${item.isCurrent ? 'current' : ''}`}
-                      disabled={gitBusy}
-                      onClick={() => {
-                        setPickedBranch(item.name);
-                        if (settings.followSessionBranch) revealBranch(item.name);
-                      }}
-                      onDoubleClick={() => checkoutBranch(item.name)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          checkoutBranch(item.name);
-                        }
-                      }}
-                      onContextMenu={(event) => {
-                        setPickedBranch(item.name);
-                        openBranchContext(event, item.name);
-                      }}
-                    >
-                      <GitBranch size={14} />
-                      <span>{item.name}</span>
-                      {item.isCurrent && <Check size={13} />}
-                    </button>
-                  ))}
-                </div>
-              ))}
-            <div className="branch-picker-hint">双击签出 · 右键更多操作</div>
+            {branches && branchGroups.filter(({ items }) => items.length).map(({ group, items }) => (
+              <div key={group}>
+                <div className="menu-title">{group}</div>
+                {items.map((item) => (
+                  <button key={item.name} data-branch-option disabled={gitBusy}
+                    className={item.isCurrent ? 'current' : ''} title={item.name}
+                    onClick={() => chooseBranch(item)}
+                    onContextMenu={(event) => openBranchContext(event, item.name)}>
+                    <GitBranch size={14} /><span>{item.name}</span>{item.isCurrent && <Check size={13} />}
+                  </button>
+                ))}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1045,8 +1178,8 @@ export default function App() {
     if (tab === '工作区')
       return (
         <WorkspaceTab
-          key={project.path}
-          projectPath={project.path}
+          key={gitPath}
+          projectPath={gitPath}
           status={status}
           statusError={statusError?.text ?? null}
           stamp={stamp}
@@ -1083,7 +1216,7 @@ export default function App() {
           home={state.home}
           epoch={epoch}
           runGit={runGit}
-          onNewSession={(mode) => setModal({ kind: 'session', mode, projectPath: project.path })}
+          onCreateWorktree={() => setModal({ kind: 'create-worktree', projectPath: project.path })}
         />
       );
     return (
@@ -1394,6 +1527,8 @@ export default function App() {
             onSelectProject={selectProject}
             onOpenSession={openSession}
             onTreeContext={openTreeContext}
+            worktreesByProject={worktreesByProject}
+            onBranchTreeContext={(event, target, group) => openTreeContext(event, target, null, group)}
             onAddDirectory={() => setModal({ kind: 'directory' })}
             onSettings={() => setModal({ kind: 'settings' })}
             onNewSession={() =>
@@ -1463,6 +1598,13 @@ export default function App() {
             style={{ flexBasis: workbench ? `${terminalWidth}%` : '100%' }}
           >
             <div className="terminal-actions" data-terminal-overlay>
+              {active && surfaceToggle && (
+                <IconButton
+                  icon={surfaceToggle.icon}
+                  label={surfaceToggle.label}
+                  onClick={() => switchSurfaceOfActive(surfaceToggle.mode)}
+                />
+              )}
               {active && (
                 <IconButton
                   icon={X}
@@ -1476,7 +1618,10 @@ export default function App() {
                 onClick={() => updateSettings({ terminal: false })}
               />
             </div>
-            {active && window.claudeDesktop ? (
+            {structuredActive ? (
+              <SessionChat sessionId={active.sessionId} provider={active.provider} label={active.label}
+        supportedModes={settings.cliPreferences?.[active.provider]?.modes ?? ['terminal']} />
+            ) : active && window.claudeDesktop ? (
               <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
             ) : active && native ? (
               <div className="terminal-hole" data-terminal-hole />
@@ -1485,7 +1630,7 @@ export default function App() {
                 <div className="terminal-intro">
                   <img src={appIcon} alt="CLI" />
                   <div>
-                    <strong>{runtime?.provider === 'antigravity' ? 'Antigravity' : 'Claude Code'}</strong>
+                    <strong>{state.providers?.find((engine) => engine.id === runtime?.provider)?.label ?? 'CLI'}</strong>
                     <span>
                       {modelLabel}
                       {sessionProject ? ` · ${sessionProject.title}` : ''}
@@ -1593,18 +1738,29 @@ export default function App() {
           className="branch-context tree-context"
           role="menu"
           aria-label="项目与会话操作"
+
           data-blocking
           style={{ left: treeContext.x, top: treeContext.y }}
         >
           <div className="menu-title">
-            {treeContext.session?.title ?? treeContext.project.title}
+            {treeContext.group?.branch ?? treeContext.session?.title ?? treeContext.project.title}
           </div>
-          {[
+          {(treeContext.group ? [
+            ['新建对话', !treeContext.group.branch && !treeContext.group.worktree],
+            ['在工作区查看 Diff', !treeContext.group.branch && !treeContext.group.worktree],
+            ['复制分支名', !treeContext.group.branch],
+            ['复制工作目录', false],
+          ] : [
             ['新建对话', false],
+            ...(!treeContext.session && !treeContext.project.isHome ? [['创建工作树', false]] : []),
             ...(treeContext.session
               ? [
                   ['重命名', false],
-                  [
+                  ['查看会话信息', false],
+                  ['复制会话 ID', !treeContext.session.originalSessionId],
+                  ['复制恢复命令', !resumeCommand(treeContext.session.provider ?? 'claude', treeContext.session.originalSessionId)],
+                  ...openModeMenu(treeContext.session),
+                  ...(['codex', 'dsh'].includes(treeContext.session.provider) ? [] : [[
                     (treeContext.session.provider ?? 'claude') === 'antigravity'
                       ? '转到 Claude Code 继续'
                       : '转到 Antigravity 继续',
@@ -1616,8 +1772,7 @@ export default function App() {
                               ? 'claude'
                               : 'antigravity') && p.available,
                       ),
-                  ],
-                  ['作为 Work 继续', false],
+                    ], ['作为 Work 继续', false]]),
                 ]
               : []),
             [
@@ -1633,7 +1788,7 @@ export default function App() {
                 ]
               : []),
             ['从列表移除', !treeContext.session && treeContext.project.isHome],
-          ].map(([action, disabled]) => (
+          ]).map(([action, disabled]) => (
             <button
               role="menuitem"
               key={action}
@@ -1701,22 +1856,49 @@ export default function App() {
           onAdded={(path) => selectProject(path)}
         />
       )}
+      {modal?.kind === 'create-worktree' && modalProject && (
+        <CreateWorktreeModal projectPath={modalProject.path}
+          projects={projects.filter((item) => !item.isHome)}
+          settings={settings} providers={state.providers ?? []}
+          onClose={() => setModal(null)}
+          onCreated={(result, path) => {
+            if (path !== workbenchPath) selectProject(path);
+            if (result.sessionId && !settings.terminal) updateSettings({ terminal: true });
+            setEpoch((value) => value + 1);
+            notify(result.sessionId ? '已创建工作树并打开会话' : '已创建工作树');
+          }} />
+      )}
       {modal?.kind === 'session' && modalProject && (
         <SessionModal
           project={modalProject}
           home={state.home}
           branch={modalProject.path === workbenchPath ? currentBranch : null}
+          workspace={modal.workspace}
           isRepository={modalProject.path === workbenchPath ? isRepository : true}
           initialMode={modal.mode}
           providers={state.providers ?? []}
+          cliPreferences={settings.cliPreferences}
+          interactionMode={settings.interactionMode}
           defaultProvider={settings.defaultProvider ?? 'claude'}
           notify={notify}
           onClose={() => setModal(null)}
-          onCreated={() => {
+          onCreated={(result) => {
+            if (modal.workspace || result.mode === 'worktree') {
+              selectProject(modalProject.path);
+              setSelectedWorkId(null);
+              revealPage('workspace');
+              setPage('workspace');
+              if (result.cwd !== modalProject.path) setDiffWorkspace({ projectPath: modalProject.path, worktree: result.cwd });
+            }
             if (!settings.terminal) updateSettings({ terminal: true });
             setEpoch((value) => value + 1);
           }}
         />
+      )}
+      {modal?.kind === 'session-info' && (
+        <SessionInfoModal session={modal.session} projectPath={modal.projectPath}
+          providerLabel={(state.providers ?? []).find((p) => p.id === (modal.session.provider ?? 'claude'))?.label}
+          onCopy={copyTreeValue} onClose={() => setModal(null)} />
       )}
       {modal?.kind === 'rename' && (
         <RenameSessionModal session={modal.session} notify={notify} onClose={() => setModal(null)} />
@@ -1805,6 +1987,7 @@ export default function App() {
       )}
       {workModal && <i hidden data-blocking />}
       <ConfirmHost />
+      {deepseekReport && <DeepSeekBanner report={deepseekReport} notify={notify} onClose={() => setDeepseekReport(null)} />}
 
     </div>
   );

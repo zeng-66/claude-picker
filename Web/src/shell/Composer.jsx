@@ -1,5 +1,6 @@
 // 输入区：提示词 + 模式 / 模型 / 推理强度 / 快速模式 / 上下文环 + 发送。
 // 停靠在第二栏底部与悬浮窗共用同一份输入内容。
+import EngineIcon from './EngineIcon.jsx';
 import React from 'react';
 import { ArrowUp, CaretDown, Check, Lightning } from '@phosphor-icons/react';
 import { request } from './bridge.js';
@@ -12,7 +13,7 @@ export function contextNumbers(context) {
   return { total, used, percent, k };
 }
 
-function ContextMeter({ context, onOpen }) {
+export function ContextMeter({ context, onOpen }) {
   const { total, used, percent, k } = contextNumbers(context);
   return (
     <button
@@ -54,7 +55,7 @@ export default function Composer({
   onHandoff,
 }) {
   const currentProvider = runtime.provider ?? 'claude';
-  const providerLabel = currentProvider === 'antigravity' ? 'Antigravity' : 'Claude';
+  const providerLabel = { antigravity: 'Antigravity', codex: 'Codex', dsh: 'DeepSeek' }[currentProvider] ?? 'Claude';
   const otherProvider = currentProvider === 'antigravity' ? 'claude' : 'antigravity';
   const otherLabel = otherProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
   const otherAvailable =
@@ -99,9 +100,7 @@ export default function Composer({
               aria-expanded={runtimeMenu === 'provider'}
               onClick={() => onRuntimeMenu(runtimeMenu === 'provider' ? null : 'provider')}
             >
-              <em className={`provider-badge ${currentProvider}`}>
-                {currentProvider === 'antigravity' ? 'A' : 'C'}
-              </em>
+              <EngineIcon id={currentProvider} />
               {providerLabel}
             </button>
             {runtimeMenu === 'provider' && (
@@ -116,12 +115,15 @@ export default function Composer({
                       onHandoff?.(otherProvider);
                     }}
                   >
-                    转到 {otherLabel} 接力继续…
+                    <EngineIcon id={otherProvider} />
+                转到 {otherLabel} 接力继续…
                   </button>
                 ) : (
                   [
                     { id: 'claude', label: 'Claude Code' },
                     { id: 'antigravity', label: 'Antigravity' },
+                    { id: 'codex', label: 'Codex' },
+                    { id: 'dsh', label: 'DeepSeek' },
                   ].map((item) => {
                     const ok =
                       providers.length === 0 ||
@@ -138,6 +140,7 @@ export default function Composer({
                           onRuntimeMenu(null);
                         }}
                       >
+                        <EngineIcon id={item.id} />
                         {item.label}
                         {!ok ? '（未安装）' : ''}
                         {currentProvider === item.id && <Check size={12} />}
@@ -213,7 +216,7 @@ export function RuntimeBar({
   onHandoff,
 }) {
   const currentProvider = runtime.provider ?? 'claude';
-  const providerLabel = currentProvider === 'antigravity' ? 'Antigravity' : 'Claude';
+  const providerLabel = { antigravity: 'Antigravity', codex: 'Codex', dsh: 'DeepSeek' }[currentProvider] ?? 'Claude';
   const otherProvider = currentProvider === 'antigravity' ? 'claude' : 'antigravity';
   const otherLabel = otherProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
   const otherAvailable =
@@ -236,9 +239,7 @@ export function RuntimeBar({
         >
           <span>引擎</span>
           <b>
-            <em className={`provider-badge ${currentProvider}`}>
-              {currentProvider === 'antigravity' ? 'A' : 'C'}
-            </em>
+            <EngineIcon id={currentProvider} />
             {providerLabel}
           </b>
           <CaretDown size={10} />
@@ -255,12 +256,15 @@ export function RuntimeBar({
                   onHandoff?.(otherProvider);
                 }}
               >
+                <EngineIcon id={otherProvider} />
                 转到 {otherLabel} 接力继续…
               </button>
             ) : (
               [
                 { id: 'claude', label: 'Claude Code' },
                 { id: 'antigravity', label: 'Antigravity' },
+                { id: 'codex', label: 'Codex' },
+                { id: 'dsh', label: 'DeepSeek' },
               ].map((item) => {
                 const ok =
                   providers.length === 0 ||
@@ -277,6 +281,7 @@ export function RuntimeBar({
                       onRuntimeMenu(null);
                     }}
                   >
+                    <EngineIcon id={item.id} />
                     {item.label}
                     {!ok ? '（未安装）' : ''}
                     {currentProvider === item.id && <Check size={12} />}

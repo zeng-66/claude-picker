@@ -1,5 +1,6 @@
 // Work 的图形会话：事件流 + 业务问题 / 工具权限卡片 + 输入区。
 // 这里显示的每一条都来自执行器的结构化事件；忙、待回答、待审阅都是领域状态，不靠输出猜。
+import EngineIcon from '../EngineIcon.jsx';
 import React, { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowCounterClockwise,
@@ -43,7 +44,7 @@ export function StatusPill({ work }) {
   );
 }
 
-function toolSummary(name, input) {
+export function toolSummary(name, input) {
   if (!input || typeof input !== 'object') return '';
   if (input.file_path) return baseName(input.file_path);
   if (input.notebook_path) return baseName(input.notebook_path);
@@ -129,7 +130,7 @@ function buildItems(events) {
   return items;
 }
 
-function ToolRow({ item }) {
+export function ToolRow({ item }) {
   const [open, setOpen] = useState(false);
   const running = item.result === null;
   const failed = item.result?.isError;
@@ -409,7 +410,7 @@ function PermissionCard({ attention, notify }) {
 }
 
 function executorLabel(executor) {
-  return executor === 'antigravity' ? 'Antigravity' : 'Claude Code';
+  return { antigravity: 'Antigravity', codex: 'Codex' }[executor] ?? 'Claude Code';
 }
 
 function PromptCard({ item, executor }) {
@@ -899,9 +900,7 @@ export default function WorkChat({
                   }
                   onClick={() => setExecMenuOpen((v) => !v)}
                 >
-                  <em className={`provider-badge ${currentExecutor}`}>
-                    {currentExecutor === 'antigravity' ? 'A' : 'C'}
-                  </em>
+                  <EngineIcon id={currentExecutor} />
                   引擎：{executorLabel(currentExecutor)}
                   <CaretDown size={10} />
                 </button>
@@ -910,6 +909,7 @@ export default function WorkChat({
                     {[
                       ['claude', 'Claude Code'],
                       ['antigravity', 'Antigravity (ACP)'],
+                      ['codex', 'Codex (App Server)'],
                     ].map(([id, label]) => (
                       <button
                         type="button"
