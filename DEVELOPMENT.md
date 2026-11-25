@@ -876,3 +876,12 @@ macOS 上桌宠改为整个桌面可见的透明悬浮窗（`Sources/ClaudeDeck/
 - Git、会话、终端及桥接回归通过，Work 213 项和图形聊天定向回归 8 项通过。
 - 从 `/Applications/ClaudePickerTest.app` 使用独立临时状态目录启动，确认测试渠道和主窗口显示。辅助功能权限未授予，使用系统窗口截图核对主界面，未执行控件级验收。
 - 验收后退出测试版，移除本机发现的旧 App 副本。复查仅保留测试版 App，未发现相关进程或 launchd 任务。
+
+### 2026-11-25 macOS 测试包交付
+
+- 来源分支 `codex/agent-workspace-development-spec`（`66976ff`）合并到 `test`（`101ad9d`），构建 `1.0.0 (20261125)`。
+- 变更：内嵌终端把鼠标点击上报给 CLI，Claude Code 全屏界面里的折叠工具调用可点击展开、「Jump to bottom」可点击；链接悬停识别、普通单击打开；右键固定弹出本地「复制 / 粘贴 / 全选」菜单。
+- 使用 `BUILD_NUMBER=20261125 ./scripts/build-app.sh --test --with-chat --dmg` 生成 `dist-test/ClaudePickerTest.app` 与 `dist-test/ClaudePickerTest-1.0.0.dmg`。深度签名校验和 DMG 校验均通过。
+- 回归：合并后的 `test` 上会话、终端（新增全屏 CLI 单击上报、Shift 单击保持本地选中两项断言）、桥接回归通过。
+- 界面验收：开发调试包使用独立临时数据目录，在临时演示仓库中新建 Claude Code 2.1.332 会话，用 agent-desktop 真实点击确认：点击「Searched for 1 pattern, read 1 file」展开为 Read 与 Bash 两条工具调用；单击输出中的 `https://example.com/docs` 在浏览器打开；终端右键弹出复制 / 粘贴 / 全选菜单。
+- 待处理事项：本机 `/Applications/ClaudePickerTest.app` 正在使用，未覆盖安装，需用户退出后用新 DMG 替换。全屏模式下普通拖动交给 Claude Code 处理，本地选字需按住 Shift 或 Option 拖动；Codex CLI 的点击行为未验证。
