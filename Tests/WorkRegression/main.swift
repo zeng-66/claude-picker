@@ -71,6 +71,11 @@ func fakeLog() -> [JSONValue] {
     return text.split(separator: "\n").compactMap { JSONValue.parse(String($0)) }
 }
 
+func fakeAgyLog() -> [JSONValue] {
+    guard let path = environment["FAKE_AGY_LOG"], let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+    return text.split(separator: "\n").compactMap { JSONValue.parse(String($0)) }
+}
+
 func spawns(session: String?) -> Int {
     fakeLog().filter { $0["event"]?.stringValue == "spawn" && $0["session"]?.stringValue == session }.count
 }
@@ -646,6 +651,7 @@ do {
         var authCode = 0
         var sendCode = 0
         var port: UInt16 = 0
+        var byBot: [String: NWConnection] = [:]
 
         init() throws {
             let params = NWParameters.tcp
@@ -679,8 +685,9 @@ do {
             let reqId = frame["headers"]?["req_id"] ?? .null
             switch frame["cmd"]?.stringValue {
             case "aibot_subscribe":
+                if let botId = frame["body"]?["bot_id"]?.stringValue { lock.lock(); byBot[botId] = connection; lock.unlock() }
                 send(.obj(["headers": .obj(["req_id": reqId]), "errcode": .int(authCode), "errmsg": .string(authCode == 0 ? "ok" : "invalid secret")]), connection)
-            case "ping", "aibot_respond_msg":
+            case "ping", "aibot_respond_msg", "aibot_respond_update_msg":
                 send(.obj(["headers": .obj(["req_id": reqId]), "errcode": .int(0), "errmsg": .string("ok")]), connection)
             case "aibot_send_msg":
                 send(.obj(["headers": .obj(["req_id": reqId]), "errcode": .int(sendCode), "errmsg": .string(sendCode == 0 ? "ok" : "no permission")]), connection)
@@ -703,13 +710,31 @@ do {
 
         var connectionCount: Int { lock.lock(); defer { lock.unlock() }; return connections.count }
 
-        func push(msgid: String, text: String, user: String = "zhangsan", chat: String? = "group-1") -> String {
+        func connection(bot: String?) -> NWConnection? {
+            guard let bot else { return nil }
+            lock.lock(); defer { lock.unlock() }
+            return byBot[bot]
+        }
+
+        func push(msgid: String, text: String, user: String = "zhangsan", chat: String? = "group-1", bot: String? = nil) -> String {
             let reqId = "callback_\(msgid)"
-            var body: [String: JSONValue] = ["msgid": .string(msgid), "aibotid": .string("test-bot"), "msgtype": .string("text"),
+            var body: [String: JSONValue] = ["msgid": .string(msgid), "aibotid": .string(bot ?? "test-bot"), "msgtype": .string("text"),
                                              "chattype": .string(chat == nil ? "single" : "group"),
                                              "from": .obj(["userid": .string(user)]), "text": .obj(["content": .string(text)])]
             if let chat { body["chatid"] = .string(chat) }
-            send(.obj(["cmd": .string("aibot_msg_callback"), "headers": .obj(["req_id": .string(reqId)]), "body": .object(body)]))
+            send(.obj(["cmd": .string("aibot_msg_callback"), "headers": .obj(["req_id": .string(reqId)]), "body": .object(body)]),
+                 connection(bot: bot))
+            return reqId
+        }
+
+        func pushEvent(_ event: JSONValue, user: String = "zhangsan", chat: String? = "group-1", bot: String) -> String {
+            let reqId = "event_\(UUID().uuidString.prefix(8))"
+            var body: [String: JSONValue] = ["msgid": .string(reqId), "aibotid": .string(bot), "msgtype": .string("event"),
+                                             "chattype": .string(chat == nil ? "single" : "group"),
+                                             "from": .obj(["userid": .string(user)]), "event": event]
+            if let chat { body["chatid"] = .string(chat) }
+            send(.obj(["cmd": .string("aibot_event_callback"), "headers": .obj(["req_id": .string(reqId)]), "body": .object(body)]),
+                 connection(bot: bot))
             return reqId
         }
 
@@ -839,6 +864,127 @@ do {
     try core.putSetting("robot", .obj(["name": .string("开发协作助手"), "enabled": .bool(false), "botId": .string("test-bot")]))
     bot.refresh()
     check(waitUntil(4) { bot.status()["state"]?.stringValue == "disabled" }, "WB-17 关闭对话入口后断开长连接")
+    let taskCard = fake.sent("aibot_send_msg").first {
+        $0["body"]?["msgtype"]?.stringValue == "template_card"
+            && $0["body"]?["template_card"]?["main_title"]?["title"]?.stringValue?.hasPrefix("确认 WORK-") == true
+    }
+    check(taskCard?["body"]?["template_card"]?["button_list"]?.arrayValue?.count == 3, "Work 模式新建待启动 Work 后推送任务确认卡")
+
+    // 多机器人：独立连接、三项交集授权、按 Bot / 项目隔离续聊、待拍板卡片。
+    let missingUsers = Result { try WecomBotAdmin.save(core, .obj(["name": .string("无人"), "enabled": .bool(true), "botId": .string("bot-x")])) }
+    check((try? missingUsers.get()) == nil, "启用前必须登记允许人员")
+    let botA = try WecomBotAdmin.save(core, .obj([
+        "name": .string("A 助手"), "botId": .string("bot-a"), "enabled": .bool(true), "mode": .string("chat"), "defaultCli": .string("claude"),
+        "scope": .obj(["users": .array([.string("zhangsan")]), "single": .bool(true),
+                       "groups": .array([.obj(["chatId": .string("group-1"), "name": .string("研发群")])]),
+                       "projects": .array([.string(alpha.id)]), "deciders": .array([.string("wangwu")]),
+                       "initiators": .array([.string("zhangsan")])]),
+    ]))
+    let botB = try WecomBotAdmin.save(core, .obj([
+        "name": .string("B 助手"), "botId": .string("bot-b"), "enabled": .bool(true), "mode": .string("chat"),
+        "scope": .obj(["allUsers": .bool(true), "allGroups": .bool(true), "single": .bool(false), "allProjects": .bool(true)]),
+    ]))
+    let duplicateBot = Result { try WecomBotAdmin.save(core, .obj(["name": .string("重复"), "botId": .string("bot-a")])) }
+    check((try? duplicateBot.get()) == nil, "同一个 Bot ID 不能登记两次")
+    let aId = botA["id"]?.stringValue ?? "", bId = botB["id"]?.stringValue ?? ""
+    try WecomBotConfig.setSecret(aId, "secret-a")
+    try WecomBotConfig.setSecret(bId, "secret-b")
+    bot.refresh(force: true)
+    let botsConnected = {
+        (bot.status()["bots"]?.arrayValue ?? []).filter { $0["state"]?.stringValue == "connected" }.compactMap { $0["id"]?.stringValue }
+    }
+    check(waitUntil(10) { Set(botsConnected()) == [aId, bId] }, "两个机器人各自连接认证", bot.status().serialized())
+    check(core.getSetting(WecomBotConfig.settingsKey)?.serialized().contains("secret-") == false
+          && Keychain.get(account: WecomBotConfig.secretAccount(aId)) == "secret-a", "每个 Bot 的 Secret 分开存钥匙串")
+    check(fake.connection(bot: "bot-a") != nil && fake.connection(bot: "bot-b") != nil, "每个 Bot 一条独立长连接")
+
+    let stranger = fake.push(msgid: "multi-1", text: "你好", user: "lisi", bot: "bot-a")
+    check(waitUntil(6) { fake.finalReply(stranger)?.contains("还没有被授权") == true }, "未登记人员被拒绝", fake.finalReply(stranger) ?? "")
+    let otherGroup = fake.push(msgid: "multi-2", text: "你好", chat: "group-2", bot: "bot-a")
+    check(waitUntil(6) { fake.finalReply(otherGroup)?.contains("没有在这个群启用") == true }, "未登记的群被拒绝")
+    let privateB = fake.push(msgid: "multi-3", text: "你好", chat: nil, bot: "bot-b")
+    check(waitUntil(6) { fake.finalReply(privateB)?.contains("不接受私聊") == true }, "场景未授权的私聊被拒绝")
+
+    let spawnsMulti = fakeLog().filter { $0["event"]?.text == "spawn" }.count
+    let viaA = fake.push(msgid: "multi-4", text: "A 你好", bot: "bot-a")
+    check(waitUntil(10) { fake.finalReply(viaA)?.contains("A 你好") == true }, "授权人员在授权群里与 A 对话", fake.finalReply(viaA) ?? "")
+    let viaB = fake.push(msgid: "multi-5", text: "B 你好", bot: "bot-b")
+    check(waitUntil(10) { fake.finalReply(viaB)?.contains("B 你好") == true }, "同一人同一群与 B 对话")
+    check(fakeLog().filter { $0["event"]?.text == "spawn" }.count == spawnsMulti + 2, "同群同人、不同 Bot 的会话隔离")
+    // 同一条消息同时 @ 两个机器人：按列表顺序只由 A 处理，B 说明由谁处理。
+    let bothA = fake.push(msgid: "multi-both-a", text: "@A 助手 @B 助手 一起看看", bot: "bot-a")
+    let bothB = fake.push(msgid: "multi-both-b", text: "@A 助手 @B 助手 一起看看", bot: "bot-b")
+    check(waitUntil(10) { fake.finalReply(bothA)?.contains("一起看看") == true }, "同时 @ 时排在前面的机器人处理", fake.finalReply(bothA) ?? "")
+    check(waitUntil(6) { fake.finalReply(bothB)?.contains("已由「A 助手」处理") == true }, "其余机器人回复由谁处理", fake.finalReply(bothB) ?? "")
+    check(fakeLog().filter { $0["event"]?.text == "spawn" }.count == spawnsMulti + 2, "被裁决让出的机器人不执行")
+    let roles = WecomBotConfig.parse(botA)
+    check(roles?.canInitiate("zhangsan") == true && roles?.canInitiate("lisi") == false
+          && roles?.cardDeciders(actor: "zhangsan") == ["zhangsan", "wangwu"], "角色组：发起人名单与拍板人")
+    let keyA = WecomBotConfig.bindingKey(corpId: "", botId: "bot-a", chatType: "group", conversationId: "group-1",
+                                         actorId: "zhangsan", projectId: alpha.id)
+    let bindingA = core.getSetting(keyA)
+    check(bindingA?["engine"]?.stringValue == "claude" && bindingA?["cwd"]?.stringValue == alpha.path
+          && bindingA?["binding"]?["projectId"]?.stringValue == alpha.id, "单项目 Bot 在该项目目录续聊并记录归属", bindingA?.serialized() ?? "nil")
+
+    // 待拍板：单选问题推送卡片；非发起人点击被拒，发起人点击后答案回到原会话，重复点击只回执。
+    let ask = fake.push(msgid: "multi-6", text: "SCENARIO:question", bot: "bot-a")
+    check(waitUntil(10) { fake.finalReply(ask)?.contains("1. 回滚本地操作") == true }, "问题以编号选项回到原会话", fake.finalReply(ask) ?? "")
+    check(waitUntil(6) { fake.sent("aibot_send_msg").contains { $0["body"]?["msgtype"]?.stringValue == "template_card" } }, "同时推送待拍板卡片")
+    let cardFrame = fake.sent("aibot_send_msg").last { $0["body"]?["msgtype"]?.stringValue == "template_card" }
+    let taskId = cardFrame?["body"]?["template_card"]?["task_id"]?.stringValue ?? ""
+    check(cardFrame?["body"]?["template_card"]?["button_list"]?.arrayValue?.count == 2 && cardFrame?["body"]?["chatid"]?.stringValue == "group-1",
+          "卡片带两个选项按钮并发往原群")
+    let cardEvent = { (key: String) -> JSONValue in
+        .obj(["eventtype": .string("template_card_event"), "event_key": .string(key), "task_id": .string(taskId)])
+    }
+    _ = fake.pushEvent(cardEvent("o2"), user: "lisi", bot: "bot-a")
+    check(waitUntil(6) { fake.sent("aibot_send_msg").contains { $0["body"]?["markdown"]?["content"]?.stringValue?.contains("只有发起人") == true } },
+          "非发起人点击被拒绝")
+    check(WecomCards.record(core, taskId: taskId)?["status"]?.stringValue == "open", "无权点击不改变卡片状态")
+    // 真实回调的嵌套格式：event.template_card_event.{event_key, task_id}
+    let click = fake.pushEvent(.obj(["eventtype": .string("template_card_event"),
+                                     "template_card_event": .obj(["card_type": .string("button_interaction"),
+                                                                  "event_key": .string("o2"), "task_id": .string(taskId)])]),
+                               bot: "bot-a")
+    check(waitUntil(6) { fake.sent("aibot_respond_update_msg").contains { $0["headers"]?["req_id"]?.stringValue == click } },
+          "回调时限内用事件 req_id 更新卡片")
+    check(waitUntil(10) { fake.sent("aibot_send_msg").contains { $0["body"]?["markdown"]?["content"]?.stringValue?.contains("保留并重试") == true } },
+          "点击结果回到原会话，CLI 按选择继续")
+    let decided = WecomCards.record(core, taskId: taskId)
+    check(decided?["status"]?.stringValue == "decided" && decided?["decidedBy"]?.stringValue == "zhangsan" && decided?["choice"]?.stringValue == "o2",
+          "首次有效选择原子记录")
+    let answersBefore = fake.sent("aibot_send_msg").filter { $0["body"]?["markdown"]?["content"]?.stringValue?.contains("已按你的选择") == true }.count
+    let again = fake.pushEvent(cardEvent("o1"), bot: "bot-a")
+    check(waitUntil(6) { fake.sent("aibot_respond_update_msg").contains { $0["headers"]?["req_id"]?.stringValue == again } },
+          "重复点击只返回已处理回执")
+    usleep(800_000)
+    check(fake.sent("aibot_send_msg").filter { $0["body"]?["markdown"]?["content"]?.stringValue?.contains("已按你的选择") == true }.count == answersBefore
+          && WecomCards.record(core, taskId: taskId)?["choice"]?.stringValue == "o2", "重复点击不改变选择也不再次执行")
+    let expired = try WecomCards.create(core, kind: "decision", botLocalId: aId, chatId: "group-1", bindingKey: "", title: "过期",
+                                        detail: "", options: [.init(key: "a", label: "A")], allowed: ["zhangsan"],
+                                        now: Date().addingTimeInterval(-WecomCards.ttl - 5))
+    check(WecomCards.resolve(core, taskId: expired["taskId"]?.stringValue ?? "", key: "a", actor: "zhangsan")
+          == .rejected("这张卡片已过期，请在原会话重新发起"), "过期卡片拒绝并标记过期")
+    let longTask = try WecomCards.create(core, kind: "task", botLocalId: aId, chatId: "group-1", bindingKey: "", title: "确认",
+                                         detail: "", options: [.init(key: "confirm", label: "确认")], allowed: ["zhangsan", "wangwu"],
+                                         now: Date().addingTimeInterval(-WecomCards.ttl - 5))
+    if case .accepted = WecomCards.resolve(core, taskId: longTask["taskId"]?.stringValue ?? "", key: "confirm", actor: "wangwu") {
+        check(true, "任务确认卡有效期 24 小时，拍板人可以确认")
+    } else {
+        check(false, "任务确认卡有效期 24 小时，拍板人可以确认")
+    }
+
+    // 被顶替只影响对应 Bot：A 断开不重连，B 保持连接。
+    let toA = fake.connection(bot: "bot-a")
+    fake.send(.obj(["cmd": .string("aibot_event_callback"), "headers": .obj(["req_id": .string("evt-multi")]),
+                    "body": .obj(["msgtype": .string("event"), "event": .obj(["eventtype": .string("disconnected_event")])])]), toA)
+    check(waitUntil(5) { (bot.status()["bots"]?.arrayValue ?? []).contains { $0["id"]?.stringValue == aId && $0["state"]?.stringValue == "kicked" } },
+          "A 被顶替后停在 kicked")
+    check(botsConnected() == [bId], "B 不受 A 被顶替影响")
+    try WecomBotAdmin.delete(core, id: aId)
+    try WecomBotAdmin.delete(core, id: bId)
+    check(Keychain.get(account: WecomBotConfig.secretAccount(aId)) == nil, "删除机器人同时清除其 Secret")
+
     bot.stop()
     fake.listener.cancel()
 
@@ -849,6 +995,114 @@ do {
           "TAPD 令牌来自钥匙串，前提检查不回显令牌")
     Keychain.delete(.tapdToken)
     check(TapdAdapter.prerequisites(core)["tokenSource"]?.stringValue != "keychain", "清除后不再使用钥匙串里的令牌")
+}
+
+print("Antigravity ACP 执行、跨引擎接力与 Turn Checkpoint 回退")
+do {
+    // 1. 直接由 Antigravity ACP 执行 Work（含工具调用与权限审批）
+    var agyReq = WorkCore.CreateRequest(projectId: alpha.id, title: "Antigravity ACP 写入与审批", objective: "SCENARIO:permission")
+    agyReq.executor = "antigravity"
+    agyReq.start = true
+    let agyWorkId = (try core.create(agyReq))["work"]?["id"]?.stringValue ?? ""
+    check(work(core, agyWorkId)["executor"]?.stringValue == "antigravity", "AGY-01 Work 记录 executor 为 antigravity")
+    check(waitUntil(15) { status(core, agyWorkId) == "waiting_user" }, "AGY-02 ACP session/request_permission 进入待回答", status(core, agyWorkId))
+    let agyPerm = (try core.transcript(workId: agyWorkId, after: 0))["attentions"]?.arrayValue?.first ?? .null
+    check(agyPerm["kind"]?.stringValue == "permission" && agyPerm["toolName"]?.stringValue == "Write",
+          "AGY-02 ACP 权限卡片识别工具名与参数")
+    _ = try core.answer(attentionId: agyPerm["id"]?.stringValue ?? "", revision: nil,
+                        answer: .obj(["behavior": .string("allow")]))
+    check(waitUntil(15) { status(core, agyWorkId) == "waiting_review" }, "AGY-02 批准后 ACP 继续完成轮次并进入待审阅", status(core, agyWorkId))
+    let agyPath = work(core, agyWorkId)["workspacePath"]?.stringValue ?? ""
+    check(FileManager.default.fileExists(atPath: agyPath + "/agy-guarded.txt"), "AGY-02 批准后实际写入 agy-guarded.txt")
+    _ = try core.cancel(workId: agyWorkId, revision: nil, requestId: nil)
+    check(waitUntil(10) { status(core, agyWorkId) == "cancelled" }, "清理 Antigravity 权限测试 Work")
+
+    // 2. 共用 Thread 跨引擎无缝切换（Claude -> Antigravity）+ Turn Checkpoint 外科回退
+    let relayRepo = makeRepo("relay")
+    let sharedRepo = makeRepo("shared-cp")
+    let extraProjects = try core.syncProjects([
+        (path: repoA, name: "alpha"),
+        (path: repoB, name: "beta"),
+        (path: relayRepo, name: "relay"),
+        (path: sharedRepo, name: "shared-cp"),
+    ])
+    let relayProject = extraProjects.first { $0.name == "relay" }!
+    let sharedProject = extraProjects.first { $0.name == "shared-cp" }!
+    let relayId = try create(core, project: relayProject, title: "跨引擎接力与检查点回退", objective: "SCENARIO:edit")
+    check(waitUntil(15) { status(core, relayId) == "waiting_review" }, "RL-01 第 1 轮在 Claude 执行完成", status(core, relayId))
+    let relayPath = work(core, relayId)["workspacePath"]?.stringValue ?? ""
+    check(FileManager.default.fileExists(atPath: relayPath + "/work-output.txt"), "RL-01 Claude 产出 work-output.txt")
+
+    // 在待审阅态将执行器切换为 Antigravity
+    let switched = try core.switchExecutor(workId: relayId, executor: "antigravity")
+    check(switched["accepted"]?.boolValue == true && switched["changed"]?.boolValue == true
+          && work(core, relayId)["executor"]?.stringValue == "antigravity",
+          "RL-02 非运行态可切换执行器至 Antigravity")
+
+    // 第 2 轮发送消息：应启动 fake-agy-acp 并自动注入 <thread-handoff>，在同一 worktree 产出 agy-output.txt
+    _ = try core.send(workId: relayId, messageId: "relay-r2", text: "继续第二轮修改 SCENARIO:edit")
+    check(waitUntil(15) { status(core, relayId) == "waiting_review" && FileManager.default.fileExists(atPath: relayPath + "/agy-output.txt") },
+          "RL-03 第 2 轮由 Antigravity 在同一工作树接力完成", status(core, relayId))
+    let agyPrompts = fakeAgyLog().filter { $0["event"]?.stringValue == "prompt" }.compactMap { $0["text"]?.stringValue }
+    check(agyPrompts.contains { $0.contains("<thread-handoff>") && $0.contains("Claude Code") && $0.contains("work-output.txt") },
+          "RL-03 切换引擎后的首轮自动注入包含第 1 轮摘要的 <thread-handoff>")
+
+    let relayTranscript = try core.transcript(workId: relayId, after: 0)
+    let segments = relayTranscript["segments"]?.arrayValue ?? []
+    check(segments.count == 2 && segments[0]["provider"]?.stringValue == "claude" && segments[1]["provider"]?.stringValue == "antigravity",
+          "RL-04 thread_segments 记录两段跨引擎轨迹")
+
+    // 检查 Turn Checkpoints：每轮均有隐藏 Git Ref 锚定，回退第 2 轮 preCheckpointId 应精确删掉 agy-output.txt 而保留 work-output.txt
+    _ = waitUntil(8) {
+        ((try? core.transcript(workId: relayId, after: 0))?["checkpoints"]?.arrayValue?.count ?? 0) >= 4
+    }
+    let cps = (try core.transcript(workId: relayId, after: 0))["checkpoints"]?.arrayValue ?? []
+    let turnEvents = (relayTranscript["events"]?.arrayValue ?? []).filter { $0["kind"]?.stringValue == "turn_result" }
+    let r2PreId = turnEvents.last?["payload"]?["preCheckpointId"]?.stringValue ?? ""
+    let refsOut = sh("git for-each-ref refs/claude-picker/checkpoints/\(relayId)", cwd: relayPath)
+    check(cps.count >= 4 && !r2PreId.isEmpty && refsOut.stdout.contains("refs/claude-picker/checkpoints/\(relayId)/"),
+          "CP-01 每轮前后自动生成锚定在隐藏 Git Ref 下的检查点", "cps=\(cps.count)")
+
+    let rev = try core.revertCheckpoint(workId: relayId, checkpointId: r2PreId, requestId: "rev-r2")
+    check(rev["reverted"]?.boolValue == true
+          && !FileManager.default.fileExists(atPath: relayPath + "/agy-output.txt")
+          && FileManager.default.fileExists(atPath: relayPath + "/work-output.txt"),
+          "CP-02 回退到第 2 轮前：第 2 轮新增文件被移除，第 1 轮成果完好保留")
+    let undoId = rev["undoCheckpointId"]?.stringValue ?? ""
+    check(!undoId.isEmpty, "CP-03 回退前自动生成 undo 备份检查点")
+
+    // 第 3 轮发送普通消息：验证自动向智能体注入 <workspace-reverted-notice> 防止上下文幻觉
+    let promptCountBefore = fakeAgyLog().filter { $0["event"]?.stringValue == "prompt" }.count
+    _ = try core.send(workId: relayId, messageId: "relay-r3", text: "确认回退后的目录状态 SCENARIO:plain")
+    check(waitUntil(15) {
+        fakeAgyLog().filter { $0["event"]?.stringValue == "prompt" }.count > promptCountBefore
+            && status(core, relayId) == "waiting_review"
+    }, "CP-04 回退后继续对话正常完成")
+    let latestAgyPrompt = fakeAgyLog().filter { $0["event"]?.stringValue == "prompt" }.last?["text"]?.stringValue ?? ""
+    check(latestAgyPrompt.contains("<workspace-reverted-notice>"), "CP-04 回退后的下一轮自动注入 <workspace-reverted-notice> 同步通知")
+    _ = try core.cancel(workId: relayId, revision: nil, requestId: nil)
+    check(waitUntil(10) { status(core, relayId) == "cancelled" }, "清理跨引擎接力 Work")
+
+    // 3. 未隔离共享目录（isolation: project）外部未保存改动冲突保护与强制回退
+    let sharedId = try create(core, project: sharedProject, title: "共享目录检查点保护", objective: "SCENARIO:edit", isolation: "project")
+    check(waitUntil(15) { status(core, sharedId) == "waiting_review" }, "CP-05 共享目录第 1 轮完成")
+    _ = waitUntil(8) {
+        ((try? core.transcript(workId: sharedId, after: 0))?["checkpoints"]?.arrayValue ?? [])
+            .contains { $0["phase"]?.stringValue == "post" }
+    }
+    let sharedTurnPre = (events(core, sharedId).last { $0["kind"]?.stringValue == "turn_result" })?["payload"]?["preCheckpointId"]?.stringValue ?? ""
+    try "external manual edit\n".write(toFile: sharedRepo + "/external.txt", atomically: true, encoding: .utf8)
+    do {
+        _ = try core.revertCheckpoint(workId: sharedId, checkpointId: sharedTurnPre, force: false)
+        check(false, "CP-05 共享目录存在外部改动时默认拦截回退")
+    } catch let error as WorkError {
+        check(error.code == .conflict, "CP-05 共享目录存在外部改动时返回 conflict 保护用户修改")
+    }
+    let forced = try core.revertCheckpoint(workId: sharedId, checkpointId: sharedTurnPre, force: true)
+    check(forced["reverted"]?.boolValue == true && !FileManager.default.fileExists(atPath: sharedRepo + "/work-output.txt"),
+          "CP-05 用户确认 force=true 后可执行强制回退")
+    _ = try core.cancel(workId: sharedId, revision: nil, requestId: nil)
+    check(waitUntil(10) { status(core, sharedId) == "cancelled" }, "清理共享目录 Work")
 }
 
 print("状态目录独占与重启恢复")
@@ -901,6 +1155,180 @@ do {
     check(stuck.isEmpty && status(recovered, live) == "interrupted", "OP-04 退出时结束自有执行并标记为已中断", "stuck=\(stuck) status=\(status(recovered, live))")
     check(bystander.isRunning, "OP-04 没有误杀无关进程")
     bystander.terminate()
+}
+
+// MARK: Codex App Server 执行器（协议替身 fake-codex-app-server.py）
+print("Codex App Server 执行器")
+final class EventBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [ExecutorEvent] = []
+    func add(_ event: ExecutorEvent) { lock.lock(); items.append(event); lock.unlock() }
+    var all: [ExecutorEvent] { lock.lock(); defer { lock.unlock() }; return items }
+    func count(_ match: (ExecutorEvent) -> Bool) -> Int { all.filter(match).count }
+}
+if let codexBin = environment["CLAUDE_PICKER_CODEX_BIN"] {
+    let codexRepo = makeRepo("codex-exec")
+    func codexProcess(resume: Bool, sessionId: String, permission: String? = nil, box: EventBox) -> CodexAppServerProcess {
+        CodexAppServerProcess(config: ExecutorConfig(provider: .codex, executable: codexBin, cwd: codexRepo, sessionId: sessionId,
+                                                     resume: resume, permissionMode: permission, model: nil, effort: nil,
+                                                     environment: ProcessInfo.processInfo.environment)) { box.add($0) }
+    }
+    func isReady(_ e: ExecutorEvent) -> Bool { if case .ready = e { return true }; return false }
+    func isTurnEnd(_ e: ExecutorEvent) -> Bool { if case .turnResult = e { return true }; return false }
+
+    let box = EventBox()
+    let codex = codexProcess(resume: false, sessionId: "", box: box)
+    try codex.start()
+    check(waitUntil(10) { box.count(isReady) == 1 }, "Codex 握手：initialize → thread/start 后就绪")
+    let threadId = codex.activeSessionId
+    check(threadId.hasPrefix("fake-thread-"), "新线程 ID 取自 thread/start", threadId)
+    check(codex.sendUserMessage("你好"), "turn/start 已发送")
+    check(!codex.sendUserMessage("并发"), "回合进行中拒绝再发一轮")
+    check(waitUntil(10) { box.count(isTurnEnd) == 1 }, "收到 turn/completed")
+    let deltas = box.all.compactMap { e -> String? in if case .delta(let t) = e { return t }; return nil }.joined()
+    let texts = box.all.compactMap { e -> String? in if case .assistantText(let t) = e { return t }; return nil }
+    check(deltas == "收到：你好" && texts == ["收到：你好"], "流式增量与完整回复一致", "\(deltas) \(texts)")
+
+    check(codex.sendUserMessage("please approve"), "发出需要审批的回合")
+    check(waitUntil(10) { box.count { if case .permissionRequest = $0 { return true }; return false } == 1 }, "命令审批转成 permissionRequest")
+    let approval = box.all.compactMap { e -> String? in if case .permissionRequest(let id, _, _, _) = e { return id }; return nil }.first ?? ""
+    check(codex.respondPermission(requestId: approval, allow: true, updatedInput: nil, message: nil), "答复审批")
+    check(!codex.respondPermission(requestId: approval, allow: true, updatedInput: nil, message: nil), "同一审批不能答复两次")
+    check(waitUntil(10) { box.count(isTurnEnd) == 2 }, "审批后回合结束")
+    let toolOk = box.all.contains { if case .toolResult(let id, let isError, _) = $0 { return id == "cmd-1" && !isError }; return false }
+    check(toolOk, "命令执行结果按 item id 配对")
+    let codexLog = (try? String(contentsOfFile: environment["FAKE_CODEX_LOG"] ?? "", encoding: .utf8)) ?? ""
+    check(codexLog.contains("\"decision\":\"accept\""), "允许答复为 decision=accept")
+
+    check(codex.updateRuntime(key: "mode", value: "read-only") && codex.updateRuntime(key: "effort", value: "high"),
+          "Codex 记下审批预设与推理强度")
+    check(codex.sendUserMessage("配置检查"), "带覆盖参数发出回合")
+    check(waitUntil(10) { box.count(isTurnEnd) == 3 }, "覆盖参数的回合结束")
+    let overrideLog = (try? String(contentsOfFile: environment["FAKE_CODEX_LOG"] ?? "", encoding: .utf8)) ?? ""
+    let lastTurn = overrideLog.split(separator: "\n").last { $0.contains("\"turn/start\"") }.map(String.init) ?? ""
+    check(lastTurn.contains("\"readOnly\"") && lastTurn.contains("\"effort\":\"high\""), "turn/start 带上只读沙箱与推理强度", lastTurn)
+    check(codex.sendUserMessage("slow work"), "发出长回合")
+    _ = waitUntil(3) { codexLog.isEmpty == false }
+    Thread.sleep(forTimeInterval: 0.3)
+    check(codex.interrupt(requestId: "stop-1"), "turn/interrupt 已发送")
+    check(waitUntil(10) { box.count(isTurnEnd) == 4 }, "中断后收到回合结束")
+    if case .turnResult(let result)? = box.all.last(where: isTurnEnd) {
+        check(result["subtype"]?.stringValue == "aborted", "中断回合标记为 aborted", result.serialized())
+    }
+    codex.shutdown(grace: 1)
+    check(waitUntil(8) { box.count { if case .exited = $0 { return true }; return false } == 1 }, "关闭 stdin 后进程退出")
+
+    let resumed = EventBox()
+    let again = codexProcess(resume: true, sessionId: threadId, permission: "plan", box: resumed)
+    try again.start()
+    check(waitUntil(10) { resumed.count(isReady) == 1 } && again.activeSessionId == threadId, "按原始线程 ID thread/resume 接续")
+    let resumeLog = (try? String(contentsOfFile: environment["FAKE_CODEX_LOG"] ?? "", encoding: .utf8)) ?? ""
+    check(resumeLog.contains("\"method\":\"thread/resume\"") && resumeLog.contains("\"sandbox\":\"read-only\""),
+          "接续带上线程 ID 与权限映射（plan → read-only）")
+    _ = again.terminateAndWait(timeout: 3)
+
+    let missing = EventBox()
+    let lost = codexProcess(resume: true, sessionId: "missing-thread", box: missing)
+    try lost.start()
+    check(waitUntil(10) { missing.count { if case .controlAck(_, false, _) = $0 { return true }; return false } == 1 },
+          "原线程不存在时报告握手失败，不悄悄新建")
+    _ = lost.terminateAndWait(timeout: 3)
+    check(CodexAppServerProcess.policy(for: nil) == ("on-request", "workspace-write"), "缺省审批策略为按需审批、工作区可写")
+} else {
+    check(false, "缺少 CLAUDE_PICKER_CODEX_BIN，未运行 Codex 执行器回归")
+}
+
+// MARK: TAPD MCP 一键配置（协议替身 fake-tapd-mcp.py，令牌走内存钥匙串）
+print("TAPD MCP 一键配置")
+if let fakeTapd = environment["CLAUDE_PICKER_TAPD_MCP_BIN"] {
+    let tapdCore = WorkCore(directory: scratchURL.appendingPathComponent("data-tapd-mcp"))
+    let server: JSONValue = .obj(["command": .string(fakeTapd), "args": .array([])])
+    let parsed = TapdMcp.parseWorkspaceIds("1001, 1002\n1001，abc 1003、1003")
+    check(parsed.ids == ["1001", "1002", "1003"] && parsed.invalid == ["abc"], "项目 ID 按换行、空格、逗号拆分并去重",
+          "\(parsed)")
+    // 已有配置：1001 关闭并登记仓库映射，CLI 传输。
+    try tapdCore.putSetting("tapd", .obj([
+        "enabled": .bool(true), "cliPath": .string(""), "endpoint": .string(""),
+        "workspaces": .array([.obj(["id": .string("1001"), "name": .string("旧名"), "enabled": .bool(false),
+                                    "projects": .array([.string("/tmp/pay")])])]),
+    ]))
+    Keychain.delete(.tapdToken)
+    if TapdMcp.token(tapdCore).value == nil {
+        let noToken = try TapdMcp.setup(tapdCore, idsText: "1001", token: nil, server: server)
+        check(noToken["ok"]?.boolValue == false && noToken["stage"]?.stringValue == "credential", "没有令牌时停在凭据阶段")
+    }
+    let badInput = try TapdMcp.setup(tapdCore, idsText: "1001 x1", token: "t", server: server)
+    check(badInput["stage"]?.stringValue == "input", "非数字 ID 在输入阶段被拒绝")
+
+    let partial = try TapdMcp.setup(tapdCore, idsText: "1001 9999", token: "secret-token", server: server)
+    check(partial["ok"]?.boolValue == false && partial["stage"]?.stringValue == "project", "任一项目试读失败则整体失败",
+          partial.serialized())
+    check(TapdAdapter.settings(tapdCore)["transport"] == nil && Keychain.get(.tapdToken) == nil,
+          "失败时不保存配置也不写入令牌", "\(TapdAdapter.settings(tapdCore).serialized()) token=\(Keychain.get(.tapdToken) != nil)")
+
+    let saved = try TapdMcp.setup(tapdCore, idsText: "1001,1002", token: "secret-token", server: server)
+    check(saved["ok"]?.boolValue == true && saved["stage"]?.stringValue == "saved", "全部试读通过后保存", saved.serialized())
+    let config = TapdAdapter.settings(tapdCore)
+    let ws = config["workspaces"]?.arrayValue ?? []
+    let first = ws.first { $0["id"]?.stringValue == "1001" }
+    check(config["transport"]?.stringValue == "mcp" && ws.count == 2, "保存为 MCP 传输并追加新项目")
+    check(first?["enabled"]?.boolValue == false && first?["projects"]?.arrayValue?.count == 1 && first?["name"]?.stringValue == "支付中台",
+          "已有项目保留启停与仓库映射，名称更新")
+    check(ws.first { $0["id"]?.stringValue == "1002" }?["enabled"]?.boolValue == true, "新项目默认启用")
+    check(Keychain.get(.tapdToken) == "secret-token" && !config.serialized().contains("secret-token"),
+          "令牌只进钥匙串，不进设置")
+    let scenarios = saved["scenarios"]?.arrayValue ?? []
+    check(scenarios.first { $0["id"]?.stringValue == "commentWrite" }?["available"]?.boolValue == true,
+          "按场景报告可用工具")
+    let tapdLog = (try? String(contentsOfFile: environment["FAKE_TAPD_MCP_LOG"] ?? "", encoding: .utf8)) ?? ""
+    check(!tapdLog.contains("create_comments") && !tapdLog.contains("update_"), "配置与试读只调用只读工具")
+
+    let todo = try TapdAdapter.todos(tapdCore, workspaceIds: ["1001", "1002"], page: 1, query: nil)
+    let todoItems = todo["items"]?.arrayValue ?? []
+    check(todo["transport"]?.stringValue == "mcp" && todoItems.count == 2, "MCP 读取我的待办（需求与缺陷）", todo.serialized())
+    check(todoItems.first?["title"]?.stringValue == "退款对账" && todoItems.first?["workspaceName"]?.stringValue == "支付中台",
+          "待办行沿用原有摘要字段")
+    let story = todoItems.first { $0["type"]?.stringValue == "story" }
+    check(story?["status"]?.stringValue == "C2-开发中" && story?["owner"]?.stringValue == "me;"
+          && story?["iterationName"]?.stringValue == "11 月第 3 周" && story?["created"]?.stringValue == "2026-11-01 08:00:00",
+          "待办补全状态名、处理人、迭代与创建时间", story?.serialized() ?? "nil")
+    let appended = try TapdMcp.setup(tapdCore, idsText: "1002", token: nil, server: server)
+    check(appended["ok"]?.boolValue == true && (TapdAdapter.settings(tapdCore)["workspaces"]?.arrayValue?.count ?? 0) == 2,
+          "追加配置复用钥匙串令牌且不重复登记")
+    setenv("FAKE_TAPD_MCP_TOOLS", "minimal", 1)
+    let minimal = try TapdMcp.setup(tapdCore, idsText: "1001", token: nil, server: server)
+    check(minimal["ok"]?.boolValue == true
+          && minimal["scenarios"]?.arrayValue?.first { $0["id"]?.stringValue == "transition" }?["available"]?.boolValue == false,
+          "缺少回填工具时只报告不可用，不影响必需的只读配置")
+    unsetenv("FAKE_TAPD_MCP_TOOLS")
+    Keychain.delete(.tapdToken)
+    tapdCore.shutdown(timeout: 2)
+} else {
+    check(false, "缺少 CLAUDE_PICKER_TAPD_MCP_BIN，未运行 TAPD MCP 回归")
+}
+
+// MARK: CLI 维护：DeepSeek 巡检解析与安装白名单
+print("CLI 维护")
+do {
+    let mismatch = CliMaintenance.parseDoctor("""
+    dsh-tui doctor · @deepseek-harness-tui/dsh-tui 0.20.1
+    ✓ node: v24.22.2 · darwin arm64
+    ✓ dsh: 0.2.2-rc.5
+    ✓ profile: 0.20.2  (/Users/x/.dsh/profiles/dsh-tui)
+    ✗ launcher ↔ profile: profile 较新——对齐启动器：  npm install -g @deepseek-harness-tui/dsh-tui@0.20.2
+    ✓ DEEPSEEK_API_KEY: 已设置（DSH 凭据库）
+    """)
+    check(mismatch.launcher == "0.20.1" && mismatch.profile == "0.20.2" && mismatch.dsh == "0.2.2-rc.5"
+          && mismatch.problems.count == 1 && mismatch.problems[0].hasPrefix("launcher ↔ profile"),
+          "解析 doctor 的版本与 ✗ 问题", "\(mismatch)")
+    check(CliMaintenance.parseDoctor("dsh-tui doctor · x 0.20.2\n✓ profile: 0.20.2 (p)").problems.isEmpty, "全部通过时没有问题")
+    check(CliMaintenance.isNewer("0.20.2", than: "0.20.1") && !CliMaintenance.isNewer("0.20.1", than: "0.20.1")
+          && CliMaintenance.isNewer("0.21.0", than: "0.20.9") && CliMaintenance.isNewer("1.0.0", than: "1.0.0-rc.1")
+          && !CliMaintenance.isNewer("0.2.2-rc.5", than: "0.2.2"), "版本比较（含预发布）")
+    check(CliMaintenance.installables.first { $0.id == "qoder" }?.install == "curl -fsSL https://qoder.com/install | bash",
+          "Qoder 安装命令登记在白名单")
+    check((try? CliMaintenance.install(id: "rm -rf /")) == nil && (try? CliMaintenance.install(id: "workbuddy")) == nil,
+          "未登记或没有安装命令的条目不能执行")
 }
 
 core.shutdown(timeout: 3)

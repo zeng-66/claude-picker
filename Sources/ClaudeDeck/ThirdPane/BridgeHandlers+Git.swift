@@ -53,6 +53,11 @@ enum GitHandlers: BridgeModule {
             return .handled(try encode(blocking { try await service.worktrees(projectPath: path) }))
 
         // —— 分支写操作（右键分支菜单）。成功统一回 `{ok:true}`，前端随后自行刷新状态。
+        case "git.switchWorkspaceBranch":
+            let path = try projectPath(params)
+            let branch = try string(params, "branch")
+            return try done { try await service.switchWorkspaceBranch(projectPath: path, branch: branch) }
+
         case "git.switchBranch":
             let path = try projectPath(params)
             let branch = try string(params, "branch")

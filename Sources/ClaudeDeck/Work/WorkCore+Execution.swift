@@ -25,7 +25,16 @@ extension WorkCore {
 
     private func launch(_ queuedWork: Work, store: WorkStore) {
         var work = queuedWork
+        let desiredProvider = AgentProvider.parse(work.executor)
         do {
+            if let existing = processes[work.id], existing.config.provider != desiredProvider {
+                // 引擎已切换：结束残留的旧引擎进程，下面起新引擎。
+                SessionOwnership.shared.setExecutor(existing.activeSessionId, held: false)
+                processes.removeValue(forKey: work.id)
+                processTokens.removeValue(forKey: work.id)
+                ready.remove(work.id)
+                existing.shutdown(grace: 1)
+            }
             if let process = processes[work.id], ready.contains(work.id) {
                 // 进程还活着：把等待中的答复 / 消息交给它，继续当前会话。
                 try store.db.transaction {
@@ -42,13 +51,15 @@ extension WorkCore {
                             try store.save(old)
                         }
                         var fresh = try store.insertRun(workId: work.id, sessionId: work.sessionId,
-                                                        workspacePath: work.workspacePath, baseCommit: work.baseCommit)
+                                                        workspacePath: work.workspacePath, baseCommit: work.baseCommit,
+                                                        executor: work.executor)
                         fresh.status = .running
                         fresh.pid = Int(process.pid)
                         fresh.startedAt = WorkClock.iso()
                         try store.save(fresh)
                         work.currentRunId = fresh.id
-                        store.addActivity(workId: work.id, runId: fresh.id, kind: "run", title: "开始第 \(fresh.attempt) 轮执行")
+                        store.addActivity(workId: work.id, runId: fresh.id, kind: "run",
+                                          title: "开始第 \(fresh.attempt) 轮执行（\(desiredProvider.shortLabel)）")
                     }
                     try transition(&work, to: .running, reason: nil, store: store)
                 }
@@ -71,28 +82,36 @@ extension WorkCore {
                     try store.save(old)
                 }
                 run = try store.insertRun(workId: work.id, sessionId: work.sessionId,
-                                          workspacePath: work.workspacePath, baseCommit: work.baseCommit)
+                                          workspacePath: work.workspacePath, baseCommit: work.baseCommit,
+                                          executor: work.executor)
                 work.currentRunId = run.id
                 try transition(&work, to: .running, reason: "正在准备执行目录", store: store)
-                store.addActivity(workId: work.id, runId: run.id, kind: "run", title: "开始第 \(run.attempt) 轮执行")
+                store.addActivity(workId: work.id, runId: run.id, kind: "run",
+                                  title: "开始第 \(run.attempt) 轮执行（\(desiredProvider.shortLabel)）")
             }
             notify(.changed)
             let snapshot = work
             let runId = run.id
+            let attempt = run.attempt
+            let preSeq = (try? store.nextCheckpointSeq(workId: work.id)) ?? 1
+            let preLabel = "第 \(attempt) 轮执行前"
             worker.async { [self] in
-                let outcome: Result<(PreparedWorkspace, String), WorkError>
+                let outcome: Result<(PreparedWorkspace, String, WorkspaceService.CheckpointSnapshot?), WorkError>
                 do {
                     let prepared = try WorkspaceService.prepare(work: snapshot, project: project)
-                    guard let executable = ClaudeLocator.find() else {
-                        throw WorkError.unavailable("找不到 Claude CLI。请先安装并登录 claude，或确认它在登录 shell 的 PATH 里。")
+                    let targetProvider = AgentProvider.parse(snapshot.executor)
+                    let foundBin = AgentExecutorFactory.executable(for: targetProvider)
+                    guard let executable = foundBin else {
+                        throw WorkError.unavailable("找不到 \(targetProvider.label)（\(targetProvider.commandName)）。请先安装并登录，或确认它在登录 shell 的 PATH 里。")
                     }
-                    outcome = .success((prepared, executable))
+                    let preSnap = WorkspaceService.createCheckpoint(in: prepared.path, workId: snapshot.id, seq: preSeq, label: preLabel)
+                    outcome = .success((prepared, executable, preSnap))
                 } catch let error as WorkError {
                     outcome = .failure(error)
                 } catch {
                     outcome = .failure(.failed("准备执行目录失败", detail: "\(error)"))
                 }
-                queue.async { self.didPrepare(workId: snapshot.id, runId: runId, outcome: outcome) }
+                queue.async { self.didPrepare(workId: snapshot.id, runId: runId, preSeq: preSeq, preLabel: preLabel, outcome: outcome) }
             }
         } catch {
             fail(workId: work.id, runId: work.currentRunId,
@@ -100,7 +119,8 @@ extension WorkCore {
         }
     }
 
-    private func didPrepare(workId: String, runId: String, outcome: Result<(PreparedWorkspace, String), WorkError>) {
+    private func didPrepare(workId: String, runId: String, preSeq: Int, preLabel: String,
+                            outcome: Result<(PreparedWorkspace, String, WorkspaceService.CheckpointSnapshot?), WorkError>) {
         guard let store, var work = store.work(id: workId), var run = store.run(id: runId) else { return }
         // 准备期间 Work 可能已被取消或换了 Run：迟到的结果不再生效。
         guard work.currentRunId == runId, work.status == .running, run.status == .preparing else { return }
@@ -108,32 +128,38 @@ extension WorkCore {
         case .failure(let error):
             fail(workId: workId, runId: runId, message: error.message, detail: error.detail)
 
-        case .success(let (prepared, executable)):
-            // 会话真正建立过（收到过 CLI 的会话信息）才用 --resume，否则换一个新的会话 ID 重新开始。
+        case .success(let (prepared, executable, preSnap)):
+            let targetProvider = AgentProvider.parse(work.executor)
+            // 会话真正建立过（收到过 CLI 的会话信息）才用恢复模式，否则建立新底层会话。
             let known = work.sessionId.map { id in store.workSessionIds().contains(id) } ?? false
-            let sessionId = known ? work.sessionId! : UUID().uuidString.lowercased()
-            if SessionOwnership.shared.heldByTerminal(sessionId) {
+            let sessionId = known ? work.sessionId! : (targetProvider == .claude ? UUID().uuidString.lowercased() : "")
+            if !sessionId.isEmpty, SessionOwnership.shared.heldByTerminal(sessionId) {
                 fail(workId: workId, runId: runId, message: "这个会话正由原生终端或图形聊天持有",
                      detail: "同一个 CLI 会话不能被两个后端同时驱动。请先关闭终端里的该会话，再重试。")
                 return
             }
-            let config = ExecutorConfig(executable: executable, cwd: prepared.path, sessionId: sessionId,
-                                        resume: known, permissionMode: work.permissionMode, model: work.model,
-                                        effort: nil, environment: LoginEnv.shared.environment)
+            let config = ExecutorConfig(provider: targetProvider, executable: executable, cwd: prepared.path,
+                                        sessionId: sessionId, resume: known, permissionMode: work.permissionMode,
+                                        model: work.model, effort: nil, environment: LoginEnv.shared.environment)
             let token = UUID().uuidString
-            let process = ClaudeProcess(config: config) { [weak self] event in
+            guard let process = AgentExecutorFactory.make(config, onEvent: { [weak self] event in
                 guard let self else { return }
                 self.queue.async { self.handle(workId: workId, token: token, event: event) }
+            }) else {
+                fail(workId: workId, runId: runId, message: "\(targetProvider.label) 目前只支持原生终端", detail: nil)
+                return
             }
             do {
                 try process.start()
             } catch {
-                fail(workId: workId, runId: runId, message: "无法启动 Claude CLI", detail: error.localizedDescription)
+                fail(workId: workId, runId: runId, message: "无法启动 \(targetProvider.label)", detail: error.localizedDescription)
                 return
             }
             processes[workId] = process
             processTokens[workId] = token
-            SessionOwnership.shared.setExecutor(sessionId, held: true)
+            if !sessionId.isEmpty {
+                SessionOwnership.shared.setExecutor(sessionId, held: true)
+            }
             do {
                 try store.db.transaction {
                     let firstWorkspace = work.workspacePath == nil
@@ -141,14 +167,32 @@ extension WorkCore {
                     work.branch = prepared.branch
                     work.baseCommit = work.baseCommit ?? prepared.baseCommit
                     work.isolation = prepared.isolation
-                    work.sessionId = sessionId
-                    work.statusReason = "正在启动 Claude CLI"
+                    if !sessionId.isEmpty {
+                        work.sessionId = sessionId
+                        try store.appendThreadSegment(workId: workId, provider: targetProvider.rawValue,
+                                                      sessionId: sessionId, cwd: prepared.path)
+                    }
+                    work.statusReason = "正在启动 \(targetProvider.label)"
                     try store.save(&work)
-                    run.sessionId = sessionId
+                    run.sessionId = sessionId.isEmpty ? nil : sessionId
                     run.workspacePath = prepared.path
                     run.baseCommit = work.baseCommit
+                    run.executor = targetProvider.rawValue
                     run.pid = Int(process.pid)
                     try store.save(run)
+                    if let preSnap {
+                        let cp = try store.insertCheckpoint(
+                            workId: workId,
+                            runId: runId,
+                            seq: preSeq,
+                            phase: "pre",
+                            headCommit: preSnap.head,
+                            treeHash: preSnap.tree,
+                            gitRef: preSnap.gitRef,
+                            label: preLabel
+                        )
+                        currentTurnPreCheckpointId[workId] = cp.id
+                    }
                     if firstWorkspace {
                         let detail = prepared.isolation == "worktree"
                             ? "独立工作树 \(prepared.path)（分支 \(prepared.branch ?? "—")）"
@@ -166,8 +210,8 @@ extension WorkCore {
             queue.asyncAfter(deadline: .now() + 90) { [weak self] in
                 guard let self, self.processTokens[workId] == token, !self.ready.contains(workId) else { return }
                 self.processes[workId]?.shutdown(grace: 0)
-                self.fail(workId: workId, runId: runId, message: "Claude CLI 在 90 秒内没有完成握手",
-                          detail: "未收到 initialize 应答，本轮没有发送任何消息。")
+                self.fail(workId: workId, runId: runId, message: "\(targetProvider.label) 在 90 秒内没有完成握手",
+                          detail: "未收到初始化应答，本轮没有发送任何消息。")
             }
         }
     }
@@ -234,30 +278,162 @@ extension WorkCore {
         return lines.joined(separator: "\n")
     }
 
-    /// 握手完成后的首次投递：新会话发 Work 目标，已有会话只发待处理的消息。
+    /// 捕获一轮代码快照（Turn Checkpoint）：锚定在隐藏 Git Ref 下防 `git gc` 回收。
+    @discardableResult
+    func captureCheckpoint(work: Work, store: WorkStore, phase: String, label: String) -> WorkCheckpoint? {
+        guard let path = work.workspacePath, let seq = try? store.nextCheckpointSeq(workId: work.id),
+              let snap = WorkspaceService.createCheckpoint(in: path, workId: work.id, seq: seq, label: label) else {
+            return nil
+        }
+        return try? store.insertCheckpoint(
+            workId: work.id,
+            runId: work.currentRunId,
+            seq: seq,
+            phase: phase,
+            headCommit: snap.head,
+            treeHash: snap.tree,
+            gitRef: snap.gitRef,
+            label: label
+        )
+    }
+
+    private func consumeRevertedNotice(workId: String, store: WorkStore) -> String? {
+        guard var current = store.work(id: workId),
+              let notice = current.revertedNotice?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !notice.isEmpty else { return nil }
+        current.revertedNotice = nil
+        current.revision -= 1
+        try? store.save(&current)
+        return "<workspace-reverted-notice>\n\(notice)\n</workspace-reverted-notice>"
+    }
+
+    private func extractWorkPriorTurns(workId: String, store: WorkStore) -> [HandoffBuilder.TurnPair] {
+        var pairs: [HandoffBuilder.TurnPair] = []
+        for event in store.events(workId: workId, after: 0) {
+            let kind = event["kind"]?.stringValue ?? ""
+            let payload = event["payload"] ?? .null
+            if kind == "user", payload["origin"]?.stringValue != "prompt",
+               let text = payload["text"]?.text {
+                pairs.append(HandoffBuilder.TurnPair(role: "用户", text: text))
+            } else if kind == "assistant", let text = payload["text"]?.text {
+                pairs.append(HandoffBuilder.TurnPair(role: "助手", text: text))
+            }
+        }
+        return Array(pairs.suffix(10))
+    }
+
+    private func composeWorkHandoff(work: Work, priorTurns: [HandoffBuilder.TurnPair],
+                                    userInstruction: String?, store: WorkStore) -> String {
+        let target = AgentProvider.parse(work.executor)
+        let prevSegProvider = store.threadSegments(workId: work.id)
+            .last { $0["provider"]?.stringValue != target.rawValue }
+            .flatMap { $0["provider"]?.stringValue }
+            .map { AgentProvider.parse($0) } ?? (target == .claude ? .antigravity : .claude)
+        let basePrompt = composePrompt(work: work, store: store)
+        let handoff = HandoffBuilder.composeEnvelope(
+            sourceProvider: prevSegProvider,
+            targetProvider: target,
+            title: "\(work.displayId) · \(work.title)\n\n\(basePrompt)",
+            cwd: work.workspacePath ?? "",
+            turns: priorTurns,
+            transcriptPath: nil,
+            userInstruction: userInstruction
+        )
+        return handoff
+    }
+
+    /// 握手完成后的首次投递：
+    /// - 全新 Work：发完整 Work 目标 + 待处理输入；
+    /// - 切换过引擎后开启新底层会话（`!resumed && 有历史轮次`）：自动从 `run_events` 构建 `<thread-handoff>` 前情包拼接到本轮指令前；
+    /// - 已有同引擎会话恢复：直接投递待处理消息。
     private func deliverInitial(work: Work, store: WorkStore, resumed: Bool) {
+        let attempt = work.currentRunId.flatMap { store.run(id: $0)?.attempt } ?? 1
         if !resumed {
-            let prompt = composePrompt(work: work, store: store)
-            if processes[work.id]?.sendUserMessage(prompt) == true {
-                busy.insert(work.id)
-                if let event = try? store.appendEvent(workId: work.id, runId: work.currentRunId, kind: "user",
-                                                      payload: .obj(["origin": .string("prompt"), "text": .string(prompt),
-                                                                     "state": .string("delivered")])) {
-                    notify(.event(event))
+            let priorTurns = extractWorkPriorTurns(workId: work.id, store: store)
+            let pending = store.pendingInputs(workId: work.id)
+            if priorTurns.isEmpty {
+                if currentTurnPreCheckpointId[work.id] == nil,
+                   let cp = captureCheckpoint(work: work, store: store, phase: "pre", label: "第 \(attempt) 轮执行前") {
+                    currentTurnPreCheckpointId[work.id] = cp.id
                 }
+                var prompt = composePrompt(work: work, store: store)
+                if let notice = consumeRevertedNotice(workId: work.id, store: store) {
+                    prompt = notice + "\n\n" + prompt
+                }
+                let targetLabel = AgentProvider.parse(work.executor).label
+                if processes[work.id]?.sendUserMessage(prompt) == true {
+                    busy.insert(work.id)
+                    if let sid = work.sessionId, !sid.isEmpty {
+                        try? store.upsertSession(id: sid, projectId: work.projectId, workId: work.id,
+                                                 cwd: work.workspacePath ?? "", backend: "work-executor")
+                    }
+                    if let event = try? store.appendEvent(workId: work.id, runId: work.currentRunId, kind: "user",
+                                                          payload: .obj(["origin": .string("prompt"), "text": .string(prompt),
+                                                                         "state": .string("delivered")])) {
+                        notify(.event(event))
+                    }
+                } else {
+                    fail(workId: work.id, runId: work.currentRunId, message: "无法把工作目标交给 \(targetLabel)", detail: nil)
+                    return
+                }
+                deliverPendingInputs(work: work, store: store, capturePreCheckpoint: false)
+                return
+            } else if pending.isEmpty {
+                // 切换引擎后点击「重试」（无新输入行）：直接投递跨引擎前情包继续任务
+                if currentTurnPreCheckpointId[work.id] == nil,
+                   let cp = captureCheckpoint(work: work, store: store, phase: "pre", label: "第 \(attempt) 轮执行前") {
+                    currentTurnPreCheckpointId[work.id] = cp.id
+                }
+                var handoff = composeWorkHandoff(
+                    work: work,
+                    priorTurns: priorTurns,
+                    userInstruction: "请检查当前工作区代码状态并继续完成该 Work 的剩余目标。",
+                    store: store
+                )
+                if let notice = consumeRevertedNotice(workId: work.id, store: store) {
+                    handoff = notice + "\n\n" + handoff
+                }
+                let targetLabel = AgentProvider.parse(work.executor).label
+                if processes[work.id]?.sendUserMessage(handoff) == true {
+                    busy.insert(work.id)
+                } else {
+                    fail(workId: work.id, runId: work.currentRunId, message: "无法将接力上下文交给 \(targetLabel)", detail: nil)
+                }
+                return
             } else {
-                fail(workId: work.id, runId: work.currentRunId, message: "无法把工作目标交给 Claude CLI", detail: nil)
+                // 切换引擎后用户发了新消息：将 `<thread-handoff>` 前情包合并到首条待发消息前，一轮完成接力
+                let prefix = composeWorkHandoff(work: work, priorTurns: priorTurns, userInstruction: nil, store: store)
+                deliverPendingInputs(work: work, store: store, capturePreCheckpoint: true, handoffPrefix: prefix)
                 return
             }
         }
-        deliverPendingInputs(work: work, store: store)
+        deliverPendingInputs(work: work, store: store, capturePreCheckpoint: true)
     }
 
-    func deliverPendingInputs(work: Work, store: WorkStore) {
+    func deliverPendingInputs(work: Work, store: WorkStore, capturePreCheckpoint: Bool = true, handoffPrefix: String? = nil) {
         guard let process = processes[work.id], ready.contains(work.id) else { return }
-        for row in store.pendingInputs(workId: work.id) {
+        let rows = store.pendingInputs(workId: work.id)
+        guard !rows.isEmpty else { return }
+        if capturePreCheckpoint, currentTurnPreCheckpointId[work.id] == nil {
+            let attempt = work.currentRunId.flatMap { store.run(id: $0)?.attempt } ?? 1
+            if let cp = captureCheckpoint(work: work, store: store, phase: "pre", label: "第 \(attempt) 轮执行前") {
+                currentTurnPreCheckpointId[work.id] = cp.id
+            }
+        }
+        var prefixOnce = handoffPrefix
+        var noticeOnce = consumeRevertedNotice(workId: work.id, store: store)
+        for row in rows {
             let id = row.text("id")
-            let delivered = process.sendUserMessage(row.text("text"))
+            var outgoing = row.text("text")
+            if let handoff = prefixOnce {
+                outgoing = handoff + "\n\n## 本轮新指令\n" + outgoing
+                prefixOnce = nil
+            }
+            if let notice = noticeOnce {
+                outgoing = notice + "\n\n" + outgoing
+                noticeOnce = nil
+            }
+            let delivered = process.sendUserMessage(outgoing)
             if delivered {
                 store.markInputSent(id: id)
                 busy.insert(work.id)
@@ -331,14 +507,32 @@ extension WorkCore {
 
         case .sessionInfo(let info):
             if let sessionId = info["sessionId"]?.text {
-                try? store.upsertSession(id: sessionId, projectId: work.projectId, workId: workId,
-                                         cwd: info["cwd"]?.text ?? work.workspacePath ?? "", backend: "work-executor")
+                let cwdPath = info["cwd"]?.text ?? work.workspacePath ?? ""
+                SessionOwnership.shared.setExecutor(sessionId, held: true)
+                try? store.db.transaction {
+                    try store.upsertSession(id: sessionId, projectId: work.projectId, workId: workId,
+                                            cwd: cwdPath, backend: "work-executor")
+                    try store.appendThreadSegment(workId: workId, provider: work.executor, sessionId: sessionId, cwd: cwdPath)
+                    if work.sessionId != sessionId {
+                        work.sessionId = sessionId
+                        work.revision -= 1
+                        try store.save(&work)
+                    }
+                    if let runId, var run = store.run(id: runId), run.sessionId != sessionId {
+                        run.sessionId = sessionId
+                        try store.save(run)
+                    }
+                }
             }
             // 每个 Run 只记一次会话信息（每轮开始 CLI 都会重复报告）。
             let already = store.events(workId: workId).contains {
                 $0["kind"]?.stringValue == "session" && $0["runId"]?.stringValue == runId
             }
-            if !already { append("session", info) }
+            if !already {
+                var enriched = info.objectValue ?? [:]
+                if enriched["executor"] == nil { enriched["executor"] = .string(work.executor) }
+                append("session", .object(enriched))
+            }
 
         case .turnStarted:
             busy.insert(workId)
@@ -379,13 +573,20 @@ extension WorkCore {
 
         case .controlAck(let requestId, let ok, let detail):
             if requestId == ClaudeProcess.initializeRequestId, !ok {
+                let label = AgentProvider.parse(work.executor).label
                 processes[workId]?.shutdown(grace: 0)
-                fail(workId: workId, runId: runId, message: "Claude CLI 握手失败", detail: detail.serialized())
+                fail(workId: workId, runId: runId, message: "\(label) 握手失败", detail: detail.serialized())
             }
 
         case .turnResult(let result):
-            append("turn_result", result)
-            finishTurn(workId: workId, result: result)
+            var payload = result.objectValue ?? [:]
+            if let preId = currentTurnPreCheckpointId.removeValue(forKey: workId) {
+                payload["preCheckpointId"] = .string(preId)
+            }
+            payload["executor"] = .string(work.executor)
+            let enriched = JSONValue.object(payload)
+            append("turn_result", enriched)
+            finishTurn(workId: workId, result: enriched)
 
         case .exited:
             break
@@ -484,7 +685,8 @@ extension WorkCore {
         }
         if isError {
             let text = result["result"]?.text ?? result["subtype"]?.stringValue ?? "执行出错"
-            fail(workId: workId, runId: runId, message: "Claude 报告本轮执行出错", detail: text)
+            let label = AgentProvider.parse(work.executor).shortLabel
+            fail(workId: workId, runId: runId, message: "\(label) 报告本轮执行出错", detail: text)
             return
         }
         guard work.status == .running else { return }
@@ -516,12 +718,16 @@ extension WorkCore {
         recordDiffEvidence(workId: workId, runId: runId)
     }
 
-    /// 在后台算出这一轮结束时的代码版本与变更统计，作为证据记下来（审阅时还会重新核对）。
+    /// 在后台算出这一轮结束时的代码版本、变更统计并落地 `post` Turn Checkpoint（隐藏 Git Ref 快照）。
     func recordDiffEvidence(workId: String, runId: String?) {
         guard let store, let work = store.work(id: workId), let path = work.workspacePath else { return }
         let base = work.baseCommit
+        let attempt = runId.flatMap { store.run(id: $0)?.attempt } ?? 1
+        let cpSeq = (try? store.nextCheckpointSeq(workId: workId)) ?? 1
+        let cpLabel = "第 \(attempt) 轮结束后"
         worker.async { [self] in
             let version = WorkspaceService.version(of: path)
+            let postSnap = WorkspaceService.createCheckpoint(in: path, workId: workId, seq: cpSeq, label: cpLabel)
             let files: [WorkspaceService.ChangedFile]
             if let base, let tree = version.tree {
                 files = WorkspaceService.changes(in: path, base: base, tree: tree)
@@ -530,6 +736,18 @@ extension WorkCore {
             }
             queue.async {
                 guard let store = self.store else { return }
+                if let postSnap {
+                    _ = try? store.insertCheckpoint(
+                        workId: workId,
+                        runId: runId,
+                        seq: cpSeq,
+                        phase: "post",
+                        headCommit: postSnap.head,
+                        treeHash: postSnap.tree,
+                        gitRef: postSnap.gitRef,
+                        label: cpLabel
+                    )
+                }
                 let added = files.compactMap(\.added).reduce(0, +)
                 let deleted = files.compactMap(\.deleted).reduce(0, +)
                 let title = version.isRepository
@@ -558,9 +776,13 @@ extension WorkCore {
         let isCurrent = processTokens[workId] == token
         if isCurrent {
             if let process = processes.removeValue(forKey: workId) {
-                SessionOwnership.shared.setExecutor(process.config.sessionId, held: false)
+                SessionOwnership.shared.setExecutor(process.activeSessionId, held: false)
+                if !process.config.sessionId.isEmpty {
+                    SessionOwnership.shared.setExecutor(process.config.sessionId, held: false)
+                }
             }
             processTokens.removeValue(forKey: workId)
+            currentTurnPreCheckpointId.removeValue(forKey: workId)
             ready.remove(workId)
             busy.remove(workId)
             pendingAnswers.removeValue(forKey: workId)
@@ -851,11 +1073,14 @@ extension WorkCore {
         notify(.changed)
     }
 
-    /// 只认自己启动的执行进程：命令行里要同时出现 stream-json 与该 Run 的会话 ID。
+    /// 只认自己启动的执行进程：Claude stream-json 或 ACP 子进程。
     static func isOwnExecutor(pid: Int32, sessionId: String) -> Bool {
         guard kill(pid, 0) == 0 else { return false }
         let result = Proc.run("/bin/ps", ["-p", String(pid), "-o", "command="], env: [:], timeout: 5)
-        return result.ok && result.stdout.contains(sessionId) && result.stdout.contains("stream-json")
+        guard result.ok else { return false }
+        if result.stdout.contains(sessionId) && result.stdout.contains("stream-json") { return true }
+        if result.stdout.contains(" acp") || result.stdout.hasSuffix("/agy acp\n") { return true }
+        return false
     }
 
     // MARK: 退出
@@ -869,7 +1094,7 @@ extension WorkCore {
     /// 返回没能在超时内结束的进程 pid（由调用方提示用户，不隐藏残留）。
     @discardableResult
     func shutdown(timeout: TimeInterval = 5) -> [Int32] {
-        let snapshot: [(String, ClaudeProcess)] = queue.sync {
+        let snapshot: [(String, any AgentExecutorProcess)] = queue.sync {
             shuttingDown = true
             return processes.map { ($0.key, $0.value) }
         }
@@ -880,7 +1105,10 @@ extension WorkCore {
         queue.sync {
             guard let store else { return }
             for (workId, process) in snapshot {
-                SessionOwnership.shared.setExecutor(process.config.sessionId, held: false)
+                SessionOwnership.shared.setExecutor(process.activeSessionId, held: false)
+                if !process.config.sessionId.isEmpty {
+                    SessionOwnership.shared.setExecutor(process.config.sessionId, held: false)
+                }
                 processes.removeValue(forKey: workId)
                 processTokens.removeValue(forKey: workId)
                 guard var work = store.work(id: workId) else { continue }

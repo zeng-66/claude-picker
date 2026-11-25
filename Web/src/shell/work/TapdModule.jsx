@@ -956,7 +956,12 @@ function CreateTaskDialog({ detail, projects, mappings, runtime, notify, onClose
   const [title, setTitle] = useState(`${shortId(ref.entityId)} ${detail.title}`);
   const [supplement, setSupplement] = useState('');
   const [advanced, setAdvanced] = useState(false);
-  const [options, setOptions] = useState({ isolation: 'worktree', permissionMode: runtime.mode, model: '' });
+  const [options, setOptions] = useState({
+    executor: 'claude',
+    isolation: 'worktree',
+    permissionMode: runtime.mode,
+    model: '',
+  });
   const [start, setStart] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);

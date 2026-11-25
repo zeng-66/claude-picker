@@ -59,6 +59,23 @@ enum AppHandlers: BridgeModule {
             delegate.shell.applyLayout(dict)
             return nil
 
+        case "app.refreshUsage":
+            if dict["onlyIfEmpty"] as? Bool == true {
+                store.refreshCodexUsage(onlyIfEmpty: true)
+            } else {
+                store.refreshUsage()
+                store.refreshCodexUsage()
+            }
+            return nil
+
+        case "app.copyText":
+            let value = try BridgeSupport.string(dict, "text")
+            NSPasteboard.general.clearContents()
+            guard NSPasteboard.general.setString(value, forType: .string) else {
+                throw GitError.commandFailed("无法写入剪贴板", recoverable: true)
+            }
+            return nil
+
         case "app.settings":
             store.applySettings(dict)
             return nil

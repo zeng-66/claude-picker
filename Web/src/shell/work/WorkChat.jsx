@@ -1,7 +1,9 @@
 // Work 的图形会话：事件流 + 业务问题 / 工具权限卡片 + 输入区。
 // 这里显示的每一条都来自执行器的结构化事件；忙、待回答、待审阅都是领域状态，不靠输出猜。
+import EngineIcon from '../EngineIcon.jsx';
 import React, { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowCounterClockwise,
   ArrowDown,
   ArrowRight,
   ArrowUp,
@@ -9,6 +11,7 @@ import {
   CaretDown,
   CaretRight,
   ChatCircleDots,
+  Check,
   CheckCircle,
   CircleNotch,
   GitBranch,
@@ -26,6 +29,7 @@ import {
 } from '@phosphor-icons/react';
 import { errorText, request } from '../bridge.js';
 import { IconButton, baseName } from '../ui.jsx';
+import { confirmAction } from './confirm.jsx';
 import { formatTime, newId, sourceLabel, statusOf, useDraft, useTranscript } from './useWorks.js';
 
 const MarkdownRenderer = lazy(() => import('../../MarkdownRenderer.jsx'));
@@ -40,7 +44,7 @@ export function StatusPill({ work }) {
   );
 }
 
-function toolSummary(name, input) {
+export function toolSummary(name, input) {
   if (!input || typeof input !== 'object') return '';
   if (input.file_path) return baseName(input.file_path);
   if (input.notebook_path) return baseName(input.notebook_path);
@@ -126,7 +130,7 @@ function buildItems(events) {
   return items;
 }
 
-function ToolRow({ item }) {
+export function ToolRow({ item }) {
   const [open, setOpen] = useState(false);
   const running = item.result === null;
   const failed = item.result?.isError;
@@ -405,13 +409,17 @@ function PermissionCard({ attention, notify }) {
   );
 }
 
-function PromptCard({ item }) {
+function executorLabel(executor) {
+  return { antigravity: 'Antigravity', codex: 'Codex' }[executor] ?? 'Claude Code';
+}
+
+function PromptCard({ item, executor }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="prompt-card">
       <button onClick={() => setOpen(!open)} aria-expanded={open}>
         <Briefcase size={13} />
-        <span>已把工作目标与约定交给 Claude</span>
+        <span>已把工作目标与约定交给 {executorLabel(executor)}</span>
         <small>{formatTime(item.at)}</small>
         {open ? <CaretDown size={11} /> : <CaretRight size={11} />}
       </button>
@@ -447,7 +455,7 @@ function StateCard({ work, capacity, onAction, onOpenReview, busy }) {
       ) : (
         <div className="work-state-card">
           <Info size={15} />
-          <p>Work 已创建，尚未启动。启动后会准备执行目录并交给 Claude Code。</p>
+          <p>Work 已创建，尚未启动。启动后会准备执行目录并交给 {executorLabel(work.executor)}。</p>
           <button className="primary" disabled={busy} onClick={() => onAction('start')}>
             <Play size={13} weight="fill" />
             启动 Work
@@ -532,6 +540,8 @@ export default function WorkChat({
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(null);
   const [acting, setActing] = useState(false);
+  const [revertingId, setRevertingId] = useState(null);
+  const [execMenuOpen, setExecMenuOpen] = useState(false);
   const pendingMessage = useRef(null);
   const scroller = useRef(null);
   const atBottom = useRef(true);
@@ -554,6 +564,7 @@ export default function WorkChat({
     atBottom.current = true;
     setUnseen(false);
     setSendError(null);
+    setExecMenuOpen(false);
     pendingMessage.current = null;
   }, [work.id]);
 
@@ -604,6 +615,76 @@ export default function WorkChat({
         ? '启动后才能继续对话'
         : null;
   const canStop = work.status === 'running' || work.status === 'waiting_user';
+  const currentExecutor = work.executor ?? 'claude';
+
+  async function revertToCheckpoint(checkpointId, labelText = '本轮前') {
+    if (!checkpointId || revertingId || canStop) return;
+    const confirmed = await confirmAction({
+      title: `回退代码到「${labelText}」？`,
+      text: '会将工作目录还原到该轮开始前的代码快照（回退前会自动创建备份点以便撤销，下一轮也会通知智能体以磁盘最新代码为准）。',
+      confirmLabel: '确认回退',
+      cancelLabel: '取消',
+    });
+    if (!confirmed) return;
+    setRevertingId(checkpointId);
+    try {
+      const result = await request(
+        'checkpoint.revert',
+        { workId: work.id, checkpointId, requestId: newId() },
+        { timeoutMs: 120000 },
+      );
+      notify(
+        result.affectedCount > 0
+          ? `已回退代码（还原 ${result.affectedCount} 个文件）`
+          : '当前代码已与该快照一致',
+      );
+    } catch (cause) {
+      if (cause?.code === 'CONFLICT') {
+        const forceOk = await confirmAction({
+          title: '检测到外部未保存改动，仍要强制回退？',
+          text: errorText(cause),
+          confirmLabel: '强制覆盖并回退',
+          cancelLabel: '保留当前代码',
+          danger: true,
+        });
+        if (forceOk) {
+          try {
+            const forced = await request(
+              'checkpoint.revert',
+              { workId: work.id, checkpointId, force: true, requestId: newId() },
+              { timeoutMs: 120000 },
+            );
+            notify(`已强制回退代码（还原 ${forced.affectedCount ?? 0} 个文件）`);
+          } catch (inner) {
+            notify(errorText(inner), true);
+          }
+        }
+      } else {
+        notify(errorText(cause), true);
+      }
+    } finally {
+      setRevertingId(null);
+    }
+  }
+
+  async function switchWorkExecutor(nextExecutor) {
+    setExecMenuOpen(false);
+    if (nextExecutor === currentExecutor || acting || canStop || ended) return;
+    setActing(true);
+    try {
+      const res = await request('work.switchExecutor', {
+        workId: work.id,
+        executor: nextExecutor,
+      });
+      if (res?.changed) {
+        notify(`已切换执行引擎至 ${executorLabel(nextExecutor)}，下一轮自动同步前情上下文`);
+      }
+    } catch (cause) {
+      notify(errorText(cause), true);
+    } finally {
+      setActing(false);
+    }
+  }
 
   async function send() {
     const text = draft.trim();
@@ -633,6 +714,8 @@ export default function WorkChat({
           <div className="eyebrow">
             <Briefcase size={12} />
             {work.displayId}
+            <span className="slash">/</span>
+            <span>{executorLabel(currentExecutor)}</span>
             <span className="slash">/</span>
             <span>{sourceLabel(work)}</span>
             <span className="slash">/</span>
@@ -666,7 +749,7 @@ export default function WorkChat({
           {items.map((item) => {
             switch (item.type) {
               case 'user':
-                if (item.origin === 'prompt') return <PromptCard item={item} key={item.key} />;
+                if (item.origin === 'prompt') return <PromptCard item={item} executor={currentExecutor} key={item.key} />;
                 return (
                   <div className={`user-message ${item.origin === 'system' ? 'system' : ''}`} key={item.key}>
                     <div className="message-meta">
@@ -711,6 +794,25 @@ export default function WorkChat({
                         : '本轮结束'}
                       {item.durationMs ? ` · ${(item.durationMs / 1000).toFixed(0)} 秒` : ''} · {formatTime(item.at)}
                     </span>
+                    {item.preCheckpointId && !canStop && (
+                      <button
+                        type="button"
+                        className="turn-revert-btn"
+                        disabled={Boolean(revertingId)}
+                        title="把工作目录代码还原到这一轮开始前的状态"
+                        onClick={() => revertToCheckpoint(item.preCheckpointId, formatTime(item.at) + ' 轮次开始前')}
+                      >
+                        <ArrowCounterClockwise size={11} />
+                        {revertingId === item.preCheckpointId ? '正在回退…' : '回退到此轮前'}
+                      </button>
+                    )}
+                  </div>
+                );
+              case 'status':
+                if (!item.executorSwitch && !item.checkpointReverted) return null;
+                return (
+                  <div className="session-note" key={item.key}>
+                    {item.reason} · {formatTime(item.at)}
                   </div>
                 );
               case 'error':
@@ -726,7 +828,7 @@ export default function WorkChat({
               case 'session':
                 return (
                   <div className="session-note" key={item.key}>
-                    Claude Code {item.cliVersion ?? ''} · {item.model ?? '默认模型'} · 权限模式{' '}
+                    {executorLabel(item.executor ?? currentExecutor)} {item.cliVersion ?? ''} · {item.model ?? '默认模型'} · 权限模式{' '}
                     {item.permissionMode ?? '—'}
                   </div>
                 );
@@ -766,7 +868,7 @@ export default function WorkChat({
           }}
         >
           <textarea
-            aria-label="发送给 Claude 的消息"
+            aria-label={`发送给 ${executorLabel(currentExecutor)} 的消息`}
             rows={2}
             value={draft}
             disabled={Boolean(blockedReason)}
@@ -785,6 +887,44 @@ export default function WorkChat({
           />
           <div className="composer-tools">
             <div>
+              <div className="executor-chip-wrap">
+                <button
+                  type="button"
+                  className="composer-chip interactive"
+                  disabled={canStop || ended || acting}
+                  aria-expanded={execMenuOpen}
+                  title={
+                    canStop
+                      ? '本轮执行结束后可切换执行引擎'
+                      : '在非运行态可无缝切换执行引擎（下一轮自动同步前情上下文）'
+                  }
+                  onClick={() => setExecMenuOpen((v) => !v)}
+                >
+                  <EngineIcon id={currentExecutor} />
+                  引擎：{executorLabel(currentExecutor)}
+                  <CaretDown size={10} />
+                </button>
+                {execMenuOpen && (
+                  <div className="executor-chip-menu" role="menu" aria-label="切换 Work 执行引擎">
+                    {[
+                      ['claude', 'Claude Code'],
+                      ['antigravity', 'Antigravity (ACP)'],
+                      ['codex', 'Codex (App Server)'],
+                    ].map(([id, label]) => (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        key={id}
+                        aria-checked={currentExecutor === id}
+                        onClick={() => switchWorkExecutor(id)}
+                      >
+                        <span>{label}</span>
+                        {currentExecutor === id && <Check size={12} />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <span className="composer-chip" title="创建 Work 时确定；运行中的 Work 暂不支持切换">
                 权限模式：{work.permissionMode ?? '跟随 CLI 设置'}
               </span>

@@ -3,6 +3,7 @@ const path = require("node:path");
 const os = require("node:os");
 const { randomUUID } = require("node:crypto");
 const { git, gitRequest, fileRequest } = require("./git.cjs");
+const engines = require("./engines.cjs");
 
 const defaults = {
   appFontSize: 12,
@@ -60,6 +61,7 @@ function sampleSession(file) {
       "Claude 会话";
     return {
       id: path.basename(file, ".jsonl"),
+      provider: "claude",
       cwd: metadata.cwd,
       title,
       time: new Date(stat.mtimeMs).toISOString(),
@@ -73,8 +75,13 @@ function sampleSession(file) {
 }
 
 class DesktopRuntime {
-  constructor({ dataPath, emit, dialog, shell, window }) {
+  constructor({ dataPath, emit, dialog, shell, window, spawn, env, platform, homes }) {
     this.dataPath = dataPath;
+    // PTY 启动、环境与历史目录可注入：回归在任意平台验证参数，而不真的启动 CLI。
+    this.spawnPty = spawn || ((file, args, options) => require("node-pty").spawn(file, args, options));
+    this.env = env || process.env;
+    this.platform = platform || process.platform;
+    this.homes = homes || {};
     this.emit = emit;
     this.dialog = dialog;
     this.shell = shell;
@@ -92,8 +99,10 @@ class DesktopRuntime {
       hiddenProjects: [],
       projectOrder: [],
       sessionOrders: {},
+      providers: {},
       ...readJSON(this.configFile, {}),
     };
+    this.config.providers = this.config.providers || {};
     this.settings = { ...defaults, ...this.config.settings };
     this.runtime = {
       mode: "default",
@@ -113,7 +122,10 @@ class DesktopRuntime {
   }
   scan() {
     const projects = new Map();
-    const add = (cwd) => {
+    const add = (raw) => {
+      // `<项目>/.worktrees/<名字>` 里的会话归到 `<项目>` 名下，与 macOS 一致。
+      const marker = raw.search(/[\\/]\.worktrees[\\/]/);
+      const cwd = marker > 0 ? raw.slice(0, marker) : raw;
       if (!projects.has(cwd))
         projects.set(cwd, {
           path: cwd,
@@ -149,6 +161,24 @@ class DesktopRuntime {
         }
       }
     }
+    const others = [
+      ...(this.settings.cliPreferences?.codex?.enabled === false ? [] : engines.scanCodex({ home: this.homes.codex })),
+      ...(this.settings.cliPreferences?.dsh?.enabled === false ? [] : engines.scanDeepSeek({ userHome: this.homes.user, dshHome: this.homes.dsh })),
+    ];
+    for (const session of others) {
+      if (this.config.hidden.includes(session.id) || this.config.hiddenProjects.includes(session.cwd)) continue;
+      session.title = this.config.titles[session.id] || session.title;
+      session.pinned = this.config.pinned.includes(session.id);
+      add(session.cwd).sessions.push(session);
+    }
+    // 本次运行中新建、尚未回绑原始 ID 的会话保留在列表里。
+    for (const live of this.sessions.values()) {
+      if (!live.pending) continue;
+      const project = add(live.projectPath || live.cwd);
+      if (!project.sessions.some((item) => item.id === live.id))
+        project.sessions.unshift({ id: live.id, provider: live.provider, cwd: live.cwd, title: this.config.titles[live.id] || "新建会话",
+          running: true, unread: false, time: "刚刚", modifiedAt: Date.now() });
+    }
     for (const project of projects.values())
       project.sessions.sort(
         (a, b) =>
@@ -176,7 +206,17 @@ class DesktopRuntime {
   snapshot() {
     return {
       home: os.homedir(),
-      projects: this.projects,
+      projects: this.projects.map((project) => ({
+        ...project,
+        sessions: project.sessions.map((session) => ({
+          ...session,
+          provider: session.provider || this.config.providers[session.id] || "claude",
+          originalSessionId: session.id.startsWith("pending-") ? null : session.id,
+          openMode: "terminal",
+        })),
+      })),
+      providers: this.diagnostics(),
+
       active: this.active,
       settings: this.settings,
       runtime: {
@@ -204,6 +244,19 @@ class DesktopRuntime {
       },
     };
   }
+  diagnostics() {
+    return Object.keys(engines.ENGINES).map((id) => engines.diagnose(id, { env: this.env, platform: this.platform }));
+  }
+  sessionRow(sessionId) {
+    for (const project of this.projects)
+      for (const session of project.sessions) if (session.id === sessionId) return session;
+    return null;
+  }
+  providerOf(sessionId) {
+    for (const project of this.projects)
+      for (const session of project.sessions) if (session.id === sessionId) return session.provider || "claude";
+    return this.config.providers[sessionId] || null;
+  }
   changed() {
     this.emit("claude-picker:state", this.snapshot());
   }
@@ -218,55 +271,65 @@ class DesktopRuntime {
     this.sessions.clear();
   }
   async open(p, create) {
-    const cwd = p.cwd || p.projectPath;
-    if (!cwd || !fs.statSync(cwd).isDirectory())
-      throw new Error("工作目录不存在");
-    const id = create ? randomUUID() : p.sessionId;
-    if (!/^[a-f0-9-]{36}$/i.test(id)) throw new Error("无效的会话 ID");
+    const provider = p.provider || (create ? this.settings.defaultProvider : this.providerOf(p.sessionId)) || "claude";
+    const spec = engines.engine(provider);
+    if (this.settings.cliPreferences?.[provider]?.enabled === false) throw new Error(`${spec.label} 已停用`);
+    // 恢复时以会话记录的执行目录为准（工作树会话不在项目根目录）。
+    const cwd = p.cwd || (!create ? this.sessionRow(p.sessionId)?.cwd : null) || p.projectPath;
+    if (!cwd || !fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error("工作目录不存在");
+    const generated = randomUUID();
+    const id = create ? (spec.presetId ? generated : `pending-${provider}-${generated}`) : p.sessionId;
+    if (!create && !this.sessions.has(id)) {
+      if (typeof id === "string" && id.startsWith("pending-")) throw new Error("会话尚未取得原始 ID，无法恢复");
+      if (!engines.validateId(provider, id)) throw new Error("无效的会话 ID");
+    }
     if (!this.sessions.has(id)) {
-      const pty = require("node-pty");
-      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
-      const flags = create
-        ? `--session-id ${quote(id)}`
-        : `--resume ${quote(id)}`;
-      const command = `$cli = Get-Command claude -CommandType Application -ErrorAction Stop; & $cli.Source ${flags} --model ${quote(this.runtime.model)} --permission-mode ${quote(this.runtime.mode)}`;
-      const terminal = pty.spawn(
-        "powershell.exe",
-        ["-NoLogo", "-NoProfile", "-Command", command],
-        {
-          name: "xterm-256color",
-          cols: 100,
-          rows: 32,
-          cwd,
-          env: { ...process.env, TERM: "xterm-256color" },
-        },
-      );
-      const session = { pty: terminal, buffer: "", sequence: 0, cwd, id };
+      const diagnosis = engines.diagnose(provider, { env: this.env, platform: this.platform });
+      if (!diagnosis.available) throw new Error(`${spec.label}：${diagnosis.status}`);
+      const launch = engines.launchSpec(provider, {
+        executable: diagnosis.path,
+        id: create && !spec.presetId ? null : id,
+        resume: !create,
+        runtime: provider === "claude" ? this.runtime : null,
+        platform: this.platform,
+      });
+      const terminal = this.spawnPty(launch.file, launch.args, {
+        name: "xterm-256color",
+        cols: 100,
+        rows: 32,
+        cwd,
+        env: { ...this.env, TERM: "xterm-256color" },
+      });
+      const session = { pty: terminal, buffer: "", sequence: 0, cwd, id, provider, projectPath: p.projectPath || cwd,
+        pending: create && !spec.presetId, startedAt: Date.now() };
       this.sessions.set(id, session);
       terminal.onData((data) => {
         session.buffer = (session.buffer + data).slice(-2 * 1024 * 1024);
         session.sequence += 1;
         this.emit("terminal:data", {
-          sessionId: id,
+          sessionId: session.id,
           data,
           sequence: session.sequence,
         });
       });
       terminal.onExit(() => {
-        this.sessions.delete(id);
-        if (this.active?.sessionId === id) this.active = null;
+        this.sessions.delete(session.id);
+        if (this.active?.sessionId === session.id) this.active = null;
         this.changed();
       });
+      if (session.pending) this.scheduleBind(session);
     }
     this.active = {
       sessionId: id,
       cwd,
       projectPath: p.projectPath || cwd,
-      label: p.title || "Claude 会话",
+      label: p.title || `${spec.shortLabel} 会话`,
       busy: false,
+      provider,
+      surface: "terminal",
     };
     if (create) {
-      let project = this.projects.find((item) => item.path === cwd);
+      let project = this.projects.find((item) => item.path === (p.projectPath || cwd));
       if (!project) {
         project = {
           path: cwd,
@@ -278,19 +341,56 @@ class DesktopRuntime {
       }
       project.sessions.unshift({
         id,
+        provider,
         title: p.title || "新建会话",
         cwd,
+        branch: p.workspace?.branch ?? null,
         running: true,
         time: "刚刚",
         modifiedAt: Date.now(),
       });
-      if (!this.config.directories.includes(cwd))
-        this.config.directories.push(cwd);
+      if (!this.config.directories.includes(p.projectPath || cwd))
+        this.config.directories.push(p.projectPath || cwd);
       if (p.title) this.config.titles[id] = p.title;
+      this.config.providers[id] = provider;
       this.persist();
     }
     this.changed();
-    return { sessionId: id, cwd };
+    return { sessionId: id, cwd, provider };
+  }
+  /// CLI 自行分配 ID 的会话：等它写入本地历史后，把占位 ID 换成原始 ID（只认唯一候选）。
+  scheduleBind(session, delays = [2000, 5000, 12000, 25000]) {
+    const known = new Set(this.projects.flatMap((project) => project.sessions.map((item) => item.id)));
+    for (const delay of delays) {
+      setTimeout(() => this.tryBind(session, known), delay).unref?.();
+    }
+  }
+  tryBind(session, known = new Set()) {
+    if (!session.pending || !this.sessions.has(session.id)) return false;
+    const history = session.provider === "codex" ? engines.scanCodex({ home: this.homes.codex })
+      : session.provider === "dsh" ? engines.scanDeepSeek({ userHome: this.homes.user, dshHome: this.homes.dsh })
+      : [];
+    const found = engines.findNewConversation(history, { cwd: session.cwd, since: session.startedAt - 1000, ignoring: known });
+    if (!found) return false;
+    const placeholder = session.id;
+    this.sessions.delete(placeholder);
+    session.id = found.id;
+    session.pending = false;
+    this.sessions.set(found.id, session);
+    if (this.config.titles[placeholder]) {
+      this.config.titles[found.id] = this.config.titles[placeholder];
+      delete this.config.titles[placeholder];
+    }
+    delete this.config.providers[placeholder];
+    this.config.providers[found.id] = session.provider;
+    for (const project of this.projects)
+      for (const item of project.sessions)
+        if (item.id === placeholder) Object.assign(item, { id: found.id, branch: item.branch ?? found.branch });
+    if (this.active?.sessionId === placeholder) this.active = { ...this.active, sessionId: found.id };
+    this.persist();
+    this.emit("terminal:rebind", { from: placeholder, to: found.id });
+    this.changed();
+    return true;
   }
   async request(method, p = {}) {
     if (method.startsWith("git.") || method.startsWith("file.")) {
@@ -309,11 +409,13 @@ class DesktopRuntime {
     switch (method) {
       case "app.state":
         return this.snapshot();
+      case "app.refreshUsage":
+        throw new Error("Windows 暂未提供额度接口");
       case "app.layout":
         return null;
       case "app.settings":
-        if (p.interactionMode === "chat")
-          throw new Error("Windows 图形聊天服务尚未适配，请使用原生终端。");
+        if (p.interactionMode && p.interactionMode !== "terminal")
+          throw new Error("Windows 的聊天方式尚未适配，请使用原生终端。");
         Object.assign(this.settings, p);
         this.persist();
         this.changed();
@@ -439,6 +541,15 @@ class DesktopRuntime {
       case "session.open":
         return this.open(p, false);
       case "session.create": {
+        if (p.mode === "current" && p.workspace?.worktreePath) {
+          const trees = await gitRequest("git.worktrees", { projectPath: p.projectPath });
+          const tree = trees.find((item) => !item.isPrunable && !item.isBare &&
+            path.resolve(item.path) === path.resolve(p.workspace.worktreePath));
+          if (!tree) throw new Error("工作树不存在或已不可用");
+          p = { ...p, cwd: tree.path };
+        } else if (p.mode === "current" && p.workspace?.branch) {
+          await gitRequest("git.switchWorkspaceBranch", { projectPath: p.projectPath, branch: p.workspace.branch });
+        }
         if (p.mode === "branch") {
           if (!p.branch || p.branch.startsWith("-"))
             throw new Error("无效的分支名称");
@@ -447,7 +558,7 @@ class DesktopRuntime {
         if (p.mode === "worktree") {
           const tree = await gitRequest("git.createWorktree", {
             projectPath: p.projectPath,
-            input: { branch: p.branch },
+            input: { projectPath: p.projectPath, branch: p.branch },
           });
           p = { ...p, cwd: tree.path };
         }

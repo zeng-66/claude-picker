@@ -3,12 +3,15 @@ import Foundation
 // MARK: - 会话（从 ~/.claude/projects 读取）
 
 struct Session: Identifiable, Equatable {
-    let id: String          // sessionId
+    let id: String          // sessionId / conversationId
     let cwd: String
     let title: String       // 优先使用会话总结，旧会话回退到首条人类消息
     let summary: String?    // jsonl 中最后一条有效的 ai-title / summary
     let date: Date
     var fileURL: URL? = nil
+    var provider: AgentProvider = .claude
+    var gitBranch: String? = nil
+    var lastCompletedTurn: Date? = nil
 }
 
 enum SessionScanner {
@@ -65,7 +68,8 @@ enum SessionScanner {
         let fallback = sawImage ? "图片对话" : "空会话"
         let summary = tailSummary(url)
         return Session(id: sid, cwd: c, title: summary ?? title ?? fallback,
-                       summary: summary, date: mtime, fileURL: url)
+                       summary: summary, date: mtime, fileURL: url, gitBranch: lastGitBranch(url),
+                       lastCompletedTurn: mtime > Date().addingTimeInterval(-3600) ? lastCompletedTurn(url) : nil)
     }
 
     /// 从尾部按完整 JSONL 行倒序读取，找到最新有效总结即停止。
@@ -101,6 +105,27 @@ enum SessionScanner {
                     return summary
                 }
             }
+        }
+        return nil
+    }
+
+    private static func lastCompletedTurn(_ url: URL) -> Date? {
+        guard let file = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? file.close() }
+        guard let end = try? file.seekToEnd(),
+              (try? file.seek(toOffset: end > 131072 ? end - 131072 : 0)) != nil,
+              let tail = try? file.readToEnd() else { return nil }
+        let dateFormat = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        for line in tail.split(separator: 10).reversed() {
+            guard let record = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  record["isSidechain"] as? Bool != true,
+                  let type = record["type"] as? String,
+                  let message = record["message"] as? [String: Any] else { continue }
+            if type == "user", record["isMeta"] as? Bool != true { return nil }
+            guard type == "assistant", let reason = message["stop_reason"] as? String else { continue }
+            guard ["end_turn", "stop_sequence"].contains(reason),
+                  let timestamp = record["timestamp"] as? String else { return nil }
+            return (try? dateFormat.parse(timestamp)) ?? (try? Date.ISO8601FormatStyle().parse(timestamp))
         }
         return nil
     }
@@ -219,6 +244,14 @@ struct TreeOrder: Codable {
     var hiddenSessions: [String] = []
     /// 新建会话时用户起的名字（会话 id → 名称），优先于 claude 自动生成的标题
     var titles: [String: String] = [:]
+    /// 会话归属引擎补充记录（新建未落盘或接力会话 id → provider）
+    var sessionProviders: [String: String] = [:]
+    /// 宿主补充记录的会话分支（Antigravity 等未在 jsonl 记录 gitBranch 时回退读取）
+    var sessionBranches: [String: String] = [:]
+    /// 跨引擎接力来源说明（新会话 id → 来源标题）
+    var handoffFrom: [String: String] = [:]
+    /// 会话打开方式（会话 id → terminal / chat / structured）；没有记录的旧会话跟随全局默认
+    var sessionModes: [String: String] = [:]
 
     init() {}
 
@@ -231,6 +264,10 @@ struct TreeOrder: Codable {
         hiddenProjects = try c.decodeIfPresent([String].self, forKey: .hiddenProjects) ?? []
         hiddenSessions = try c.decodeIfPresent([String].self, forKey: .hiddenSessions) ?? []
         titles = try c.decodeIfPresent([String: String].self, forKey: .titles) ?? [:]
+        sessionProviders = try c.decodeIfPresent([String: String].self, forKey: .sessionProviders) ?? [:]
+        sessionBranches = try c.decodeIfPresent([String: String].self, forKey: .sessionBranches) ?? [:]
+        handoffFrom = try c.decodeIfPresent([String: String].self, forKey: .handoffFrom) ?? [:]
+        sessionModes = (try? c.decodeIfPresent([String: String].self, forKey: .sessionModes)) ?? [:]
     }
 }
 
@@ -328,6 +365,21 @@ struct AppSettings: Codable, Equatable {
     var navigation: [NavigationItem] = NavigationItem.defaults
     /// Clawd 桌宠：显示、尺寸、主题、空闲小剧场、散步与位置。
     var pet: PetSettings = PetSettings()
+    /// 按引擎覆盖新会话的打开方式（缺省跟随 `interactionMode`）。
+    var providerModes: [String: InteractionMode] = [:]
+    /// 默认新建会话引擎（claude / antigravity）
+    var defaultProvider: AgentProvider = .claude
+    var disabledProviders: Set<AgentProvider> = []
+    /// DeepSeek Harness：启动时与每 6 小时巡检版本与环境，有问题时提示升级。
+    var deepseekAutoCheck = true
+    /// 已忽略的提示（版本与问题的签名），同一签名不再重复提示。
+    var deepseekDismissed = ""
+    var promptCacheEnabled = true
+    var promptCacheMinutes = 5
+    /// 是否扫描并展示 Antigravity 历史会话
+    var scanAntigravity: Bool = true
+    /// 侧栏会话筛选（all / claude / antigravity）
+    var providerFilter: String = "all"
 
     init() {}
 
@@ -355,6 +407,15 @@ struct AppSettings: Codable, Equatable {
         contextWidth = try c.decodeIfPresent(Double.self, forKey: .contextWidth) ?? d.contextWidth
         navigation = NavigationItem.normalized((try? c.decodeIfPresent([NavigationItem].self, forKey: .navigation)) ?? nil)
         pet = ((try? c.decodeIfPresent(PetSettings.self, forKey: .pet)) ?? nil) ?? d.pet
+        promptCacheEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .promptCacheEnabled)) ?? true
+        deepseekAutoCheck = (try? c.decodeIfPresent(Bool.self, forKey: .deepseekAutoCheck)) ?? true
+        deepseekDismissed = (try? c.decodeIfPresent(String.self, forKey: .deepseekDismissed)) ?? ""
+        promptCacheMinutes = (try? c.decodeIfPresent(Int.self, forKey: .promptCacheMinutes)) ?? 5
+        disabledProviders = (try? c.decodeIfPresent(Set<AgentProvider>.self, forKey: .disabledProviders)) ?? []
+        providerModes = ((try? c.decodeIfPresent([String: InteractionMode].self, forKey: .providerModes)) ?? nil) ?? [:]
+        defaultProvider = ((try? c.decodeIfPresent(AgentProvider.self, forKey: .defaultProvider)) ?? nil) ?? d.defaultProvider
+        scanAntigravity = try c.decodeIfPresent(Bool.self, forKey: .scanAntigravity) ?? d.scanAntigravity
+        providerFilter = try c.decodeIfPresent(String.self, forKey: .providerFilter) ?? d.providerFilter
     }
 }
 
@@ -444,14 +505,32 @@ struct PetSettings: Codable, Equatable {
     }
 }
 
-enum InteractionMode: String, Codable, CaseIterable {
-    case terminal, chat
+/// 会话打开方式。`chat` 保留旧值，表示 Swttch 图形聊天；`structured` 是基于 CLI 结构化协议的原生聊天。
+enum InteractionMode: String, Codable, CaseIterable, Sendable {
+    case terminal, chat, structured
 
     var label: String {
         switch self {
         case .terminal: return "原生终端"
-        case .chat: return "图形聊天（实验）"
+        case .chat: return "Swttch 图形聊天"
+        case .structured: return "结构化聊天"
         }
+    }
+
+    func supported(by provider: AgentProvider) -> Bool {
+        switch self {
+        case .terminal: return true
+        case .chat: return provider.supportsGraphicalChat
+        case .structured: return provider.supportsStructuredChat
+        }
+    }
+
+    /// 会话的打开方式：会话记录优先；没有记录的旧会话按引擎覆盖、再按全局默认；引擎不支持时回到终端。
+    static func resolve(recorded: String?, provider: AgentProvider, global: InteractionMode,
+                        overrides: [String: InteractionMode]) -> InteractionMode {
+        if let recorded, let mode = InteractionMode(rawValue: recorded), mode.supported(by: provider) { return mode }
+        if let mode = overrides[provider.rawValue], mode.supported(by: provider) { return mode }
+        return global.supported(by: provider) ? global : .terminal
     }
 }
 

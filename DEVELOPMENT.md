@@ -2,6 +2,7 @@
 
 > 一个 macOS 原生小工具：左侧是可展开的会话树，右侧内嵌终端直接跑 `claude --resume <sid>`。
 > 本文档面向后续迭代开发，记录架构、数据链路、状态文件、UI 常量、交互约定和已知坑。
+> 多 CLI、工作树与工作区交互见 [开发方案](docs/cli-integration-prototype/DEVELOPMENT.md)。
 
 ---
 
@@ -399,6 +400,10 @@ exec claude --permission-mode <mode> --model <model> --effort <effort>
 
 读一次（`Store.init` 时），改一次写一次。`sidebarWidth` 在载入时会被夹紧到 250…560。
 
+打开方式（2026-11-19）：`interactionMode` 取 `terminal` / `structured` / `chat`（旧值 `chat` 仍表示 Swttch），只决定新会话和未记录旧会话的初始界面；`providerModes`（引擎 → 打开方式）按引擎覆盖。
+
+DeepSeek 维护（2026-11-19）：`deepseekAutoCheck`（默认 `true`，启动后 20 秒与每 6 小时只读巡检）与 `deepseekDismissed`（已忽略提示的签名「最新版本#问题列表」，同一签名不再提示）。
+
 界面重构（2026-11-17）新增两个字段，均由网页外壳经 `app.settings` 写入：`navigation`（`[{id, visible}]`，顶部页签顺序与显示，只认 workspace / tapd / works / git，缺的补在后面）与 `pet`（`enabled`、`size` 96/128/160、`theme` dev-life/codex、`idleShows`、`wander`、`x`、`y`）。
 
 ### 5.2 `~/.local/share/claude-picker/tree.json` — 树状态
@@ -417,12 +422,31 @@ exec claude --permission-mode <mode> --model <model> --effort <effort>
 - `expanded` —— 哪些项目默认展开。
 - `hiddenProjects` —— 被删掉的目录（绝对路径，比较时做 `resolvingSymlinksInPath`）。
 - `hiddenSessions` —— 被删掉的会话 sid。
+- `sessionModes` —— 会话 id → 打开方式（`terminal` / `structured` / `chat`）。旧文件没有该字段时按全局默认解析；CLI 分配原始 ID 后随占位 ID 一起迁移。
 
 > **误删会话怎么恢复**：把该 sid 从 `hiddenSessions` 数组里删掉，重启 App 即回来。
 > 因为数据源是实时扫盘，不存在「缓存里没有」的情况。
 > **误删整个项目**：从 `hiddenProjects` 删掉路径即可（注意 `/tmp` 和 `/private/tmp` 在 macOS 上可能同时存在两条记录）。
 
-### 5.3 `~/.claude/settings.json` — Claude Code 自己的配置（状态栏读写）
+### 5.3 Work 数据库与钥匙串（`<数据目录>/work/work.sqlite3`）
+
+Work、TAPD 与企业微信的配置存在 `settings` 表（键 → JSON），凭据只在钥匙串（服务名 `ClaudePicker`，测试时 `CLAUDE_PICKER_KEYCHAIN=memory` 换成进程内存储）。
+
+| 键 | 内容 |
+|---|---|
+| `tapd` | `enabled`、`workspaces`（`{id, name, enabled, projects}`）、`endpoint`、`cliPath`；MCP 一键配置后增加 `transport: "mcp"`、`mcp`（`command`、`args`、`webBase`）、`mcpTools`、`mcpCheckedAt` |
+| `robot` | 旧单机器人设置（名称、`botId`、`enabled`、`mode`、`autoStart`、`remoteAnswers`）。没有 `robot.bots` 时视为 id 为 `default` 的机器人 |
+| `robot.bots` | 多机器人列表：`id`、`name`、`botId`、`corpId`、`enabled`、`mode`（`chat` / `work`）、`defaultCli`、`scope`（`allUsers`、`users`、`initiators`、`deciders`、`single`、`allGroups`、`groups`、`allProjects`、`projects`） |
+| `robot.status`、`robot.status.<id>` | 各机器人连接状态（旧单机器人用前者） |
+| `robot.inbound.<id>` | 最近 20 条入站元数据：时间、会话类型、消息 ID 摘要、授权与裁决结果，不含内容 |
+| `robot.lastCardEvent` | 最近一次卡片回调的字段结构（只记字段名与是否有值） |
+| `wecom.binding.<sha256>` | 直接对话绑定（企业 / Bot / 会话类型 / 会话 / 发送人 / 项目）：引擎、工作目录、原始会话 ID、回执 |
+| `wecom.claude.<sha256>` | 旧版续聊记录，归属可核实时由新绑定沿用 |
+| `wecom.card.<taskId>` | 决策卡记录：类型、归属、允许操作者、选项、状态、选择、版本、有效期 |
+
+钥匙串账户：`tapd.token`（TAPD 个人令牌，MCP 与 tapd-cli 共用）、`wecom.botSecret`（`default` 机器人）、`wecom.bot.<id>.secret`（其它机器人）。
+
+### 5.4 `~/.claude/settings.json` — Claude Code 自己的配置（状态栏读写）
 
 | UI | JSON 路径 | 备注 |
 |---|---|---|
@@ -717,6 +741,28 @@ SwiftTerm 会向 CLI 声明支持 OSC 7501，新版 Claude 协商成功后会省
 
 14. **`swift-tools-version:6.2` 要求 Swift 6.2+。** 老版本工具链会直接拒绝解析 `Package.swift`。`platforms: [.macOS(.v14)]` 是编译期下限，`Info.plist` 的 `LSMinimumSystemVersion` 由 `build-app.sh` 的 `MIN_MACOS` 控制，两者要对齐。
 
+15. **同一原始会话换持有端必须等进程真正退出。** `TerminalSession.terminate()` 只发信号；Codex 的 npm 启动器还会拉起原生子进程，未退出前 App Server 会报 `already has an active writer`。交接用 `terminateAndWait`（等整棵进程树退出，超时 SIGKILL），结构化聊天端对该错误退避重试。
+
+16. **`zsh -lc` 不读 `.zshrc`，nvm 的 `node` 不在 PATH。** Codex、dsh-tui 这类 `#!/usr/bin/env node` 脚本会报 `env: node: No such file or directory`。终端启动前把 CLI 所在目录放到 PATH 最前面（nvm 的 node 在同一 bin 目录）。
+
+17. **企微卡片回调字段嵌套在 `event.template_card_event` 下**，与官方 Node SDK 类型定义的平铺写法不同。两种都要认，否则点击被静默忽略。
+
+18. **企微同一条群消息同时 @ 多个机器人时会分别投递**，消息 ID 不同，到达间隔实测可达约 20 秒。裁决按「群 / 发送人 / 内容」去重，不重复执行；「按列表顺序优先」只在 1.5 秒窗口内成立。企微显示名和配置里的机器人名称可能不同，联调前先对应清楚。
+
+19. **开发包每次重新构建签名都会变。** 读取之前存下的钥匙串条目时 macOS 会弹授权框；机器人一直连不上时先看是否有 `SecurityAgent` 在等确认。正式版与测试版不受影响。
+
+20. **`dsh-tui update` 不认 `--help`，会直接升级。** 看帮助用 `dsh-tui help`；执行升级时不要截断输出（管道被关闭会留下启动器与 profile 版本不一致的半升级状态，再完整执行一次 `dsh-tui update` 即可对齐）。
+
+21. **Claude CLI 交互模式的 `--permission-mode` 合法值是 `manual`（没有 `default`）。** `claude -p` 流式模式下 `default` 同样可用。
+
+22. **Codex 只建线程、不发消息时不会写 rollout 记录**，App 重启后这条会话不会出现在列表里，属正常现象。
+
+23. **agent-desktop 操作 WKWebView 表单。** 输入框、下拉框的无头写值会失败，需要用户同意后用 `--headed`；中文输入法下物理键入会混入字符，改用 `clipboard-set` + `cmd+v`；页面上同名控件（例如单机器人表单和机器人编辑器各有一个「Bot ID」）要取对引用，粘贴后用 `clipboard-clear` 清掉凭据。
+
+24. **Codex 会话标题不在 rollout 里。** rollout 首条用户消息是 AGENTS.md 注入内容，不能当标题。`CodexSessionScanner.titles()` 先读 `~/.codex/session_index.jsonl` 的 `thread_name`（改名追加新行，后写为准），再读 `state_*.sqlite` 的 `threads.name / title / first_user_message`，都没有才显示「Codex · 短 ID」（目前只有无标题的子代理线程会这样）。子代理 / 分叉 rollout 文件名形如 `<父ID>_<子ID>.jsonl`、沿用父会话 ID，扫描时按 ID 只留最近更新的一份。结构化聊天载入 Codex 历史时（`SessionChatHistory.codexItems`），user 消息里以 `# AGENTS.md instructions` 或 `<` 开头的 `input_text` 段是注入上下文，逐段剔除，否则会显示成「你」的发言。
+
+25. **外壳 WebView 没有导航拦截，Markdown 链接必须自己接管点击。** `MarkdownRenderer` 的 `a` 组件一律 `preventDefault`：http(s) 走 `app.openURL` 交给系统浏览器，本机绝对路径 / `file://` 走 `app.revealInFinder`，相对路径（如 Codex 回复里的 `WECOM-DEVELOPMENT.md`）只显示不跳转。链接颜色用 `--accent`，不要用浏览器默认蓝 / 紫，在深色背景上看不清。
+
 ---
 
 ## 11. 迭代 checklist
@@ -749,7 +795,11 @@ SwiftTerm 会向 CLI 声明支持 OSC 7501，新版 Claude 协商成功后会省
 ### 11.5 想做的事（还没做）
 
 - [ ] 「恢复误删会话」UI 入口（见 §11.2）。
-- [ ] 同时开多个终端（当前 `open()` 会先 `terminate()` 旧的）。做法：`active` 改成 `[TerminalSession]` + `selectedTab`，`TerminalPane` 按 tag 切换。
+- [ ] Qoder CLI 会话入口：目前只在「可安装」目录里检测与安装（`qodercli`），启动、恢复与历史扫描待接入。
+- [ ] 企微同时 @ 多个机器人的裁决窗口：现为 1.5 秒（先到先处理）；如需严格按列表顺序，需拉长到 20–30 秒，待拍板。
+- [ ] TAPD 详情、评论与状态流转切到 MCP：按场景报告逐项核对返回结构与写权限后替换 tapd-cli。
+- [ ] Windows 安装与运行验收（已交叉打包 `dist-windows/ClaudePickerDev-1.0.0-windows-x64.exe`），以及 Antigravity 在 Windows 的历史扫描。
+- [ ] DeepSeek 升级提示条的真机触发验证（本机已是最新，当前只有单元回归覆盖）。
 - [ ] 通用二进制：现在只出 arm64。可试 `./scripts/build-app.sh` 里加 `--arch arm64 --arch x86_64`，但 vendored SwiftTerm 也要能双架构编译。
 - [ ] CI：现在构建和发版全在本地 `scripts/build-app.sh` + `gh release create`，可以接 GitHub Actions。
 
@@ -761,6 +811,9 @@ SwiftTerm 会向 CLI 声明支持 OSC 7501，新版 Claude 协商成功后会省
 - [x] 忙闲指示（loading）：OSC 7501 任务状态及 OSC 0 标题兼容，会话行转圈、后台绿点（见 §9.1）。
 - [x] 会话总结：`Session.summary` 来自 jsonl 尾部 `ai-title`/`summary` 记录，会话行第一行显示总结，第二行仅显示相对时间（见 §4.3）。
 - [x] 滚轮翻页：vendored SwiftTerm 的 alternate buffer 滚轮改发 `cmdPageUp/PageDown`，不再发方向键（claude 会把 ↑ 当历史导航）。
+- [x] 多终端并存：`Store.panes` 按会话 key 保存多个 `TerminalSession`，切换会话不结束旧终端。
+- [x] 逐会话打开方式与结构化聊天（Claude / Antigravity / Codex），输入框快捷切换、上下文环、终端右上角切换（见文末 2026-11-19 记录）。
+- [x] TAPD MCP 一键配置、企微多机器人与决策卡、Windows 四引擎终端、DeepSeek 维护、Qoder 安装入口（同上）。
 
 ---
 
@@ -837,4 +890,62 @@ macOS 上桌宠改为整个桌面可见的透明悬浮窗（`Sources/ClaudeDeck/
 同时修正：TAPD 缺陷列表与详情的状态显示内部键（new / status_2 …），改为按项目状态字段翻成显示名。
 
 验证：`swift build`、`vite build` 通过；Work 回归 191 项、会话 / 终端 / 桥接回归通过；无头 Chrome 检查桌宠页面与窗口内气泡；开发包启动后用 CGWindowList 确认悬浮窗在 floating 层级显示于其它 App 之上、背景透明，主窗口不再显示窗口内桌宠。透明区域点击穿透、拖动跨屏、全屏 App 旁显示需要实机操作确认。
+
+### 2026-11-18 多引擎共用会话架构与 Antigravity CLI 集成
+
+围绕「Shared Thread + Driver/Adapter 分层 + Turn Checkpoint」完成双引擎接入与代码检查点回退，技术方案、架构深度评估与全量交互规范见 [docs/antigravity-integration-plan.md](docs/antigravity-integration-plan.md)、[docs/multi-agent-architecture-evaluation.md](docs/multi-agent-architecture-evaluation.md) 与 [docs/multi-agent-development-spec.md](docs/multi-agent-development-spec.md)。
+
+| 模块 | 实现入口 |
+|---|---|
+| 引擎抽象与 Antigravity 扫描 / 配置 / Handoff | `Sources/ClaudeDeck/AgentProviders.swift`、`Models.swift`、`TerminalPane.swift`、`main.swift`、`ThirdPane/BridgeHandlers+Session.swift`：只读扫描 `~/.gemini/antigravity-cli/conversation_summaries.db` + `conversation_metadata.json` + `transcript.jsonl`（剔除子代理与已销毁会话、剥离 `<USER_REQUEST>` 标签、读取 1M 上下文窗口占用）；新建终端会话占位键自动晋升真实 `conversationId`；四层 `<thread-handoff>` 跨 CLI 接力信封；Swttch 图形模式打开 Antigravity 会话自动回退原生终端 |
+| ACP 结构化执行器与共用 Thread 切换 | `Sources/ClaudeDeck/Work/ACPExecutor.swift`、`ClaudeExecutor.swift`、`WorkStore.swift`（Schema v1 → v2 自动备份迁移，新增 `works.executor`、`works.reverted_notice`、`thread_segments`、`checkpoints`）、`WorkCore.swift`、`WorkCore+Execution.swift`、`ThirdPane/BridgeHandlers+Work.swift`：对接 `agy acp`（JSON-RPC 2.0 stdio），支持流式增量、工具卡片、双向权限确认与取消；支持 Work 在非运行态通过 `work.switchExecutor` 无缝切换执行引擎并自动注入前情 `<thread-handoff>` |
+| Turn Checkpoint 代码快照与外科回退 | `Sources/ClaudeDeck/Work/WorkspaceService.swift`、`WorkCore+Review.swift`：每轮前后用临时 index `write-tree` + `commit-tree` 锚定到隐藏引用 `refs/claude-picker/checkpoints/<workId>/<seq>`（防 `git gc` 回收且不污染分支与 `git status`）；`checkpoint.revert` 自动生成 `undo` 备份点、校验共享目录外部未保存修改冲突，并在下一轮向智能体注入 `<workspace-reverted-notice>` 消除上下文幻觉 |
+| 双源 MCP 服务管理 | `Sources/ClaudeDeck/ThirdPane/McpService.swift`、`BridgeHandlers+Mcp.swift`、`Web/src/shell/Modals.jsx`：支持管理 `~/.gemini/config/mcp_config.json`，拦截旧版 SSE 传输，提供「从 Claude 导入」一键合并兼容的 `stdio` / `http` 服务 |
+| 前端多引擎与回退交互 | `Web/src/shell/Sidebar.jsx`、`Composer.jsx`、`Modals.jsx`、`App.jsx`、`work/WorkModals.jsx`、`work/WorkChat.jsx`、`work/ContextPanel.jsx`、`work/SettingsModal.jsx`、`work/BoardPage.jsx`：侧栏引擎筛选与 `C`/`A` 徽标、会话右键与底部引擎胶囊接力续聊、新建会话引擎卡、Work 内引擎切换菜单、轮次分割线「↺ 回退到此轮前」与详情栏「撤销上次代码回退」、设置页 CLI 实时诊断 |
+
+验证（分支 `codex/wt-20261118`，开发包 `dist-dev/ClaudePickerDev.app`）：
+- 构建：`swift build`（Debug/Release）、`Web` `vite build`、`./scripts/build-app.sh --dev` 全部通过（签名 `ClaudePicker Local Dev` 校验有效）。
+- 回归脚本：`./scripts/test-git.sh` 全部通过；`./scripts/check-session-regressions.sh`（Session / Terminal / Bridge，含 Antigravity SQLite 扫描、标签清洗、1M Token 统计、`<thread-handoff>`、`session.handoff`、Swttch 自动降级、Antigravity MCP 导入与 SSE 拦截）全部通过；`./scripts/test-work.sh`（含 `fake-agy-acp.py` ACP 协议替身、跨引擎 `claude → antigravity` 接力、隐藏 Git Ref 检查点回退、`undo` 备份、共享目录外部改动冲突保护与 `<workspace-reverted-notice>` 注入）**213 项全部通过，0 项失败**。
+- 界面与运行验收：无头 Chrome CDP 在构建产物上逐项点击验证侧栏引擎筛选、底部接力切换、新建会话双引擎卡、设置页 CLI 状态、MCP Antigravity 页签与导入按钮、新建 Work 引擎选项，控制台 0 报错；启动 `dist-dev/ClaudePickerDev.app`（PID `54588`），通过 `CGWindowListCopyWindowInfo` 与只读 SQLite 校验确认主窗口（`1360×800`）、桌面悬浮窗（`layer=3`）正常挂载，开发库平滑迁移至 `user_version = 2`（含 `checkpoints`、`thread_segments` 表）。`agent-desktop status` / `snapshot` 当前因系统辅助功能与屏幕录制权限为 `denied` 返回 `PERM_DENIED`；授权后（运行 `agent-desktop permissions --guide`）可继续用 `agent-desktop` 做原生窗口 AX 交互复验。
+
+### 2026-11-18 Antigravity 终端主题配色调整与 `test` 渠道提测交付
+
+- **来源分支 → 目标分支**：`codex/wt-20261118` → `test`（版本 `1.0.0`）
+- **变更摘要**：
+  - `Sources/ClaudeDeck/TerminalPane.swift`：新增 `kAntigravityTerminalBackground`（`#212734`）与 `TerminalSession.backgroundColor(for:)` / `theme(for:)`；Antigravity 会话启用 `#212734` 底色、柔化前景色 `#c5cdd9` 及调色后的 ANSI 16 色（将过饱和深紫蓝 `#492ee1`/`#5833ff` 调整为浅蓝 `#73b8f2`/`#89c4f4` 并柔化高亮白 `#cfd7e3`），Claude 会话保持 `#202122` 原样。
+  - `Sources/ClaudeDeck/ThirdPane/ShellView.swift`、`Sources/ClaudeDeck/main.swift`：通过 `Store.activeTerminalBackground` 与 `ShellView.showTerminal(_:backgroundColor:)` 同步更新窗口外壳与 `terminalHost` 图层底色，消除 `.terminal-hole` 四周留白处的底色接缝。
+  - `Web/src/shell/App.jsx`、`Web/src/shell/style.css`、`Web/src/shell/DesktopTerminal.jsx`：为 `.terminal-pane` 增加 `is-antigravity` 状态类，使空白引导区与 Windows xterm 终端同步应用 `#212734` 与柔化配色。
+  - `Tests/TerminalRegression/main.swift`：新增 Claude（`#202122`）与 Antigravity（`#212734` 及柔化前景）主题回归断言。
+- **验证与产物**：
+  - 回归与构建：`./scripts/check-session-regressions.sh`（Session / Terminal / Bridge）、`npm --prefix Web run build`、`swift build -c release --disable-sandbox` 均通过；开发包 `./scripts/build-app.sh --dev` 与测试包 `./scripts/build-app.sh --test` 均构建并签名通过。
+  - 测试包产物：`dist-test/ClaudePickerTest.app`（`local.zcl.claude-picker.test.dev`）。
+  - 待处理事项：`agent-desktop` 在当前沙盒环境返回 `PERM_DENIED`，测试版 App 启动后的实际界面交互与桌面验收待本机环境打开确认。
+
+
+### 2026-11-19 macOS 测试包交付
+
+- 从 `test` 的 `3500532` 构建 `1.0.0 (20261119)`。该提交已包含 `codex/agent-workspace-development-spec` 的桌宠和图形聊天调整，以及 `codex/wt-20261118` 的 Antigravity CLI 集成和终端配色。
+- 使用 `./scripts/build-app.sh --test --with-chat --dmg` 生成 `dist-test/ClaudePickerTest-1.0.0.dmg`。图形聊天从 Swttch 基线 `3285a17` 应用仓库记录的四个补丁后重建。App 深度签名和 DMG 校验均通过。
+- Git、会话、终端及桥接回归通过，Work 213 项和图形聊天定向回归 8 项通过。
+- 从 `/Applications/ClaudePickerTest.app` 使用独立临时状态目录启动，确认测试渠道和主窗口显示。辅助功能权限未授予，使用系统窗口截图核对主界面，未执行控件级验收。
+- 验收后退出测试版，移除本机发现的旧 App 副本。复查仅保留测试版 App，未发现相关进程或 launchd 任务。
+
+### 2026-11-19 多 CLI 交接项实现（`codex/wt-20261119`）
+
+- **逐会话打开方式与结构化聊天**：打开方式保存在 `tree.json` 的 `sessionModes`，全局与引擎覆盖只影响新会话。`SessionChatHub`（`Sources/ClaudeDeck/SessionChat.swift`）复用 Claude stream-json 与 Antigravity ACP，新增 `CodexAppServerProcess`（`Work/CodexAppServerExecutor.swift`，按 codex-cli 0.170 `app-server generate-ts` 的 v2 协议实现线程、流式回合、审批与中断）。右键会话可改用终端、结构化聊天或 Swttch；切换前中断进行中的回合并等执行器退出，失败时保留原界面。桥接方法：`session.setOpenMode`、`sessionChat.snapshot|send|respond|interrupt`。Work 也可选 Codex 执行器。
+- **TAPD MCP**：`TapdMcp`（`Work/TapdMcp.swift`）经 `uvx --from mcp-server-tapd==8.0.81 mcp-server-tapd` 以 stdio 接入，令牌只通过 `TAPD_ACCESS_TOKEN` 传给子进程。`tapd.mcpSetup` 拆分去重项目 ID，握手、工具发现、逐项目只读试读全部通过后一次保存；已有项目保留启停与仓库映射。MCP 模式下「我的待办」走 `get_todo`，按编号查询和「已创建」仍需 tapd-cli。
+- **企微多机器人**：`robot.bots` 保存 Bot 列表，旧单 Bot 设置视为 `default`（范围为全部，行为不变）。每个 Bot 独立连接、Secret（钥匙串账户 `wecom.bot.<id>.secret`）与状态；人员、场景、项目三项交集授权，空集合拒绝。直接对话按企业 / Bot / 私聊或群聊 / 会话 / 发送人 / 项目隔离续聊，可选 Claude、Codex、Antigravity；单选问题推送 `button_interaction` 决策卡并支持编号回复，Work 模式新建待启动 Work 时推送任务确认卡。
+- **Windows 新引擎**：`Desktop/engines.cjs` 负责四个引擎的发现（PATHEXT、npm 垫片、带空格路径）、启动与恢复参数、原始 ID 校验、Codex 与 DeepSeek 历史扫描；新会话由 CLI 分配 ID 后按唯一候选回绑。恢复使用会话记录的执行目录（修复工作树会话误用项目根目录）。
+- **拍板（2026-11-19）**：会话打开方式三种并存（终端 / 结构化聊天 / Swttch）。企微人员授权用应用内角色组（使用者 / 任务发起人 / 拍板人）；同群同时 @ 多个机器人时只让一个处理；拍板卡 30 分钟、Work 确认卡 24 小时有效；群里完整显示。
+- **结构化聊天快捷切换（参照官方桌面端）**：输入框下方依次是打开方式、权限模式、「模型 · 推理强度」合并选择器，菜单向上弹出，⌘⇧M / ⌘⇧I / ⌘⇧E 打开（同 Claude Code 桌面端）。Claude 的模式与模型经 stream-json 控制请求（`set_permission_mode`、`set_model`）即时切换，推理强度空闲时按原 ID 重启生效；Antigravity 的模式与模型取自 ACP 会话报告（中文名同 Claude 桌面端）；Codex 的模型与各模型推理强度取自 `model/list`，权限为「请求批准 / 替我批准 / 完全访问」（同 Codex 桌面端；替我批准 = `approvalsReviewer: auto_review`），随下一回合 `turn/start` 覆盖。执行器协议新增 `updateRuntime(key:value:)`，桥接方法 `sessionChat.runtime`。
+- **上下文环与图标**：发送键旁显示上下文占用（Claude 读会话 JSONL，Antigravity 读对话记录，Codex 读 `thread/tokenUsage/updated` 与 rollout 的 `token_count`）。终端右上角关闭按钮旁增加「终端 ↔ 结构化聊天」切换。引擎切换、新建会话、Work 卡片统一用 `Web/src/shell/EngineIcon.jsx` 的官方图标；运行参数栏的引擎菜单列出四个引擎。
+- **DeepSeek Harness 维护**：`Work/CliMaintenance.swift` 只读巡检（`dsh-tui doctor` + `npm view @deepseek-harness-tui/dsh-tui version`），启动后 20 秒与每 6 小时一次；需要处理时右上角提示，「升级并对齐」执行 `dsh-tui update`。设置 → CLI 引擎可手动检查与关闭自动巡检。桥接方法 `cli.deepseekCheck|deepseekUpgrade|deepseekDismiss`。
+- **Qoder CLI 安装**：`cli.installables` / `cli.install` 只执行原生端白名单里的官方命令 `curl -fsSL https://qoder.com/install | bash`，执行前确认并展示完整命令；检测到 `qodercli` 时显示版本与「重新安装 / 更新」。
+- **TAPD 待办补全**：`get_todo` 只返回 id、标题、优先级、状态键与创建人；按 ID 批量读 `get_stories_or_tasks` / `get_bug` 补处理人、迭代与时间，`get_workflows_status_map` 翻译状态名，`get_iterations` 读迭代名，均为只读且失败不影响列表。
+- **企微诊断**：每个机器人最近 20 条入站元数据记在 `robot.inbound.<id>`，卡片回调结构记在 `robot.lastCardEvent`（见 §5.3）。
+- **验证**：`bash scripts/test-git.sh`、`./scripts/check-session-regressions.sh`（含结构化聊天单写者交接、Codex 回绑、快捷切换与推理强度重启）、`bash scripts/test-work.sh`（292 项，含 Codex 执行器与覆盖参数、TAPD MCP 一键配置与待办补全、企微多 Bot / 角色组 / 裁决 / 决策卡、DeepSeek 巡检解析与安装白名单）、`node Tests/DesktopRegression/main.cjs`、`node Tests/DesktopRegression/engines.cjs`、`npm --prefix Web run build` 全部通过；`./scripts/build-app.sh --dev --with-chat` 构建并签名通过；`npm --prefix Desktop run dist:win` 在 macOS 交叉打包成功（含 `engines.cjs` 与 node-pty 的 win32-x64 原生模块）。
+- **桌面验收（agent-desktop）**：Claude / Codex / Antigravity 结构化聊天的收发、审批允许与拒绝、中断、与终端互相切换、快捷切换与快捷键、上下文环；CLI 设置页、TAPD MCP 真实一键配置与待办读取、多机器人设置页、DeepSeek 检查、Qoder 条目。企微用两个真实机器人验证：私聊与群聊回复、群聊与私聊分别续聊、拍板卡点击与重复点击、编号回复、两个机器人独立连接、私聊场景授权拒绝、同时 @ 两个机器人不重复执行。
+- **验收中修复**：回绑原始 ID 后聊天事件丢失；终端找不到 nvm 的 node；终端交接未等进程树退出（Codex `active writer`）；企微卡片回调嵌套字段；MCP 待办字段缺失；聊天标题被按钮遮挡、未停在底部、历史中断标记与工具状态、历史时间；Codex 权限当前值与模型选择器缺失；推理强度未翻译；运行参数栏把 Codex 显示成 Claude。
+- **环境处理**：验收时误执行 `dsh-tui update`（不认 `--help`），随后完整执行对齐到 0.20.2，原插件版本不兼容报错消失；`~/.dsh/cordis.patch.yml` 中 Orca 写入的 `orca-agent-hooks` 引用的包不存在，留有一条不阻塞启动的警告，未改动。第二个企微机器人的 Secret 曾出现在对话中，建议在企微后台重置。
+- **待验收**：Windows 安装与各引擎运行、DeepSeek 升级提示条的真机触发、群内拍板人 / 非发起人点击（需要第二位成员）。详见 [交接文档](docs/cli-integration-prototype/HANDOFF.md)。
 

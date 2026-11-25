@@ -3,6 +3,7 @@ const {
   BrowserWindow,
   dialog,
   ipcMain,
+  clipboard,
   protocol,
   net,
   shell,
@@ -102,6 +103,11 @@ app.whenReady().then(async () => {
       };
     }
     try {
+      if (method === "app.copyText") {
+        if (typeof params.text !== "string") throw new Error("无效的剪贴板文本");
+        clipboard.writeText(params.text);
+        return { ok: true, result: null };
+      }
       const result = method.startsWith("update.")
         ? await updater.request(method)
         : await runtime.request(method, params);

@@ -8,7 +8,7 @@ import Darwin
 /// 主领域状态只存在这里，不放在 WebView 的 localStorage 里。迁移前先备份；
 /// 打开比自己新的库时拒绝写入，不破坏既有数据。
 final class WorkStore: @unchecked Sendable {
-    static let schemaVersion = 1
+    static let schemaVersion = 2
 
     let db: SQLiteDB
     let directory: URL
@@ -62,9 +62,39 @@ final class WorkStore: @unchecked Sendable {
         }
         try db.transaction {
             if current < 1 { try db.exec(Self.schemaV1) }
+            if current < 2 { try db.exec(Self.schemaV2) }
         }
         db.userVersion = Self.schemaVersion
     }
+
+    private static let schemaV2 = """
+    ALTER TABLE works ADD COLUMN executor TEXT NOT NULL DEFAULT 'claude';
+    ALTER TABLE works ADD COLUMN reverted_notice TEXT;
+    CREATE TABLE IF NOT EXISTS thread_segments(
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        provider TEXT NOT NULL,
+        provider_session_id TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(work_id, seq)
+    );
+    CREATE TABLE IF NOT EXISTS checkpoints(
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        run_id TEXT,
+        seq INTEGER NOT NULL,
+        phase TEXT NOT NULL,
+        head_commit TEXT,
+        tree_hash TEXT NOT NULL,
+        git_ref TEXT NOT NULL,
+        label TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE(work_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS checkpoints_work ON checkpoints(work_id);
+    """
 
     private static let schemaV1 = """
     CREATE TABLE projects(
@@ -264,18 +294,19 @@ final class WorkStore: @unchecked Sendable {
 
     func insertWork(id: String, displayId: String, projectId: String, title: String, objective: String,
                     scope: String, origin: WorkOrigin, sourceConversationId: String?, sourceEventId: String?,
-                    startRequested: Bool, isolation: String, permissionMode: String?, model: String?,
+                    startRequested: Bool, isolation: String, executor: String = "claude",
+                    permissionMode: String?, model: String?,
                     idempotencyKey: String?) throws {
         let now = WorkClock.iso()
         try db.run("""
             INSERT INTO works(id, display_id, project_id, title, objective, scope, origin,
                 source_conversation_id, source_event_id, status, start_requested, isolation,
-                permission_mode, model, idempotency_key, revision, created_at, updated_at, queued_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
+                executor, permission_mode, model, idempotency_key, revision, created_at, updated_at, queued_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
             """, [.text(id), .text(displayId), .text(projectId), .text(title), .text(objective), .text(scope),
                   .text(origin.rawValue), .of(sourceConversationId), .of(sourceEventId),
                   .text(WorkStatus.queued.rawValue), .of(startRequested), .text(isolation),
-                  .of(permissionMode), .of(model), .of(idempotencyKey), .text(now), .text(now), .text(now)])
+                  .text(executor), .of(permissionMode), .of(model), .of(idempotencyKey), .text(now), .text(now), .text(now)])
     }
 
     /// 写回 Work 的可变字段并把 revision 加一。调用方已在事务里完成了状态机判断。
@@ -285,15 +316,15 @@ final class WorkStore: @unchecked Sendable {
         try db.run("""
             UPDATE works SET title = ?, objective = ?, scope = ?, status = ?, start_requested = ?,
                 current_run_id = ?, attention_id = ?, session_id = ?, isolation = ?, workspace_path = ?,
-                branch = ?, base_commit = ?, permission_mode = ?, model = ?, unread = ?, archived = ?,
-                status_reason = ?, revision = ?, updated_at = ?, queued_at = ?
+                branch = ?, base_commit = ?, executor = ?, reverted_notice = ?, permission_mode = ?, model = ?,
+                unread = ?, archived = ?, status_reason = ?, revision = ?, updated_at = ?, queued_at = ?
             WHERE id = ?
             """, [.text(work.title), .text(work.objective), .text(work.scope), .text(work.status.rawValue),
                   .of(work.startRequested), .of(work.currentRunId), .of(work.attentionId), .of(work.sessionId),
                   .text(work.isolation), .of(work.workspacePath), .of(work.branch), .of(work.baseCommit),
-                  .of(work.permissionMode), .of(work.model), .of(work.unread), .of(work.archived),
-                  .of(work.statusReason), .of(work.revision), .text(work.updatedAt), .of(work.queuedAt),
-                  .text(work.id)])
+                  .text(work.executor), .of(work.revertedNotice), .of(work.permissionMode), .of(work.model),
+                  .of(work.unread), .of(work.archived), .of(work.statusReason), .of(work.revision),
+                  .text(work.updatedAt), .of(work.queuedAt), .text(work.id)])
     }
 
     // MARK: TAPD 关联
@@ -337,15 +368,16 @@ final class WorkStore: @unchecked Sendable {
             .map(WorkRun.init(row:))
     }
 
-    func insertRun(workId: String, sessionId: String?, workspacePath: String?, baseCommit: String?) throws -> WorkRun {
+    func insertRun(workId: String, sessionId: String?, workspacePath: String?, baseCommit: String?,
+                   executor: String = "claude") throws -> WorkRun {
         let id = UUID().uuidString.lowercased()
         let attempt = (try db.first("SELECT COALESCE(MAX(attempt), 0) + 1 AS n FROM runs WHERE work_id = ?",
                                     [.text(workId)])?.int("n")) ?? 1
         let now = WorkClock.iso()
         try db.run("""
-            INSERT INTO runs(id, work_id, attempt, session_id, workspace_path, status, base_commit, created_at)
-            VALUES(?,?,?,?,?,?,?,?)
-            """, [.text(id), .text(workId), .of(attempt), .of(sessionId), .of(workspacePath),
+            INSERT INTO runs(id, work_id, attempt, session_id, workspace_path, executor, status, base_commit, created_at)
+            VALUES(?,?,?,?,?,?,?,?,?)
+            """, [.text(id), .text(workId), .of(attempt), .of(sessionId), .of(workspacePath), .text(executor),
                   .text(RunStatus.preparing.rawValue), .of(baseCommit), .text(now)])
         guard let run = run(id: id) else { throw WorkError.failed("无法创建 Run") }
         return run
@@ -353,9 +385,9 @@ final class WorkStore: @unchecked Sendable {
 
     func save(_ run: WorkRun) throws {
         try db.run("""
-            UPDATE runs SET session_id = ?, workspace_path = ?, status = ?, base_commit = ?, reviewed_commit = ?,
+            UPDATE runs SET session_id = ?, workspace_path = ?, executor = ?, status = ?, base_commit = ?, reviewed_commit = ?,
                 reviewed_tree = ?, pid = ?, exit_code = ?, error = ?, started_at = ?, ended_at = ? WHERE id = ?
-            """, [.of(run.sessionId), .of(run.workspacePath), .text(run.status.rawValue), .of(run.baseCommit),
+            """, [.of(run.sessionId), .of(run.workspacePath), .text(run.executor), .text(run.status.rawValue), .of(run.baseCommit),
                   .of(run.reviewedCommit), .of(run.reviewedTree), .of(run.pid), .of(run.exitCode), .of(run.error),
                   .of(run.startedAt), .of(run.endedAt), .text(run.id)])
     }
@@ -578,5 +610,84 @@ final class WorkStore: @unchecked Sendable {
             _ = try? db.run("UPDATE effects SET status = ?, last_error = ?, updated_at = ? WHERE id = ?",
                             [.text(status), .of(error), .text(now), .text(id)])
         }
+    }
+
+    // MARK: 共用 Thread 段记录（thread_segments）
+
+    func lastThreadSegment(workId: String) -> DBRow? {
+        (try? db.first("SELECT * FROM thread_segments WHERE work_id = ? ORDER BY seq DESC LIMIT 1", [.text(workId)])) ?? nil
+    }
+
+    func threadSegments(workId: String) -> [JSONValue] {
+        ((try? db.query("SELECT * FROM thread_segments WHERE work_id = ? ORDER BY seq", [.text(workId)])) ?? []).map { row in
+            .obj([
+                "id": .string(row.text("id")),
+                "seq": .int(row.int("seq") ?? 1),
+                "provider": .string(row.text("provider")),
+                "sessionId": .string(row.text("provider_session_id")),
+                "cwd": .string(row.text("cwd")),
+                "createdAt": .string(row.text("created_at")),
+            ])
+        }
+    }
+
+    @discardableResult
+    func appendThreadSegment(workId: String, provider: String, sessionId: String, cwd: String) throws -> Int {
+        if let last = lastThreadSegment(workId: workId),
+           last.text("provider") == provider,
+           last.text("provider_session_id") == sessionId {
+            return last.int("seq") ?? 1
+        }
+        let seq = (try db.first("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM thread_segments WHERE work_id = ?",
+                                [.text(workId)])?.int("n")) ?? 1
+        let id = UUID().uuidString.lowercased()
+        try db.run("""
+            INSERT INTO thread_segments(id, work_id, seq, provider, provider_session_id, cwd, created_at)
+            VALUES(?,?,?,?,?,?,?)
+            """, [.text(id), .text(workId), .of(seq), .text(provider), .text(sessionId), .text(cwd), .text(WorkClock.iso())])
+        return seq
+    }
+
+    // MARK: Turn Checkpoints（检查点快照）
+
+    func nextCheckpointSeq(workId: String) throws -> Int {
+        let counterName = "cp:\(workId)"
+        let currentMax = (try db.first("SELECT COALESCE(MAX(seq), 0) AS n FROM checkpoints WHERE work_id = ?",
+                                       [.text(workId)])?.int("n")) ?? 0
+        try db.run("INSERT INTO counters(name, value) VALUES(?, ?) ON CONFLICT(name) DO NOTHING",
+                   [.text(counterName), .of(currentMax)])
+        try db.run("UPDATE counters SET value = MAX(value, ?) + 1 WHERE name = ?",
+                   [.of(currentMax), .text(counterName)])
+        return try db.first("SELECT value FROM counters WHERE name = ?", [.text(counterName)])?.int("value") ?? 1
+    }
+
+    @discardableResult
+    func insertCheckpoint(workId: String, runId: String?, seq: Int, phase: String,
+                          headCommit: String?, treeHash: String, gitRef: String, label: String) throws -> WorkCheckpoint {
+        let id = UUID().uuidString.lowercased()
+        let now = WorkClock.iso()
+        try db.run("""
+            INSERT INTO checkpoints(id, work_id, run_id, seq, phase, head_commit, tree_hash, git_ref, label, created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """, [.text(id), .text(workId), .of(runId), .of(seq), .text(phase), .of(headCommit),
+                  .text(treeHash), .text(gitRef), .text(label), .text(now)])
+        guard let row = try db.first("SELECT * FROM checkpoints WHERE id = ?", [.text(id)]) else {
+            throw WorkError.failed("无法读取新建的检查点")
+        }
+        return WorkCheckpoint(row: row)
+    }
+
+    func checkpoint(id: String) -> WorkCheckpoint? {
+        (try? db.first("SELECT * FROM checkpoints WHERE id = ?", [.text(id)])).flatMap { $0 }.map(WorkCheckpoint.init(row:))
+    }
+
+    func checkpoints(workId: String) -> [WorkCheckpoint] {
+        ((try? db.query("SELECT * FROM checkpoints WHERE work_id = ? ORDER BY seq DESC", [.text(workId)])) ?? [])
+            .map(WorkCheckpoint.init(row:))
+    }
+
+    func latestPostCheckpoint(workId: String) -> WorkCheckpoint? {
+        (try? db.first("SELECT * FROM checkpoints WHERE work_id = ? AND phase = 'post' ORDER BY seq DESC LIMIT 1",
+                       [.text(workId)])).flatMap { $0 }.map(WorkCheckpoint.init(row:))
     }
 }

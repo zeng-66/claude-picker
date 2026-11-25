@@ -141,7 +141,7 @@ button.danger.solid {
 }
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 .form-grid .field {
@@ -501,6 +501,18 @@ button.danger.solid {
   background: #222327;
   padding: 10px;
   border-radius: 6px;
+}
+/* 聊天 Markdown 里的链接：用主题强调色，不用浏览器默认的亮蓝 / 紫色（深色背景上刺眼）。 */
+.markdown-preview a,
+.markdown-preview a:visited {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(219, 155, 121, 0.4);
+  text-underline-offset: 2px;
+}
+.markdown-preview a:hover {
+  color: #e8b497;
+  text-decoration-color: currentColor;
 }
 .prompt-card {
   margin: 0 0 14px;
@@ -2013,4 +2025,232 @@ button.danger.solid {
 .task-card.focused {
   outline: 2px solid #c59475;
   outline-offset: 2px;
+}
+
+/* ---------- 多引擎切换、Turn Checkpoint 回退与设置页状态 ---------- */
+.turn-revert-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 7px;
+  font-size: 10.5px;
+  color: #b7b9c4;
+  background: #27282e;
+  border: 1px solid #3c3e47;
+  border-radius: 4px;
+}
+.turn-revert-btn:hover:not(:disabled) {
+  color: #f0d6c4;
+  border-color: #6b5244;
+  background: #332b28;
+}
+.checkpoint-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border-radius: 5px;
+  background: #23242a;
+  border: 1px solid #32343d;
+  font-size: 10.5px;
+  color: #9c9ea9;
+}
+.executor-chip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.composer-chip.interactive {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #3a3c44;
+  background: #26272d;
+  color: #d5d5dc;
+}
+.composer-chip.interactive:hover:not(:disabled) {
+  border-color: #5c5e6a;
+  background: #2e3038;
+}
+.executor-chip-menu {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 0;
+  min-width: 170px;
+  padding: 4px;
+  background: #25262b;
+  border: 1px solid #3d3f48;
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.executor-chip-menu > button {
+  width: 100%;
+  justify-content: space-between;
+  padding: 6px 9px;
+  font-size: 11.5px;
+  border-radius: 5px;
+}
+.cli-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #1f2025;
+  border: 1px solid #32333b;
+  border-radius: 6px;
+}
+.cli-status-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+.cli-status-row code {
+  margin-left: auto;
+  font-size: 10px;
+  color: #8b8d98;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+/* 会话级结构化聊天：沿用 Work 对话的消息样式，标题栏更紧凑，消息区独立滚动、输入区固定在底部。 */
+.session-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.session-chat .conversation {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
+.session-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 128px 8px 14px;
+  border-bottom: 1px solid var(--line, rgba(127, 127, 127, 0.2));
+  min-width: 0;
+}
+.session-chat-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.session-chat-meta {
+  margin-left: auto;
+  color: var(--muted, #888);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tapd-mcp-setup {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+  border-radius: 8px;
+}
+.tapd-mcp-setup textarea {
+  width: 100%;
+  resize: vertical;
+}
+.mcp-scenarios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.wecom-bots {
+  margin-top: 18px;
+  border-top: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+  padding-top: 10px;
+}
+.wecom-bot-editor {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+  border-radius: 8px;
+}
+.wecom-bot-editor textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.session-chat-switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.session-chat-switches .runtime-popover {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.maintenance-banner {
+  position: fixed;
+  top: 52px;
+  right: 16px;
+  z-index: 60;
+  width: min(420px, calc(100vw - 32px));
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #51463d;
+  border-radius: 8px;
+  background: #2b2825;
+  box-shadow: 0 10px 30px #0009;
+}
+.maintenance-banner > div {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.maintenance-banner pre,
+.deepseek-status pre,
+.installable-row pre {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 10px;
+  white-space: pre-wrap;
+}
+.deepseek-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 12px;
+}
+.installable-row {
+  flex-wrap: wrap;
+}
+.installable-row small {
+  flex-basis: 100%;
+  color: var(--muted, #888);
+}
+.session-chat-menu .menu-heading {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  color: var(--muted, #8a8580);
+}
+.session-chat-menu > div + div {
+  border-top: 1px solid #51463d;
+  margin-top: 4px;
+  padding-top: 4px;
 }

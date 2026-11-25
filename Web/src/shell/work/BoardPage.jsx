@@ -1,4 +1,5 @@
 // Work 中心：看板 / 列表。列、数量、执行容量都来自领域状态；卡片不能靠拖动改变状态。
+import EngineIcon from '../EngineIcon.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ChatCircleDots,
@@ -180,6 +181,7 @@ function WorkCard({ work, onOpen, notify, onExport, focused = false }) {
       <h3>{work.title}</h3>
       <p>{work.objective}</p>
       <div className="task-card-env">
+        <EngineIcon id={work.executor ?? 'claude'} />
         <Folder size={12} /> {work.project?.name ?? '项目不可用'}
       </div>
       {work.statusReason && <div className="task-card-reason">{work.statusReason}</div>}

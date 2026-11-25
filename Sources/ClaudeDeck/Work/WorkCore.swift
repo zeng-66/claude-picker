@@ -59,8 +59,9 @@ final class WorkCore: @unchecked Sendable {
     let instanceId = UUID().uuidString.lowercased()
 
     // 以下可变状态只在 queue 上读写。
-    var processes: [String: ClaudeProcess] = [:]            // workId → 执行进程
+    var processes: [String: any AgentExecutorProcess] = [:] // workId → 执行进程
     var processTokens: [String: String] = [:]               // workId → 当前进程的令牌（旧进程的迟到事件靠它识别）
+    var currentTurnPreCheckpointId: [String: String] = [:]  // workId → 当前轮开始前的代码检查点 ID
     var ready: Set<String> = []                             // 已完成握手的 workId
     var busy: Set<String> = []                              // 正在一轮生成中的 workId
     var pendingInterrupts: [String: String] = [:]           // workId → 中断请求 ID
@@ -197,7 +198,11 @@ final class WorkCore: @unchecked Sendable {
                     "waitingStart": .int(queued.filter { !$0.startRequested }.count),
                 ]),
                 "workSessionIds": .array(store.workSessionIds().map { .string($0) }),
-                "executor": .obj(["claude": .str(ClaudeLocator.find())]),
+                "executor": .obj([
+                    "claude": .str(ClaudeLocator.find()),
+                    "antigravity": .str(CliBinaryLocator.findAgy()),
+                    "codex": .str(CliBinaryLocator.find(.codex)),
+                ]),
             ])
         }
         return result ?? .obj(["available": .bool(false), "error": .str(initError ?? "Work 数据库不可用"),
@@ -225,6 +230,8 @@ final class WorkCore: @unchecked Sendable {
         if let runId = work.currentRunId, let run = store.run(id: runId) {
             object["run"] = run.json
         }
+        object["checkpoints"] = .array(store.checkpoints(workId: work.id).prefix(20).map(\.json))
+        object["segments"] = .array(store.threadSegments(workId: work.id))
         return .object(object)
     }
 
@@ -238,6 +245,7 @@ final class WorkCore: @unchecked Sendable {
         var origin: WorkOrigin = .local
         var start: Bool = false
         var isolation: String = "worktree"
+        var executor: String = "claude"
         var permissionMode: String?
         var model: String?
         var idempotencyKey: String?
@@ -252,6 +260,7 @@ final class WorkCore: @unchecked Sendable {
     struct AdoptedSession: Sendable {
         var id: String
         var cwd: String
+        var provider: String = "claude"
     }
 
     struct TapdAttachment: Sendable {
@@ -295,8 +304,9 @@ final class WorkCore: @unchecked Sendable {
                 guard !SessionOwnership.shared.heldByTerminal(adopt.id) else {
                     throw WorkError.rejected("这个会话还在终端或图形聊天里打开着。请先关闭它，再作为 Work 继续（同一个会话不能被两个后端同时驱动）。")
                 }
-                adopted = AdoptedSession(id: adopt.id, cwd: cwd)
+                adopted = AdoptedSession(id: adopt.id, cwd: cwd, provider: adopt.provider)
             }
+            let chosenExecutor = AgentProvider.parse(adopted?.provider ?? request.executor).rawValue
             let id = UUID().uuidString.lowercased()
             try store.db.transaction {
                 let displayId = try store.nextDisplayId()
@@ -304,12 +314,14 @@ final class WorkCore: @unchecked Sendable {
                                      objective: objective, scope: request.scope, origin: request.origin,
                                      sourceConversationId: request.sourceConversationId,
                                      sourceEventId: request.sourceEventId, startRequested: request.start,
-                                     isolation: request.isolation, permissionMode: request.permissionMode,
+                                     isolation: request.isolation, executor: chosenExecutor,
+                                     permissionMode: request.permissionMode,
                                      model: request.model, idempotencyKey: request.idempotencyKey)
                 if let adopted {
                     try store.db.run("UPDATE works SET session_id = ?, workspace_path = ?, isolation = 'project' WHERE id = ?",
                                      [.text(adopted.id), .text(adopted.cwd), .text(id)])
                     try store.upsertSession(id: adopted.id, projectId: project.id, workId: id, cwd: adopted.cwd, backend: "adopted")
+                    try store.appendThreadSegment(workId: id, provider: chosenExecutor, sessionId: adopted.id, cwd: adopted.cwd)
                     let brief = "从现在起，这个会话作为 Claude Picker 的工作项 \(displayId)「\(title)」继续。\n\n目标：\n\(objective)"
                         + (request.scope.isEmpty ? "" : "\n\n执行范围：\n\(request.scope)")
                         + "\n\n约定：不要 push、合并、部署；涉及业务口径时用 AskUserQuestion 提问；完成后说明改动与实际运行过的验证。"
@@ -530,6 +542,71 @@ final class WorkCore: @unchecked Sendable {
         }
     }
 
+    /// 在非运行态切换同一条 Work 的执行引擎（共用 Thread 跨引擎接力）：
+    /// 关闭旧执行器常驻进程、清空当前单引擎 sessionId，下一轮启动新引擎时自动从 `run_events` 拼装 `<thread-handoff>` 前情上下文。
+    func switchExecutor(workId: String, executor raw: String, model: String? = nil, permissionMode: String? = nil) throws -> JSONValue {
+        let target = AgentProvider.parse(raw)
+        let executable = AgentExecutorFactory.executable(for: target)
+        guard executable != nil else {
+            throw WorkError.unavailable("本机未检测到 \(target.label)（\(target.commandName)），请先安装并登录后再切换。")
+        }
+        let result: JSONValue = try write { store in
+            guard var work = store.work(id: workId) else { throw WorkError.notFound("找不到这个 Work") }
+            guard !work.status.isTerminal else {
+                throw WorkError.rejected("\(work.status.label)的 Work 不能切换执行引擎。")
+            }
+            guard work.status != .running && work.status != .waitingUser else {
+                throw WorkError.rejected("当前轮次正在执行中，请先停止或等待本轮结束后再切换引擎。")
+            }
+            let previous = AgentProvider.parse(work.executor)
+            if previous == target && model == nil && permissionMode == nil {
+                return .obj(["accepted": .bool(true), "executor": .string(work.executor), "changed": .bool(false)])
+            }
+            if let oldProcess = processes.removeValue(forKey: workId) {
+                SessionOwnership.shared.setExecutor(oldProcess.activeSessionId, held: false)
+                oldProcess.shutdown(grace: 1)
+            }
+            processTokens.removeValue(forKey: workId)
+            ready.remove(workId)
+
+            try store.db.transaction {
+                work.executor = target.rawValue
+                if previous != target {
+                    // 清空单引擎 sessionId，使下一轮在新引擎分配新底层会话并自动走 Handoff 前情注入
+                    work.sessionId = nil
+                    work.model = model
+                    work.permissionMode = permissionMode
+                } else {
+                    if let model { work.model = model.isEmpty ? nil : model }
+                    if let permissionMode { work.permissionMode = permissionMode.isEmpty ? nil : permissionMode }
+                }
+                try store.save(&work)
+                if previous != target {
+                    let msg = "已切换执行引擎：\(previous.label) → \(target.label)（下一轮将自动同步前情上下文）"
+                    let event = try store.appendEvent(
+                        workId: workId,
+                        runId: work.currentRunId,
+                        kind: "status",
+                        payload: .obj([
+                            "from": .string(work.status.rawValue),
+                            "to": .string(work.status.rawValue),
+                            "reason": .string(msg),
+                            "executorSwitch": .bool(true),
+                            "fromExecutor": .string(previous.rawValue),
+                            "toExecutor": .string(target.rawValue),
+                        ])
+                    )
+                    notify(.event(event))
+                    store.addActivity(workId: workId, runId: work.currentRunId, kind: "executor",
+                                      title: "切换执行引擎", detail: "\(previous.label) → \(target.label)")
+                }
+            }
+            return .obj(["accepted": .bool(true), "executor": .string(work.executor), "changed": .bool(previous != target)])
+        }
+        queue.async { [self] in notify(.changed) }
+        return result
+    }
+
     // MARK: 事件流
 
     func transcript(workId: String, after: Int) throws -> JSONValue {
@@ -543,6 +620,8 @@ final class WorkCore: @unchecked Sendable {
                 "runs": .array(store.runs(workId: workId).map(\.json)),
                 "activity": .array(store.activity(workId: workId)),
                 "evidence": .array(store.evidence(workId: workId)),
+                "checkpoints": .array(store.checkpoints(workId: workId).map(\.json)),
+                "segments": .array(store.threadSegments(workId: workId)),
             ])
         }
     }

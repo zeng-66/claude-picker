@@ -84,10 +84,35 @@ export function ModalFrame({ title, eyebrow = 'CLAUDE PICKER', wide = false, onC
   );
 }
 
-/// 执行方式：隔离、权限模式、模型。取值都来自当前 CLI 配置里实际存在的选项。
-export function RunOptions({ runtime, value, onChange, allowProject = true }) {
+/// 执行方式：引擎、隔离、权限模式、模型。取值都来自当前 CLI 配置里实际存在的选项。
+export function RunOptions({ runtime, value, onChange, allowProject = true, lockExecutor = false }) {
+  const executor = value.executor ?? 'claude';
+  const catalog = runtime.catalogs?.[executor];
+  const modes = catalog?.modes ?? runtime.modes ?? [];
+  const models = catalog?.models ?? runtime.models ?? [];
+
   return (
     <div className="form-grid">
+      <label className="field">
+        执行引擎
+        <select
+          value={executor}
+          disabled={lockExecutor}
+          onChange={(event) => {
+            const nextExec = event.target.value;
+            const nextCat = runtime.catalogs?.[nextExec];
+            onChange({
+              ...value,
+              executor: nextExec,
+              permissionMode: nextCat?.defaultMode ?? nextCat?.modes?.[0]?.id ?? 'auto',
+              model: '',
+            });
+          }}
+        >
+          <option value="claude">Claude Code</option>
+          <option value="antigravity">Antigravity (ACP)</option>
+        </select>
+      </label>
       <label className="field">
         执行目录
         <select value={value.isolation} onChange={(event) => onChange({ ...value, isolation: event.target.value })}>
@@ -101,7 +126,7 @@ export function RunOptions({ runtime, value, onChange, allowProject = true }) {
           value={value.permissionMode}
           onChange={(event) => onChange({ ...value, permissionMode: event.target.value })}
         >
-          {runtime.modes.map((mode) => (
+          {modes.map((mode) => (
             <option key={mode.id} value={mode.id}>
               {mode.label}
             </option>
@@ -112,7 +137,7 @@ export function RunOptions({ runtime, value, onChange, allowProject = true }) {
         模型
         <select value={value.model} onChange={(event) => onChange({ ...value, model: event.target.value })}>
           <option value="">跟随 CLI 设置</option>
-          {runtime.models.map((model) => (
+          {models.map((model) => (
             <option key={model.id} value={model.id}>
               {model.label}
             </option>
@@ -123,13 +148,30 @@ export function RunOptions({ runtime, value, onChange, allowProject = true }) {
   );
 }
 
-export function NewWorkModal({ projects, defaultProject, adopt, runtime, home, notify, onClose, onCreated }) {
+export function NewWorkModal({
+  projects,
+  defaultProject,
+  defaultProvider = 'claude',
+  adopt,
+  runtime,
+  home,
+  notify,
+  onClose,
+  onCreated,
+}) {
+  const initialExecutor = adopt?.provider ?? defaultProvider ?? 'claude';
+  const initialCatalog = runtime.catalogs?.[initialExecutor];
   const [title, setTitle] = useState('');
   const [objective, setObjective] = useState('');
   const [scope, setScope] = useState('');
   const [projectPath, setProjectPath] = useState(adopt?.projectPath ?? defaultProject ?? '');
   const [start, setStart] = useState(true);
-  const [options, setOptions] = useState({ isolation: 'worktree', permissionMode: runtime.mode, model: '' });
+  const [options, setOptions] = useState({
+    executor: initialExecutor,
+    isolation: 'worktree',
+    permissionMode: initialCatalog?.defaultMode ?? runtime.mode,
+    model: '',
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [touched, setTouched] = useState(false);
@@ -155,7 +197,14 @@ export function NewWorkModal({ projects, defaultProject, adopt, runtime, home, n
           start,
           requestId: requestId.current, // 连点或超时重试都落到同一个 Work
           ...options,
-          ...(adopt ? { adoptSessionId: adopt.sessionId, adoptCwd: adopt.cwd, isolation: 'project' } : {}),
+          ...(adopt
+            ? {
+                adoptSessionId: adopt.sessionId,
+                adoptCwd: adopt.cwd,
+                adoptProvider: adopt.provider ?? initialExecutor,
+                isolation: 'project',
+              }
+            : {}),
         },
         { timeoutMs: 60000 },
       );
@@ -235,6 +284,7 @@ export function NewWorkModal({ projects, defaultProject, adopt, runtime, home, n
         value={adopt ? { ...options, isolation: 'project' } : options}
         onChange={setOptions}
         allowProject
+        lockExecutor={Boolean(adopt)}
       />
       <label className="check-option">
         <input type="checkbox" checked={start} onChange={(event) => setStart(event.target.checked)} />

@@ -119,6 +119,8 @@ struct Work: Sendable {
     var workspacePath: String?
     var branch: String?
     var baseCommit: String?
+    var executor: String
+    var revertedNotice: String?
     var permissionMode: String?
     var model: String?
     var unread: Bool
@@ -148,6 +150,8 @@ struct Work: Sendable {
         workspacePath = row.string("workspace_path")
         branch = row.string("branch")
         baseCommit = row.string("base_commit")
+        executor = row.string("executor") ?? "claude"
+        revertedNotice = row.string("reverted_notice")
         permissionMode = row.string("permission_mode")
         model = row.string("model")
         unread = row.bool("unread")
@@ -180,6 +184,7 @@ struct Work: Sendable {
             "workspacePath": .str(workspacePath),
             "branch": .str(branch),
             "baseCommit": .str(baseCommit),
+            "executor": .string(executor),
             "permissionMode": .str(permissionMode),
             "model": .str(model),
             "unread": .bool(unread),
@@ -198,6 +203,7 @@ struct WorkRun: Sendable {
     let attempt: Int
     var sessionId: String?
     var workspacePath: String?
+    var executor: String
     var status: RunStatus
     var baseCommit: String?
     var reviewedCommit: String?
@@ -215,6 +221,7 @@ struct WorkRun: Sendable {
         attempt = row.int("attempt") ?? 1
         sessionId = row.string("session_id")
         workspacePath = row.string("workspace_path")
+        executor = row.string("executor") ?? "claude"
         status = RunStatus(rawValue: row.text("status")) ?? .failed
         baseCommit = row.string("base_commit")
         reviewedCommit = row.string("reviewed_commit")
@@ -234,7 +241,7 @@ struct WorkRun: Sendable {
             "attempt": .int(attempt),
             "sessionId": .str(sessionId),
             "workspacePath": .str(workspacePath),
-            "executor": .string("claude"),
+            "executor": .string(executor),
             "status": .string(status.rawValue),
             "baseCommit": .str(baseCommit),
             "reviewedCommit": .str(reviewedCommit),
@@ -243,6 +250,47 @@ struct WorkRun: Sendable {
             "error": .str(error),
             "startedAt": .str(startedAt),
             "endedAt": .str(endedAt),
+            "createdAt": .string(createdAt),
+        ])
+    }
+}
+
+struct WorkCheckpoint: Sendable {
+    let id: String
+    let workId: String
+    let runId: String?
+    let seq: Int
+    let phase: String       // pre | post | undo
+    let headCommit: String?
+    let treeHash: String
+    let gitRef: String
+    let label: String
+    let createdAt: String
+
+    init(row: DBRow) {
+        id = row.text("id")
+        workId = row.text("work_id")
+        runId = row.string("run_id")
+        seq = row.int("seq") ?? 1
+        phase = row.text("phase")
+        headCommit = row.string("head_commit")
+        treeHash = row.text("tree_hash")
+        gitRef = row.text("git_ref")
+        label = row.text("label")
+        createdAt = row.text("created_at")
+    }
+
+    var json: JSONValue {
+        .obj([
+            "id": .string(id),
+            "workId": .string(workId),
+            "runId": .str(runId),
+            "seq": .int(seq),
+            "phase": .string(phase),
+            "headCommit": .str(headCommit),
+            "treeHash": .string(treeHash),
+            "gitRef": .string(gitRef),
+            "label": .string(label),
             "createdAt": .string(createdAt),
         ])
     }

@@ -236,7 +236,7 @@ async function fileRequest(method, params) {
   };
 }
 async function gitRequest(method, p) {
-  const cwd = p.projectPath;
+  const cwd = p.projectPath ?? p.input?.projectPath;
   switch (method) {
     case "git.status":
       return status(cwd);
@@ -370,6 +370,12 @@ async function gitRequest(method, p) {
       if (!p.message?.trim()) throw new Error("请输入提交说明");
       await git(cwd, ["commit", "-m", p.message]);
       break;
+    }
+    case "git.switchWorkspaceBranch": {
+      const snapshot = await gitRequest("git.status", p);
+      if (snapshot.branch === p.branch) return { ok: true };
+      if (snapshot.files.length) throw new Error("当前工作区有未提交改动，请先处理后再切换分支");
+      return gitRequest("git.switchBranch", p);
     }
     case "git.switchBranch":
       await git(cwd, ["switch", ref(p.branch)]);
@@ -516,7 +522,7 @@ async function gitRequest(method, p) {
       const branch = ref(input.branch);
       const target =
         input.path ||
-        path.join(cwd, ".worktrees", branch.replace(/[^a-z0-9_.-]/gi, "-"));
+        path.join(cwd, ".worktrees", branch.replace(/[^a-z0-9_.-]+/gi, "-"));
       await git(cwd, [
         "worktree",
         "add",

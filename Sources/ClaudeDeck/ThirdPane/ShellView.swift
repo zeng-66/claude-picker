@@ -94,7 +94,9 @@ final class ShellView: NSView, WKScriptMessageHandler {
     // MARK: 终端
 
     /// 换上当前会话的终端视图（nil = 没有会话）。旧视图只是摘下来，进程不受影响。
-    func showTerminal(_ view: NSView?) {
+    func showTerminal(_ view: NSView?, backgroundColor: NSColor = kTerminalBackground) {
+        layer?.backgroundColor = backgroundColor.cgColor
+        terminalHost.layer?.backgroundColor = backgroundColor.cgColor
         guard terminalView !== view else { return }
         terminalView?.removeFromSuperview()
         terminalView = view

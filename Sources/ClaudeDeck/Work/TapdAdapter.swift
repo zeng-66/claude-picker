@@ -46,7 +46,11 @@ enum TapdAdapter {
     /// 连接所需条件是否齐备（只报告有 / 无与来源，不回显任何凭据内容）。
     static func prerequisites(_ core: WorkCore) -> JSONValue {
         let creds = credentials(core)
+        let mcp = TapdMcp.mcpConfig(core)
         return .obj([
+            "transport": .string(settings(core)["transport"]?.text ?? "cli"),
+            "mcpCommand": .str(TapdMcp.resolveCommand(mcp["command"]?.text ?? "uvx")),
+            "mcpPackage": .string(TapdMcp.package),
             "cli": .str(locateCLI(custom: settings(core)["cliPath"]?.text)),
             "endpoint": .string(creds.endpoint),
             "endpointSet": .bool(true),
@@ -141,6 +145,10 @@ enum TapdAdapter {
 
     // MARK: 待办
 
+    static func todoSummary(_ item: JSONValue, type: String, workspaceName: String?) -> JSONValue? {
+        summary(item, type: type, workspaceName: workspaceName)
+    }
+
     private static func summary(_ item: JSONValue, type: String, workspaceName: String?) -> JSONValue? {
         guard let id = item["id"]?.text else { return nil }
         let workspaceId = item["workspace_id"]?.text ?? ""
@@ -158,6 +166,7 @@ enum TapdAdapter {
         out["severity"] = .str(item["severity"]?.text)
         out["owner"] = .str(item[isBug ? "current_owner" : "owner"]?.text)
         out["iterationId"] = .str(iteration == "0" ? nil : iteration)
+        if let name = item["iteration_name"]?.text { out["iterationName"] = .string(name) }
         out["begin"] = .str(item["begin"]?.text)
         out["due"] = .str(item["due"]?.text ?? item["deadline"]?.text)
         out["modified"] = .str(item["modified"]?.text)
@@ -172,6 +181,17 @@ enum TapdAdapter {
     /// 分配给当前用户的需求与缺陷（「我的待办」，不是项目的全部需求）。按 workspace 分页读取。
     /// `query` 全是数字时按编号精确查；否则由界面在已读取的条目里按标题筛选。
     static func todos(_ core: WorkCore, workspaceIds: [String], page: Int, query: String?, scope: String = "todo") throws -> JSONValue {
+        let numericQuery = query.map { $0.trimmingCharacters(in: .whitespaces) }.map { !$0.isEmpty && $0.allSatisfy(\.isNumber) } ?? false
+        if TapdMcp.isEnabled(core) {
+            if scope == "todo" && !numericQuery {
+                return try TapdMcp.todos(core, workspaceIds: workspaceIds, page: page)
+            }
+            // MCP 的 get_todo 只覆盖本人待办；「已创建」与按编号查询仍走 tapd-cli（如果本机有）。
+            guard locateCLI(custom: settings(core)["cliPath"]?.text) != nil else {
+                throw Failure(message: "MCP 模式只支持「我的待办」",
+                              detail: "按编号查询和「已创建」需要本机的 tapd-cli；也可以直接在待办列表里按标题筛选。")
+            }
+        }
         let cli = try requireCLI(core)
         let me = try whoami(core)
         let names = Dictionary(uniqueKeysWithValues: (settings(core)["workspaces"]?.arrayValue ?? []).compactMap { item -> (String, String)? in

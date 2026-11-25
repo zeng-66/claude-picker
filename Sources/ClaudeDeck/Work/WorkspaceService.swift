@@ -275,4 +275,123 @@ enum WorkspaceService {
         let result = git(["status", "--porcelain"], in: path, timeout: 30)
         return !result.ok || !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    // MARK: - Turn Checkpoint（隐藏 Git Ref 快照与回退）
+
+    struct CheckpointSnapshot: Sendable, Equatable {
+        var head: String?
+        var tree: String
+        var gitRef: String
+    }
+
+    static let maxCheckpointFileBytes: UInt64 = 20 * 1024 * 1024
+
+    /// 创建一轮代码检查点：使用临时 index `write-tree` 后生成锚定 commit，并写入隐藏命名空间
+    /// `refs/claude-picker/checkpoints/<workId>/<seq>`，确保 `git gc` 不会回收历史快照对象，且不污染分支与 `git status`。
+    static func createCheckpoint(in path: String, workId: String, seq: Int, label: String) -> CheckpointSnapshot? {
+        guard isDirectory(path), isRepository(path) else { return nil }
+        let head = currentHead(path)
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-picker-cp-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let indexPath = git(["rev-parse", "--path-format=absolute", "--git-path", "index"], in: path, timeout: 15)
+        let realIndex = indexPath.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if indexPath.ok, FileManager.default.fileExists(atPath: realIndex) {
+            try? FileManager.default.copyItem(atPath: realIndex, toPath: temp.path)
+        }
+        let env = ["GIT_INDEX_FILE": temp.path]
+
+        // 跳过超过 20MB 的未跟踪大文件，防止误把构建大产物打包进 .git/objects
+        var pathspecs = ["add", "-A", "--", "."]
+        let untracked = git(["ls-files", "--others", "--exclude-standard", "-z"], in: path, timeout: 30)
+        if untracked.ok {
+            for rel in untracked.stdout.split(separator: "\0").map(String.init) where !rel.isEmpty {
+                let full = URL(fileURLWithPath: path).appendingPathComponent(rel).path
+                if let size = (try? FileManager.default.attributesOfItem(atPath: full))?[.size] as? NSNumber,
+                   size.uint64Value > maxCheckpointFileBytes {
+                    pathspecs.append(":(exclude)\(rel)")
+                }
+            }
+        }
+        guard git(pathspecs, in: path, timeout: 180, env: env).ok else { return nil }
+        let treeOut = git(["write-tree"], in: path, timeout: 60, env: env)
+        guard treeOut.ok else { return nil }
+        let tree = treeOut.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tree.isEmpty else { return nil }
+
+        var commitArgs = ["commit-tree", tree, "-m", label.isEmpty ? "cp-checkpoint" : label]
+        if let head, !head.isEmpty { commitArgs += ["-p", head] }
+        let commitEnv = [
+            "GIT_AUTHOR_NAME": "ClaudePicker",
+            "GIT_AUTHOR_EMAIL": "checkpoint@local",
+            "GIT_COMMITTER_NAME": "ClaudePicker",
+            "GIT_COMMITTER_EMAIL": "checkpoint@local",
+        ]
+        let commitOut = git(commitArgs, in: path, timeout: 30, env: commitEnv)
+        guard commitOut.ok else { return nil }
+        let commitSha = commitOut.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !commitSha.isEmpty else { return nil }
+
+        let ref = "refs/claude-picker/checkpoints/\(workId)/\(seq)"
+        guard git(["update-ref", ref, commitSha], in: path, timeout: 15).ok else { return nil }
+        return CheckpointSnapshot(head: head, tree: tree, gitRef: ref)
+    }
+
+    /// 回退工作区到指定快照树：
+    /// 1. 共享目录（`isolation == "project"`）若检测到自上一轮结束以来存在外部手工改动且 `!force`，抛 `conflict` 保护用户代码；
+    /// 2. 独占 `worktree` 下若本轮智能体自己执行过 `git commit` 使 `HEAD` 前进，安全回拨 `HEAD` 到快照时刻；
+    /// 3. 精确还原文件树并删除该快照之后新增的文件，不触碰 `.gitignore` 忽略项（如 `node_modules`、`.env`）。
+    static func revertToCheckpoint(
+        in path: String,
+        targetTree: String,
+        targetHead: String?,
+        isolation: String,
+        expectedCurrentTree: String?,
+        force: Bool
+    ) throws -> [String] {
+        guard isDirectory(path), isRepository(path) else {
+            throw WorkError.unavailable("当前目录不是 Git 仓库，无法执行检查点回退")
+        }
+        let current = version(of: path)
+        guard let currentTree = current.tree else {
+            throw WorkError.unavailable("无法读取当前工作目录状态")
+        }
+        if currentTree == targetTree {
+            return []
+        }
+        if isolation != "worktree", !force, let expected = expectedCurrentTree, !expected.isEmpty, currentTree != expected {
+            throw WorkError.conflict("检测到工作目录在上一轮结束后有外部未保存改动，为防误覆盖已暂停回退。确认覆盖可选择强制回退。")
+        }
+
+        let diffFiles = changes(in: path, base: targetTree, tree: currentTree)
+        let affectedPaths = diffFiles.map(\.path)
+
+        // 独占 worktree 中若 HEAD 在 targetHead 之后前进过，先安全复位 HEAD
+        if isolation == "worktree",
+           let targetHead, !targetHead.isEmpty,
+           let curHead = current.head, curHead != targetHead,
+           git(["merge-base", "--is-ancestor", targetHead, curHead], in: path, timeout: 15).ok {
+            _ = git(["reset", "--soft", targetHead], in: path, timeout: 30)
+        }
+
+        // 删除 targetTree 中不存在、在后续轮次新增的文件（仅限非忽略跟踪树里的 A 状态项）
+        let fm = FileManager.default
+        let rootPath = canonical(path)
+        for item in diffFiles where item.status == "A" {
+            let fileURL = URL(fileURLWithPath: rootPath).appendingPathComponent(item.path).standardizedFileURL
+            if fileURL.path.hasPrefix(rootPath + "/") {
+                try? fm.removeItem(at: fileURL)
+            }
+        }
+
+        // 将 targetTree 中的全部文件内容写回工作目录（空树时无需 checkout `.`）
+        let lsTree = git(["ls-tree", targetTree], in: path, timeout: 15)
+        if lsTree.ok, !lsTree.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let co = git(["checkout", targetTree, "--", "."], in: path, timeout: 120)
+            guard co.ok else {
+                throw WorkError.failed("恢复代码快照失败", detail: co.failureText)
+            }
+        }
+        return affectedPaths
+    }
 }

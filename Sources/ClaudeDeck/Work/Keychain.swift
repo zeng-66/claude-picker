@@ -20,18 +20,24 @@ enum Keychain {
     private static let memory = Memory()
     private static var inMemory: Bool { ProcessInfo.processInfo.environment["CLAUDE_PICKER_KEYCHAIN"] == "memory" }
 
-    private static func query(_ key: Key) -> [String: Any] {
+    private static func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,
-         kSecAttrAccount as String: key.rawValue]
+         kSecAttrAccount as String: account]
     }
 
-    static func get(_ key: Key) -> String? {
+    static func get(_ key: Key) -> String? { get(account: key.rawValue) }
+    static func has(_ key: Key) -> Bool { get(account: key.rawValue) != nil }
+    static func set(_ key: Key, _ value: String) throws { try set(account: key.rawValue, value) }
+    static func delete(_ key: Key) { delete(account: key.rawValue) }
+
+    /// 按账户名存取（多机器人各自的 Secret 等动态凭据）。
+    static func get(account: String) -> String? {
         if inMemory {
             memory.lock.lock(); defer { memory.lock.unlock() }
-            return memory.values[key.rawValue]
+            return memory.values[account]
         }
-        var request = query(key)
+        var request = query(account)
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
@@ -40,21 +46,21 @@ enum Keychain {
         return value
     }
 
-    static func has(_ key: Key) -> Bool { get(key) != nil }
+    static func has(account: String) -> Bool { get(account: account) != nil }
 
-    static func set(_ key: Key, _ value: String) throws {
+    static func set(account: String, _ value: String) throws {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw WorkError.invalid("内容不能为空") }
         if inMemory {
-            memory.lock.lock(); memory.values[key.rawValue] = trimmed; memory.lock.unlock()
+            memory.lock.lock(); memory.values[account] = trimmed; memory.lock.unlock()
             return
         }
         let data = Data(trimmed.utf8)
-        let status = SecItemUpdate(query(key) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        let status = SecItemUpdate(query(account) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
-            var item = query(key)
+            var item = query(account)
             item[kSecValueData as String] = data
-            item[kSecAttrLabel as String] = "ClaudePicker \(key.rawValue)"
+            item[kSecAttrLabel as String] = "ClaudePicker \(account)"
             let added = SecItemAdd(item as CFDictionary, nil)
             guard added == errSecSuccess else { throw WorkError.failed("写入钥匙串失败（\(added)）") }
         } else if status != errSecSuccess {
@@ -62,11 +68,11 @@ enum Keychain {
         }
     }
 
-    static func delete(_ key: Key) {
+    static func delete(account: String) {
         if inMemory {
-            memory.lock.lock(); memory.values[key.rawValue] = nil; memory.lock.unlock()
+            memory.lock.lock(); memory.values[account] = nil; memory.lock.unlock()
             return
         }
-        SecItemDelete(query(key) as CFDictionary)
+        SecItemDelete(query(account) as CFDictionary)
     }
 }

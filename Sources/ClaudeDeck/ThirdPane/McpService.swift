@@ -48,6 +48,15 @@ struct McpService: Sendable {
         return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude.json")
     }
 
+    static var agyConfigURL: URL {
+        if let override = ProcessInfo.processInfo.environment["CLAUDE_PICKER_AGY_MCP_CONFIG"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".gemini/config/mcp_config.json")
+    }
+
+    var provider: AgentProvider = .claude
+
     static let probeTimeout: TimeInterval = 25
 
     // MARK: - 列表
@@ -124,6 +133,24 @@ struct McpService: Sendable {
     ]
 
     func list(projectPath: String) -> [McpServerInfo] {
+        if provider == .antigravity {
+            let root = Self.readJSON(Self.agyConfigURL)
+            let servers = root["mcpServers"] as? [String: Any] ?? [:]
+            return servers.keys.sorted().compactMap { name -> McpServerInfo? in
+                guard let server = servers[name] as? [String: Any] else { return nil }
+                let off = (server["disabled"] as? Bool) ?? false
+                return McpServerInfo(
+                    id: "agy:\(name)",
+                    name: name,
+                    scope: "agy",
+                    transport: Self.transport(of: server),
+                    endpoint: Self.endpoint(of: server),
+                    description: "Antigravity 全局配置（~/.gemini/config/mcp_config.json）",
+                    enabled: !off,
+                    removable: true
+                )
+            }
+        }
         let disabled = Self.disabledNames(projectPath: projectPath)
         return Self.entries(projectPath: projectPath).map { entry in
             let off = entry.scope == "project"
@@ -207,19 +234,36 @@ struct McpService: Sendable {
             throw GitError.commandFailed("服务名称只能包含字母、数字、- 和 _", recoverable: true)
         }
         let server: [String: Any]
-        if transport.lowercased() == "http" {
+        let lowerTransport = transport.lowercased()
+        if lowerTransport == "sse" && provider == .antigravity {
+            throw GitError.commandFailed("Antigravity 不支持旧版 HTTP+SSE 传输，请改用 Streamable HTTP 或 stdio 桥接", recoverable: true)
+        }
+        if lowerTransport == "http" || lowerTransport == "sse" {
             let url = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased(),
                   scheme == "http" || scheme == "https", parsed.host != nil else {
                 throw GitError.commandFailed("服务地址需要是 http(s):// 开头的完整地址", recoverable: true)
             }
-            server = ["type": "http", "url": url]
+            server = provider == .antigravity ? ["url": url] : ["type": lowerTransport, "url": url]
         } else {
             let command = Self.splitCommandLine(endpoint)
             guard let executable = command.first else {
                 throw GitError.commandFailed("启动命令不能为空", recoverable: true)
             }
-            server = ["type": "stdio", "command": executable, "args": Array(command.dropFirst()), "env": [String: String]()]
+            server = provider == .antigravity
+                ? ["command": executable, "args": Array(command.dropFirst()), "env": [String: String]()]
+                : ["type": "stdio", "command": executable, "args": Array(command.dropFirst()), "env": [String: String]()]
+        }
+        if provider == .antigravity {
+            try Self.updateAgyConfig { config in
+                var servers = config["mcpServers"] as? [String: Any] ?? [:]
+                guard servers[trimmed] == nil else {
+                    throw GitError.commandFailed("已存在同名服务：\(trimmed)", recoverable: true)
+                }
+                servers[trimmed] = server
+                config["mcpServers"] = servers
+            }
+            return "agy:\(trimmed)"
         }
         try Self.updateClaudeConfig { config in
             var servers = config["mcpServers"] as? [String: Any] ?? [:]
@@ -234,6 +278,14 @@ struct McpService: Sendable {
 
     func remove(projectPath: String, id: String) async throws {
         let name = Self.name(fromID: id)
+        if provider == .antigravity || Self.scope(fromID: id) == "agy" {
+            try Self.updateAgyConfig { config in
+                var servers = config["mcpServers"] as? [String: Any] ?? [:]
+                servers.removeValue(forKey: name)
+                config["mcpServers"] = servers
+            }
+            return
+        }
         switch Self.scope(fromID: id) {
         case "user":
             try Self.updateClaudeConfig { config in
@@ -274,6 +326,20 @@ struct McpService: Sendable {
     func setEnabled(projectPath: String, id: String, enabled: Bool) throws {
         let name = Self.name(fromID: id)
         let scope = Self.scope(fromID: id)
+        if provider == .antigravity || scope == "agy" {
+            try Self.updateAgyConfig { config in
+                var servers = config["mcpServers"] as? [String: Any] ?? [:]
+                guard var entry = servers[name] as? [String: Any] else { return }
+                if enabled {
+                    entry.removeValue(forKey: "disabled")
+                } else {
+                    entry["disabled"] = true
+                }
+                servers[name] = entry
+                config["mcpServers"] = servers
+            }
+            return
+        }
         try Self.updateClaudeConfig { config in
             var projects = config["projects"] as? [String: Any] ?? [:]
             var (key, entry) = Self.projectEntry(projectPath, in: config)
@@ -333,16 +399,74 @@ struct McpService: Sendable {
         }
     }
 
+    /// 将 Claude 配置中兼容的 stdio / HTTP 服务一键导入到 Antigravity（跳过已存在同名项与旧版 SSE）。
+    func importFromClaude(projectPath: String) throws -> [String: Int] {
+        let claudeEntries = Self.entries(projectPath: projectPath)
+        var imported = 0
+        var skippedSse = 0
+        var skippedExisting = 0
+        try Self.updateAgyConfig { config in
+            var servers = config["mcpServers"] as? [String: Any] ?? [:]
+            for item in claudeEntries {
+                if servers[item.name] != nil {
+                    skippedExisting += 1
+                    continue
+                }
+                let t = Self.transport(of: item.config)
+                if t == "sse" {
+                    skippedSse += 1
+                    continue
+                }
+                if t == "http", let url = (item.config["url"] as? String) ?? (item.config["serverUrl"] as? String) {
+                    servers[item.name] = ["url": url]
+                    imported += 1
+                } else if t == "stdio", let cmd = item.config["command"] as? String, !cmd.isEmpty {
+                    var copy: [String: Any] = ["command": cmd]
+                    if let args = item.config["args"] as? [String] { copy["args"] = args }
+                    if let env = item.config["env"] as? [String: String] { copy["env"] = env }
+                    servers[item.name] = copy
+                    imported += 1
+                }
+            }
+            config["mcpServers"] = servers
+        }
+        return ["imported": imported, "skippedSse": skippedSse, "skippedExisting": skippedExisting]
+    }
+
+    private static func updateAgyConfig(_ mutate: (inout [String: Any]) throws -> Void) throws {
+        var object = readJSON(agyConfigURL)
+        try mutate(&object)
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(
+                  withJSONObject: object,
+                  options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
+            throw GitError.commandFailed("生成 Antigravity MCP 配置失败", recoverable: true)
+        }
+        try? FileManager.default.createDirectory(at: agyConfigURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        do {
+            try data.write(to: agyConfigURL, options: .atomic)
+        } catch {
+            throw GitError.commandFailed("写入 mcp_config.json 失败", detail: error.localizedDescription)
+        }
+    }
+
     // MARK: - 工具发现（MCP 握手）
 
     func tools(projectPath: String, id: String) async -> McpProbeResult {
         let name = Self.name(fromID: id)
-        guard let entry = Self.entries(projectPath: projectPath).first(where: { $0.name == name }) else {
+        let rawConfig: [String: Any]?
+        if provider == .antigravity || Self.scope(fromID: id) == "agy" {
+            let root = Self.readJSON(Self.agyConfigURL)
+            rawConfig = (root["mcpServers"] as? [String: Any])?[name] as? [String: Any]
+        } else {
+            rawConfig = Self.entries(projectPath: projectPath).first(where: { $0.name == name })?.config
+        }
+        guard let serverConfig = rawConfig else {
             return McpProbeResult(status: "failed", connected: false, tools: [],
                                   error: "应用内无法读取这个服务的配置")
         }
-        let config = McpEndpoint(entry.config)
-        let transport = Self.transport(of: entry.config)
+        let config = McpEndpoint(serverConfig)
+        let transport = Self.transport(of: serverConfig)
         let outcome: Result<[String], McpProbeError> = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let result: Result<[String], McpProbeError>

@@ -300,6 +300,7 @@ enum SourceGateway {
         }
         return try finish(.obj([
             "state": .string("created"), "displayId": .string(displayId), "project": .string(project.name),
+            "workId": .string(workId),
             "status": created["work"]?["status"] ?? .null,
             "startAuthorized": .bool(request.start),
             "link": .string("claude-picker://work/\(displayId)"),
@@ -368,7 +369,10 @@ enum SourceGateway {
 
     /// 领取待发送的通知 / 汇报：在同一个事务里把它们标为「结果未知」，收到回执后再改为已发送或失败。
     /// 谁领取谁负责发送；`botOwned` 区分应用自己的机器人连接与 WorkBuddy 两条通道，互不重叠。
-    static func claimNotifications(_ core: WorkCore, botOwned: Bool, limit: Int, note: String) throws -> [DBRow] {
+    static func claimNotifications(_ core: WorkCore, botOwned: Bool, limit: Int, note: String,
+                                   accountId: String? = nil) throws -> [DBRow] {
+        // 多机器人：每条连接只领取自己账户（wecom-bot:<botId>）的会话。
+        let pattern = accountId ?? (botAccountPrefix + "%")
         let rows: [DBRow] = try core.write { store in
             try store.db.transaction {
                 let rows = try store.db.query("""
@@ -377,7 +381,7 @@ enum SourceGateway {
                     JOIN source_conversations c ON c.id = w.source_conversation_id
                     WHERE d.target IN ('wecom', 'wecom-notice') AND d.status = 'pending'
                       AND (c.account_id LIKE ?) = ? ORDER BY d.created_at LIMIT ?
-                    """, [.text(botAccountPrefix + "%"), .of(botOwned), .of(limit)])
+                    """, [.text(pattern), .of(botOwned), .of(limit)])
                 for row in rows {
                     try store.db.run("""
                         UPDATE deliveries SET status = 'unknown', attempts = attempts + 1, error = ?, updated_at = ? WHERE id = ?

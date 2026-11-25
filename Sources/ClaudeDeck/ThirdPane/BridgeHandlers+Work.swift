@@ -7,7 +7,7 @@ import Foundation
 /// 网页只是命令的发起方：路径、项目身份、状态机条件都在原生侧校验；命令的返回值只表达
 /// 「已接受 / 拒绝 / 冲突」，执行进展通过 `claude-picker:work` 事件推回去。
 enum WorkHandlers: BridgeModule {
-    static let prefixes = ["work.", "attention.", "review.", "evidence.", "delivery.", "tapd.", "source.", "agent.", "draft.", "project."]
+    static let prefixes = ["work.", "attention.", "review.", "evidence.", "delivery.", "tapd.", "source.", "agent.", "draft.", "project.", "checkpoint."]
 
     static func handles(_ method: String) -> Bool { prefixes.contains { method.hasPrefix($0) } }
 
@@ -66,13 +66,26 @@ enum WorkHandlers: BridgeModule {
             request.scope = p["scope"]?.stringValue ?? ""
             request.start = p["start"]?.boolValue ?? false
             request.isolation = p["isolation"]?.text ?? "worktree"
+            request.executor = p["executor"]?.text ?? "claude"
             request.permissionMode = cliMode(p["permissionMode"]?.text)
             request.model = p["model"]?.text
             request.idempotencyKey = p["requestId"]?.text.map { "local:\($0)" }
             if let sessionId = p["adoptSessionId"]?.text {
-                request.adoptSession = WorkCore.AdoptedSession(id: sessionId, cwd: p["adoptCwd"]?.text ?? projectPath)
+                request.adoptSession = WorkCore.AdoptedSession(
+                    id: sessionId,
+                    cwd: p["adoptCwd"]?.text ?? projectPath,
+                    provider: p["adoptProvider"]?.text ?? request.executor
+                )
             }
             return try core.create(request)
+
+        case "work.switchExecutor":
+            return try core.switchExecutor(
+                workId: try text(p, "workId"),
+                executor: try text(p, "executor"),
+                model: p["model"]?.stringValue,
+                permissionMode: cliMode(p["permissionMode"]?.stringValue)
+            )
 
         case "work.start":
             return try core.start(workId: try text(p, "workId"), revision: p["revision"]?.intValue, requestId: p["requestId"]?.text)
@@ -131,6 +144,17 @@ enum WorkHandlers: BridgeModule {
         case "evidence.runCheck":
             return try core.runCheck(workId: try text(p, "workId"), command: p["command"]?.stringValue ?? "")
 
+        case "checkpoint.list":
+            return try core.checkpoints(workId: try text(p, "workId"))
+
+        case "checkpoint.revert":
+            return try core.revertCheckpoint(
+                workId: try text(p, "workId"),
+                checkpointId: try text(p, "checkpointId"),
+                force: p["force"]?.boolValue ?? false,
+                requestId: p["requestId"]?.text
+            )
+
         // MARK: 交付
         case "delivery.preview":
             return try core.deliveryPreview(workId: try text(p, "workId"), target: try text(p, "target"))
@@ -185,6 +209,13 @@ enum WorkHandlers: BridgeModule {
                 for (key, value) in patch where ["enabled", "cliPath", "workspaces", "syncOnLaunch", "endpoint"].contains(key) {
                     current[key] = value
                 }
+                // 传输方式只能在 cli / mcp 之间切换；切到 MCP 需要先通过一键配置。
+                if let transport = patch["transport"]?.stringValue, ["cli", "mcp"].contains(transport) {
+                    if transport == "mcp", current["mcpCheckedAt"] == nil {
+                        throw WorkError.rejected("请先用「一键配置」验证 TAPD MCP，再切换到 MCP。")
+                    }
+                    current["transport"] = .string(transport)
+                }
                 try core.putSetting("tapd", .object(current))
             }
             let config = TapdAdapter.settings(core)
@@ -195,7 +226,11 @@ enum WorkHandlers: BridgeModule {
         case "tapd.clearToken":
             Keychain.delete(.tapdToken)
             return .obj(["prerequisites": TapdAdapter.prerequisites(core)])
+        case "tapd.mcpSetup":
+            return try TapdMcp.setup(core, idsText: p["workspaceIds"]?.stringValue ?? "",
+                                     token: p["token"]?.stringValue, server: p["server"])
         case "tapd.test":
+            if TapdMcp.isEnabled(core) { return TapdMcp.test(core) }
             do {
                 let me = try TapdAdapter.whoami(core)
                 return .obj(["connected": .bool(true), "user": .obj(["nick": .string(me.nick), "name": .string(me.name)]),
@@ -291,6 +326,7 @@ enum WorkHandlers: BridgeModule {
             request.scope = p["scope"]?.stringValue ?? ""
             request.start = p["start"]?.boolValue ?? false
             request.isolation = p["isolation"]?.text ?? "worktree"
+            request.executor = p["executor"]?.text ?? "claude"
             request.permissionMode = cliMode(p["permissionMode"]?.text)
             request.model = p["model"]?.text
             request.idempotencyKey = "tapd:\(ref.workspaceId):\(ref.entityType):\(ref.entityId):\(existing.count)"
@@ -327,6 +363,31 @@ enum WorkHandlers: BridgeModule {
         // MARK: 企业微信 / WorkBuddy
         case "source.overview":
             return SourceGateway.overview(core)
+
+        // 多机器人：每个 Bot 独立的凭据、模式、默认 CLI 与生效范围（人员 / 场景 / 项目三项交集）。
+        case "source.bots":
+            return WecomBotAdmin.list(core)
+        case "source.saveBot":
+            let saved = try WecomBotAdmin.save(core, p["bot"] ?? .null)
+            WecomBot.shared.refresh()
+            return saved
+        case "source.deleteBot":
+            try WecomBotAdmin.delete(core, id: try text(p, "id"))
+            WecomBot.shared.refresh()
+            return WecomBotAdmin.list(core)
+        case "source.setBotSecret":
+            let id = try text(p, "id")
+            try WecomBotConfig.setSecret(id, p["secret"]?.stringValue ?? "")
+            WecomBot.shared.refresh(botLocalId: id, force: true)
+            return .obj(["saved": .bool(true)])
+        case "source.clearBotSecret":
+            let id = try text(p, "id")
+            WecomBotConfig.clearSecret(id)
+            WecomBot.shared.refresh()
+            return .obj(["saved": .bool(false)])
+        case "source.reconnectBot":
+            WecomBot.shared.refresh(botLocalId: try text(p, "id"), force: true)
+            return .obj(["ok": .bool(true)])
         case "source.settings":
             guard case .object(let patch)? = p["patch"] else { return SourceGateway.settings(core) }
             var current = SourceGateway.settings(core).objectValue ?? [:]

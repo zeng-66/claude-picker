@@ -30,6 +30,7 @@ enum ExecutorEvent: Sendable {
 }
 
 struct ExecutorConfig: Sendable {
+    var provider: AgentProvider = .claude
     var executable: String
     var cwd: String
     var sessionId: String
@@ -40,6 +41,7 @@ struct ExecutorConfig: Sendable {
     var effort: String?
     var environment: [String: String]
     var systemPrompt: String? = nil
+    var acpArguments: [String] = ["acp"]
 }
 
 enum ClaudeLocator {
@@ -62,7 +64,7 @@ enum ClaudeLocator {
     }
 }
 
-final class ClaudeProcess: @unchecked Sendable {
+final class ClaudeProcess: AgentExecutorProcess, @unchecked Sendable {
     let config: ExecutorConfig
     private let onEvent: @Sendable (ExecutorEvent) -> Void
     private let queue = DispatchQueue(label: "claude-picker.executor")
@@ -83,6 +85,7 @@ final class ClaudeProcess: @unchecked Sendable {
     }
 
     var isRunning: Bool { queue.sync { !exited && pid > 0 } }
+    var activeSessionId: String { config.sessionId }
 
     static func arguments(for config: ExecutorConfig) -> [String] {
         var args = ["-p", "--output-format", "stream-json", "--input-format", "stream-json",
@@ -162,6 +165,7 @@ final class ClaudeProcess: @unchecked Sendable {
             guard event["subtype"]?.stringValue == "init" else { return }
             onEvent(.sessionInfo(.obj([
                 "sessionId": event["session_id"],
+                "executor": .string(AgentProvider.claude.rawValue),
                 "model": event["model"],
                 "permissionMode": event["permissionMode"],
                 "cwd": event["cwd"],
@@ -298,6 +302,17 @@ final class ClaudeProcess: @unchecked Sendable {
 
     @discardableResult
     func interrupt(requestId: String) -> Bool { control(subtype: "interrupt", requestId: requestId) }
+
+    /// stream-json 支持热切换权限模式与模型；推理强度只在启动参数里，需要按原 ID 重启。
+    @discardableResult
+    func updateRuntime(key: String, value: String) -> Bool {
+        let requestId = "picker-runtime-\(UUID().uuidString.prefix(8))"
+        switch key {
+        case "mode": return control(subtype: "set_permission_mode", requestId: requestId, extra: ["mode": .string(value)])
+        case "model": return control(subtype: "set_model", requestId: requestId, extra: ["model": .string(value)])
+        default: return false
+        }
+    }
 
     /// 结束进程：先关 stdin 让 CLI 自己收尾，超时后 SIGTERM，再超时 SIGKILL。只动自己启动的这一个进程。
     func shutdown(grace: TimeInterval = 4) {

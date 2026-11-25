@@ -1,4 +1,5 @@
 // 弹窗：模型上下文 / MCP 服务 / 添加目录 / 新建会话 / 重命名会话 / 界面设置。
+import EngineIcon from './EngineIcon.jsx';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ArrowsClockwise,
@@ -12,6 +13,7 @@ import {
   X,
 } from '@phosphor-icons/react';
 import { errorText, request } from './bridge.js';
+import { resumeCommand } from './session-info.js';
 import { contextNumbers } from './Composer.jsx';
 import { IconButton, tildePath } from './ui.jsx';
 
@@ -115,6 +117,7 @@ const STATUS_TEXT = {
 };
 
 export function McpModal({ projectPath, notify, onClose }) {
+  const [mcpProvider, setMcpProvider] = useState('claude');
   const [servers, setServers] = useState(null);
   const [status, setStatus] = useState({});
   const [tools, setTools] = useState({});
@@ -130,19 +133,20 @@ export function McpModal({ projectPath, notify, onClose }) {
   // 插件 / claude.ai 连接器提供的服务不在配置文件里，只能从健康检查结果里拿到。
   const [extra, setExtra] = useState([]);
   const loadStatus = useCallback(() => {
-    request('mcp.status', { projectPath }, { timeoutMs: 90000 })
+    setStatus({ loaded: false });
+    request('mcp.status', { projectPath, provider: mcpProvider }, { timeoutMs: 90000 })
       .then((result) => {
         const statuses = result?.statuses ?? result ?? {};
         setExtra(Array.isArray(result?.extra) ? result.extra : []);
         setStatus((current) => ({ ...current, ...statuses, loaded: true }));
       })
       .catch(() => setStatus((current) => ({ ...current, loaded: true })));
-  }, [projectPath]);
+  }, [projectPath, mcpProvider]);
 
   const load = useCallback(
     async (select) => {
       try {
-        const list = await request('mcp.list', { projectPath });
+        const list = await request('mcp.list', { projectPath, provider: mcpProvider });
         setServers(list);
         setSelectedId((current) => {
           const wanted = select ?? current;
@@ -154,7 +158,7 @@ export function McpModal({ projectPath, notify, onClose }) {
         setError(errorText(cause));
       }
     },
-    [projectPath],
+    [projectPath, mcpProvider],
   );
 
   useEffect(() => {
@@ -177,7 +181,7 @@ export function McpModal({ projectPath, notify, onClose }) {
     if (!selected || !selected.enabled || selected.scope === 'external' || tools[selected.id])
       return;
     setTools((current) => ({ ...current, [selected.id]: { loading: true, tools: [] } }));
-    request('mcp.tools', { projectPath, id: selected.id }, { timeoutMs: 45000 })
+    request('mcp.tools', { projectPath, provider: mcpProvider, id: selected.id }, { timeoutMs: 45000 })
       .then((result) => setTools((current) => ({ ...current, [selected.id]: result })))
       .catch((cause) =>
         setTools((current) => ({
@@ -201,7 +205,11 @@ export function McpModal({ projectPath, notify, onClose }) {
     setBusy(label);
     setError(null);
     try {
-      const result = await request(method, { projectPath, ...params }, { timeoutMs: 90000 });
+      const result = await request(
+        method,
+        { projectPath, provider: mcpProvider, ...params },
+        { timeoutMs: 90000 },
+      );
       if (done) notify(done);
       return result ?? true;
     } catch (cause) {
@@ -214,19 +222,61 @@ export function McpModal({ projectPath, notify, onClose }) {
 
   return (
     <ModalFrame title="MCP 服务" wide onClose={onClose}>
+      <div className="segmented" style={{ marginBottom: 10 }} role="tablist" aria-label="选择 MCP 配置引擎">
+        {[
+          ['claude', 'Claude Code 配置'],
+          ['antigravity', 'Antigravity 配置'],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={mcpProvider === id}
+            className={mcpProvider === id ? 'chosen' : ''}
+            onClick={() => {
+              setMcpProvider(id);
+              setSelectedId('');
+              setAdding(false);
+              setConfirmRemove(false);
+              setError(null);
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <p className="modal-description">
-        查看工具能力、连接状态与服务配置。连接状态由应用直接与服务握手检查；改动写入 Claude Code
-        的配置文件，对新开的会话生效。
+        {mcpProvider === 'antigravity'
+          ? '管理 Antigravity 全局 MCP 配置（~/.gemini/config/mcp_config.json）。仅支持 stdio 与 Streamable HTTP，不支持旧版 SSE。'
+          : '查看工具能力、连接状态与服务配置。连接状态由应用直接与服务握手检查；改动写入 Claude Code 的配置文件，对新开的会话生效。'}
       </p>
       <div className="mcp-heading">
         <span>
           {connectedCount} / {allServers?.length ?? 0} 个服务已连接
           {!status.loaded ? ' · 正在检查连接…' : ''}
         </span>
-        <button onClick={() => setAdding(!adding)}>
-          <Plus size={14} />
-          添加服务
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {mcpProvider === 'antigravity' && (
+            <button
+              disabled={busy === 'import'}
+              onClick={async () => {
+                const res = await act('import', 'mcp.importFromClaude', {});
+                if (!res) return;
+                const msg = `已从 Claude 导入 ${res.imported ?? 0} 个服务`
+                  + (res.skippedSse ? `（跳过 ${res.skippedSse} 个旧版 SSE）` : '');
+                notify(msg);
+                await load();
+                loadStatus();
+              }}
+            >
+              {busy === 'import' ? '导入中…' : '从 Claude 导入'}
+            </button>
+          )}
+          <button onClick={() => setAdding(!adding)}>
+            <Plus size={14} />
+            添加服务
+          </button>
+        </div>
       </div>
       {error && (
         <div className="pane-note error" role="alert">
@@ -518,23 +568,145 @@ export function worktreeSlug(branch) {
   );
 }
 
+export function CreateWorktreeModal({ projects, projectPath, settings, providers, onClose, onCreated }) {
+  const [path, setPath] = useState(projectPath);
+  const [branches, setBranches] = useState(null);
+  const [base, setBase] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const available = providers.filter((item) => item.available && settings.cliPreferences?.[item.id]?.enabled !== false);
+  const [agent, setAgent] = useState('');
+  const [createdTree, setCreatedTree] = useState(null);
+  const branch = name.trim() ? worktreeSlug(name) : '';
+
+  useEffect(() => {
+    let current = true;
+    setBranches(null);
+    setBase('');
+    setError(null);
+    request('git.branches', { projectPath: path }).then((list) => {
+      if (!current) return;
+      setBranches(list);
+      setBase(list.find((item) => item.name === 'origin/main')?.name ?? list.find((item) => item.isCurrent)?.name ?? '');
+    }).catch((cause) => { if (current) setError(errorText(cause)); });
+    return () => { current = false; };
+  }, [path]);
+
+  function surface(provider) {
+    const override = settings.cliPreferences?.[provider]?.mode;
+    const mode = override && override !== 'inherit' ? override : settings.interactionMode;
+    const supported = settings.cliPreferences?.[provider]?.modes ?? ['terminal'];
+    if (!supported.includes(mode)) return '终端';
+    return mode === 'structured' ? '结构化聊天' : mode === 'chat' ? 'Swttch' : '终端';
+  }
+
+  return (
+    <ModalFrame title="创建工作树" onClose={creating ? undefined : onClose}>
+      <form className="cli-worktree-form" onSubmit={async (event) => {
+        event.preventDefault();
+        if (!branch || !base || creating) return;
+        setCreating(true);
+        setError(null);
+        try {
+          const options = { timeoutMs: 150000 };
+          const tree = createdTree ?? await request('git.createWorktree', {
+            input: { projectPath: path, baseBranch: base, branch },
+          }, options);
+          if (!createdTree) {
+            setCreatedTree(tree);
+            onCreated(tree, path);
+          }
+          if (agent) {
+            const session = await request('session.create', {
+              projectPath: path, provider: agent, mode: 'current',
+              workspace: { branch: tree.branch, worktreePath: tree.path },
+            }, options);
+            onCreated({ ...tree, ...session }, path);
+          }
+          onClose();
+        } catch (cause) {
+          setError(errorText(cause));
+          setCreating(false);
+        }
+      }}>
+        <fieldset disabled={creating || Boolean(createdTree)} className="cli-worktree-fields">
+        <div className="cli-worktree-grid">
+          <label className="field">项目<select aria-label="项目" value={path} onChange={(event) => { setBase(''); setPath(event.target.value); }}>
+            {projects.map((item) => <option value={item.path} key={item.path}>{item.title}</option>)}
+          </select></label>
+          <label className="field">运行于<select aria-label="运行于" defaultValue="local">
+            <option value="local">本地 Mac</option>
+          </select></label>
+        </div>
+        <div className="cli-worktree-source">
+          <span>创建来源</span>
+          <select aria-label="起始分支" disabled={!branches} value={base} onChange={(event) => setBase(event.target.value)}>
+            <option value="" disabled>{branches ? '选择起始分支' : '读取分支…'}</option>
+            {branches?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+          </select>
+        </div>
+        <label className="field">工作区名称<input autoFocus value={name} placeholder="例如 cli-integration"
+          onChange={(event) => setName(event.target.value)} /></label>
+        {branch && <small className="cli-worktree-target">新分支与目录 · <code>{branch}</code> · <code>.worktrees/{branch}</code></small>}
+        </fieldset>
+        <label className="field">代理（可选）
+          <select aria-label="代理（可选）" value={agent} onChange={(event) => setAgent(event.target.value)}>
+            <option value="">仅创建工作树</option>
+            {available.map((item) => <option key={item.id} value={item.id}>{item.label}（{surface(item.id)}）</option>)}
+          </select>
+        </label>
+        {createdTree && <p className="pane-note">工作树已创建：{createdTree.path}</p>}
+        {error && <p className="pane-note error" role="alert">{error}</p>}
+        <div className="modal-footer">
+          <button type="button" disabled={creating} onClick={onClose}>取消</button>
+          <button type="submit" className="primary" disabled={!branch || !base || creating}>{creating ? '处理中…' : createdTree ? (agent ? '重试启动代理' : '完成') : '创建工作树'}</button>
+        </div>
+      </form>
+    </ModalFrame>
+  );
+}
+
 export function SessionModal({
   project,
   home,
   branch,
   isRepository,
+  workspace,
   initialMode,
+  providers = [],
+  cliPreferences = {},
+  defaultProvider = 'claude',
+  interactionMode = 'terminal',
   onClose,
   onCreated,
   notify,
 }) {
+  const [provider, setProvider] = useState(defaultProvider);
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState(isRepository ? initialMode : 'current');
   const [target, setTarget] = useState('feature/new-task');
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
   const worktree = mode === 'worktree';
-  const ready = (!worktree || Boolean(target.trim())) && !creating;
+  const engineOptions = [
+    ['claude', 'Claude Code', 'C', 'claude · 终端、结构化聊天与 Swttch'],
+    ['antigravity', 'Antigravity', 'A', 'agy · 终端与 ACP 结构化聊天'],
+    ['codex', 'Codex CLI', 'Cx', 'codex · 终端与 App Server 结构化聊天'],
+    ['dsh', 'DeepSeek Harness', 'Ds', 'dsh-TUI · 原生终端'],
+  ];
+  const [, engineLabel] = engineOptions.find(([id]) => id === provider) ?? engineOptions[0];
+  const providerInfo = providers.find((item) => item.id === provider);
+  const providerEnabled = cliPreferences[provider]?.enabled !== false;
+  const providerAvailable = providerEnabled && Boolean(providerInfo?.available);
+  const ready = (!worktree || Boolean(target.trim())) && providerAvailable && !creating;
+  const supportedModes = cliPreferences[provider]?.modes ?? ['terminal'];
+  const preferredMode = cliPreferences[provider]?.mode && cliPreferences[provider].mode !== 'inherit'
+    ? cliPreferences[provider].mode
+    : interactionMode;
+  const defaultSurface = supportedModes.includes(preferredMode) ? preferredMode : 'terminal';
+  const [surfaceChoice, setSurfaceChoice] = useState(null);
+  const surface = surfaceChoice && supportedModes.includes(surfaceChoice) ? surfaceChoice : defaultSurface;
 
   async function create() {
     if (!ready) return;
@@ -547,11 +719,15 @@ export function SessionModal({
           projectPath: project.path,
           ...(title.trim() ? { title: title.trim() } : {}),
           mode,
+          provider,
+          openMode: surface,
+          ...(workspace ? { workspace } : {}),
           ...(worktree ? { branch: target.trim() } : {}),
         },
         { timeoutMs: 90000 },
       );
-      notify(worktree ? `已在工作树 ${target.trim()} 中创建会话` : '会话已创建');
+      const provName = engineLabel;
+      notify(worktree ? `已在工作树 ${target.trim()} 中创建 ${provName} 会话` : `${provName} 会话已创建`);
       onCreated(result);
       onClose();
     } catch (cause) {
@@ -563,6 +739,41 @@ export function SessionModal({
   return (
     <ModalFrame title="新建会话" onClose={onClose}>
       <p className="modal-description">在 {project.title} 中开始新的工作。</p>
+      <div className="field">
+        执行 CLI 引擎
+        <div className="mode-choice" style={{ marginTop: 6 }}>
+          {engineOptions.map(([value, label, badge, desc]) => {
+            const info = providers.find((item) => item.id === value);
+            const enabled = cliPreferences[value]?.enabled !== false;
+            const ok = Boolean(info?.available);
+            return (
+              <button
+                type="button"
+                key={value}
+                className={provider === value ? 'selected' : ''}
+                onClick={() => setProvider(value)}
+              >
+                <strong>
+                  <EngineIcon id={value} size={16} />
+                  {label}
+                  {!enabled ? '（已停用）' : !ok ? `（${info?.status ?? '不可用'}）` : ''}
+                </strong>
+                <small>{desc}</small>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <label className="field">
+        打开方式
+        <select aria-label="打开方式" value={surface} onChange={(event) => setSurfaceChoice(event.target.value)}>
+          {supportedModes.map((value) => (
+            <option key={value} value={value}>
+              {{ terminal: '原生终端', structured: '结构化聊天', chat: 'Swttch 图形聊天' }[value] ?? value}
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="field">
         会话名称（可选）
         <input
@@ -575,12 +786,13 @@ export function SessionModal({
           }}
         />
       </label>
-      <div className="mode-choice">
+      {!workspace && <div className="mode-choice">
         {[
           ['current', '当前分支', GitBranch],
           ['worktree', '独立工作树', TreeStructure],
         ].map(([value, label, Icon]) => (
           <button
+            type="button"
             key={value}
             className={mode === value ? 'selected' : ''}
             disabled={value === 'worktree' && !isRepository}
@@ -592,7 +804,7 @@ export function SessionModal({
             <small>{value === 'current' ? '继续在项目目录中工作' : '在独立目录中并行任务'}</small>
           </button>
         ))}
-      </div>
+      </div>}
       {worktree && (
         <label className="field">
           新分支名称
@@ -602,10 +814,12 @@ export function SessionModal({
       <dl className="session-summary">
         <dt>项目</dt>
         <dd>{tildePath(project.path, home)}</dd>
-        <dt>基准分支</dt>
-        <dd>{branch ?? (isRepository ? 'detached HEAD' : '不是 Git 仓库')}</dd>
+        <dt>执行引擎</dt>
+        <dd>{engineLabel} ({providerInfo?.command ?? provider})</dd>
+        <dt>{workspace ? '绑定分支' : '基准分支'}</dt>
+        <dd>{workspace?.branch ?? branch ?? (isRepository ? 'detached HEAD' : '不是 Git 仓库')}</dd>
         <dt>工作目录</dt>
-        <dd>{worktree ? `.worktrees/${worktreeSlug(target)}` : '项目根目录'}</dd>
+        <dd>{workspace ? tildePath(workspace.worktreePath ?? project.path, home) : worktree ? `.worktrees/${worktreeSlug(target)}` : '项目根目录'}</dd>
         {worktree && (
           <>
             <dt>目标分支</dt>
@@ -613,6 +827,16 @@ export function SessionModal({
           </>
         )}
       </dl>
+      {!providerAvailable && (
+        <div className="pane-note error" role="alert">
+          <Warning size={14} />
+          {!providerEnabled ? `已停用 ${engineLabel}，请在 CLI 引擎设置中启用。` : provider === 'dsh' ? (
+            <span>
+              找到 dsh-TUI，但未检测到 DeepSeek Harness (dsh)。<button type="button" onClick={() => window.dispatchEvent(new Event('cli-review-check'))}>打开 CLI 配置</button>
+            </span>
+          ) : `未检测到 ${engineLabel}，请先安装并登录。`}
+        </div>
+      )}
       {error && (
         <div className="pane-note error" role="alert">
           <Warning size={14} />
@@ -631,6 +855,37 @@ export function SessionModal({
 }
 
 // ---------- 重命名会话 ----------
+
+export function SessionInfoModal({ session, projectPath, providerLabel, onCopy, onClose }) {
+  const engine = providerLabel ?? 'Claude Code';
+  const id = session.originalSessionId;
+  const command = resumeCommand(session.provider ?? 'claude', id);
+  const details = [
+    session.title, `引擎 ${engine}`, `会话 ID ${id ?? '尚未获取'}`,
+    `分支 ${session.branch ?? '未绑定'}`, `工作目录 ${session.cwd ?? projectPath}`, command,
+  ].filter(Boolean).join('\n');
+
+  return (
+    <ModalFrame title="会话信息" onClose={onClose}>
+      <div>
+        <dl className="session-summary">
+          <dt>名称</dt><dd>{session.title}</dd>
+          <dt>执行引擎</dt><dd>{engine}</dd>
+          <dt>绑定分支</dt><dd>{session.branch ?? '未绑定'}</dd>
+          <dt>工作目录</dt><dd>{session.cwd ?? projectPath}</dd>
+        </dl>
+        <label className="field">会话 ID<input readOnly value={id ?? ''} placeholder="尚未获取引擎会话 ID" onFocus={(event) => event.target.select()} /></label>
+        {command && <label className="field">恢复命令<input readOnly value={command} onFocus={(event) => event.target.select()} /></label>}
+        <p className="modal-description">在原环境的工作目录运行恢复命令。另一台设备需有该引擎的会话历史。</p>
+      </div>
+      <div className="modal-footer">
+        <button disabled={!id} onClick={() => onCopy(id, '会话 ID')}>复制会话 ID</button>
+        <button disabled={!command} onClick={() => onCopy(command, '恢复命令')}>复制恢复命令</button>
+        <button className="primary" onClick={() => onCopy(details, '会话信息')}>复制会话信息</button>
+      </div>
+    </ModalFrame>
+  );
+}
 
 export function RenameSessionModal({ session, onClose, notify }) {
   const [title, setTitle] = useState(session.named ? session.title : '');
@@ -735,7 +990,8 @@ export function SettingsModal({ settings, onChange, onOpenMcp, onClose }) {
         <div className="segmented" role="group" aria-label="会话交互方式">
           {[
             ['terminal', '原生终端'],
-            ['chat', '图形聊天（实验）'],
+            ['structured', '结构化聊天'],
+            ['chat', 'Swttch 图形聊天'],
           ].map(([value, label]) => (
             <button
               key={value}
@@ -748,7 +1004,7 @@ export function SettingsModal({ settings, onChange, onOpenMcp, onClose }) {
           ))}
         </div>
         <p>
-          图形聊天使用 Swttch 界面和应用自带的本地服务，消息、工具审批都在第二栏里完成。切换时会结束另一种方式下运行中的会话（历史保留）。
+          新会话的默认打开方式。结构化聊天直接驱动 Claude、Antigravity、Codex 的结构化协议；Swttch 使用应用自带的本地服务，仅支持 Claude。已有会话按各自记录打开，右键会话可单独切换。
         </p>
       </section>
       <section className="original-settings-section">
