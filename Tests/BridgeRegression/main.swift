@@ -283,6 +283,27 @@ MainActor.assumeIsolated {
     expect(dup?.hasPrefix("BRANCH_EXISTS") == true, "重名分支不应建出会话")
     expect(store.projects[1].sessions.count == 2, "失败时不应插入会话")
 
+    let target = wt?["cwd"] as? String ?? ""
+    let existingTree = ok("session.create", ["projectPath": repo, "title": "在现有工作树新建",
+        "workspace": ["branch": "feature/bridge", "worktreePath": target]]) as? [String: Any]
+    let scopedId = existingTree?["sessionId"] as? String ?? ""
+    let scopedPath = existingTree?["cwd"] as? String ?? ""
+    expect(!scopedId.isEmpty && !scopedPath.isEmpty && resolvedPath(scopedPath) == resolvedPath(target),
+           "分支入口应使用已有工作树目录")
+    let (_, badPath) = call("session.create", ["projectPath": repo,
+        "workspace": ["branch": "feature/bridge", "worktreePath": tempRoot.path]])
+    expect(badPath?.hasPrefix("COMMAND_FAILED") == true, "未登记目录不得用作工作树")
+    let scoped = ((ok("app.state") as? [String: Any])?["projects"] as? [[String: Any]])?[1]["sessions"] as? [[String: Any]]
+    let scopedRow = scoped?.first { $0["id"] as? String == scopedId }
+    expect(scopedRow?["branch"] as? String == "feature/bridge" && scopedRow?["originalSessionId"] as? String == scopedId,
+           "快照应包含真实分支和 Claude 原始 ID")
+    _ = ok("app.remove", ["projectPath": repo, "sessionId": scopedId])
+
+    _ = ok("app.settings", ["cliPreferences": ["claude": ["enabled": false]]])
+    let (_, disabled) = call("session.open", ["projectPath": repo, "sessionId": sid, "provider": "claude"])
+    expect(disabled?.hasPrefix("COMMAND_FAILED") == true, "停用引擎不得重新打开旧会话")
+    _ = ok("app.settings", ["cliPreferences": [String: Any]()])
+
     _ = ok("app.pin", ["projectPath": repo, "sessionId": sid])
     expect(store.projects[1].sessions.first?.id == sid, "app.pin 应置顶会话")
     _ = ok("session.open", ["projectPath": repo, "cwd": repo, "sessionId": sid])
@@ -347,6 +368,159 @@ MainActor.assumeIsolated {
     store.settings.interactionMode = .terminal
     unsetenv("CLAUDE_PICKER_AGY_BIN")
     unsetenv("CLAUDE_PICKER_CLAUDE_BIN")
+
+    // MARK: - 逐会话打开方式与结构化聊天（Claude 协议替身 fake-claude.py）
+
+    @MainActor func spin(_ timeout: TimeInterval = 15, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        return condition()
+    }
+
+    @MainActor func switchMode(_ sid: String, _ mode: InteractionMode) -> String? {
+        var outcome: Result<Void, GitError>?
+        store.switchOpenMode(sessionId: sid, to: mode) { outcome = $0 }
+        guard spin(30, { outcome != nil }) else { return "timeout" }
+        if case .failure(let error) = outcome! { return error.message }
+        return nil
+    }
+
+        do {
+        let fakeClaude = tempRoot.appendingPathComponent("fake-claude")
+            try FileManager.default.copyItem(atPath: FileManager.default.currentDirectoryPath + "/Tests/WorkRegression/fake-claude.py",
+                                             toPath: fakeClaude.path)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeClaude.path)
+            let fakeState = tempRoot.appendingPathComponent("fake-claude-state")
+            try FileManager.default.createDirectory(at: fakeState, withIntermediateDirectories: true)
+            setenv("CLAUDE_PICKER_CLAUDE_BIN", fakeClaude.path, 1)
+            setenv("FAKE_CLAUDE_STATE", fakeState.path, 1)
+            setenv("FAKE_CLAUDE_SLOW_SECONDS", "30", 1)
+            let fakeClaudeLog = tempRoot.appendingPathComponent("fake-claude.log").path
+            setenv("FAKE_CLAUDE_LOG", fakeClaudeLog, 1)
+            func claudeLog() -> String { (try? String(contentsOfFile: fakeClaudeLog, encoding: .utf8)) ?? "" }
+
+            do {
+                // Codex 历史：AGENTS.md 指令与 <environment_context> 作为 user 消息的独立段注入，不能显示成「你」的发言。
+                let rows = [
+                    ##"{"timestamp":"2026-11-18T05:06:44.259Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n\n<INSTRUCTIONS>\nx\n</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n  <cwd>/tmp</cwd>\n</environment_context>"}]}}"##,
+                    ##"{"timestamp":"2026-11-18T05:06:45.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"分析一下 t3code"}]}}"##,
+                    ##"{"timestamp":"2026-11-18T05:06:50.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"好的"}]}}"##,
+                ]
+                let url = tempRoot.appendingPathComponent("codex-history.jsonl")
+                try? rows.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+                let items = SessionChatHistory.load(provider: .codex, fileURL: url)
+                let kinds: [String] = items.map { item -> String in item["kind"]?.stringValue ?? "" }
+                let users: [String] = items.compactMap { item -> String? in
+                    item["kind"]?.stringValue == "user" ? item["payload"]?["text"]?.stringValue : nil
+                }
+                expect(users == ["分析一下 t3code"] && kinds == ["user", "assistant"], "Codex 历史剔除注入的 AGENTS.md 与环境上下文：\(items)")
+            }
+
+
+            let hub = SessionChatHub.shared
+            let created = ok("session.create", ["projectPath": repo, "title": "结构化会话", "mode": "current",
+                                                "provider": "claude", "openMode": "structured"]) as? [String: Any]
+            let sid = created?["sessionId"] as? String ?? ""
+            expect(store.structuredTarget?.sid == sid && store.active == nil, "openMode=structured 新建会话应打开结构化聊天而非终端")
+            let snap = ok("app.state") as? [String: Any]
+            expect((snap?["active"] as? [String: Any])?["surface"] as? String == "structured", "快照 active.surface 应为 structured")
+            let row = ((snap?["projects"] as? [[String: Any]])?[1]["sessions"] as? [[String: Any]])?.first { $0["id"] as? String == sid }
+            expect(row?["openMode"] as? String == "structured", "会话行应带上已保存的打开方式")
+            expect(spin { hub.run(sid)?.phase == .ready }, "结构化执行器握手就绪")
+            expect(SessionOwnership.shared.heldByTerminal(sid), "结构化聊天持有该会话（单写者）")
+
+            _ = ok("sessionChat.send", ["sessionId": sid, "text": "你好"])
+            expect(spin { (hub.run(sid)?.events ?? []).contains { $0["kind"]?.stringValue == "turn_result" } }, "发送后收到回合结果")
+            let chat = ok("sessionChat.snapshot", ["sessionId": sid]) as? [String: Any]
+            let kinds = (chat?["events"] as? [[String: Any]])?.compactMap { $0["kind"] as? String } ?? []
+            expect(kinds.contains("user") && kinds.contains("assistant"), "快照包含用户消息与助手回复：\(kinds.joined(separator: ","))")
+
+            _ = ok("sessionChat.send", ["sessionId": sid, "text": "SCENARIO:permission"])
+            expect(spin { !(hub.run(sid)?.pending.isEmpty ?? true) }, "工具权限请求进入待审批")
+            let requestId = hub.run(sid)?.pending.keys.first ?? ""
+            _ = ok("sessionChat.respond", ["sessionId": sid, "requestId": requestId, "allow": true])
+            let (_, twice) = call("sessionChat.respond", ["sessionId": sid, "requestId": requestId, "allow": true])
+            expect(twice != nil, "同一审批不能答复两次")
+            expect(spin { hub.run(sid)?.phase == .ready }, "审批后回合结束")
+
+            // 运行中切到终端：先中断回合、等执行器退出，再在终端按原始 ID 恢复。
+            _ = ok("sessionChat.send", ["sessionId": sid, "text": "SCENARIO:slow"])
+            expect(spin { hub.run(sid)?.phase == .running }, "慢回合进入运行中")
+            let toTerminal = switchMode(sid, .terminal)
+            expect(toTerminal == nil, "运行中切到终端应先中断再交接：\(toTerminal ?? "")")
+            expect(!hub.isLive(sid) && store.structuredTarget == nil && store.active != nil && store.activeSessionId == sid,
+                   "交接后结构化执行器已退出，终端接管同一原始 ID")
+            expect((hub.run(sid)?.events ?? []).contains { $0["payload"]?["subtype"]?.stringValue == "aborted"
+                                                           || $0["payload"]?["terminalReason"]?.stringValue?.hasPrefix("aborted") == true },
+                   "被中断的回合记录为中断")
+            expect(store.openMode(for: sid, provider: .claude) == .terminal, "打开方式改记为终端")
+
+            // 再切回结构化聊天：终端先退出，聊天按原始 ID 接续并保留之前的记录。
+            let toChat = switchMode(sid, .structured)
+            expect(toChat == nil, "终端切回结构化聊天：\(toChat ?? "")")
+            expect(store.active == nil && store.structuredTarget?.sid == sid && hub.isLive(sid), "终端已释放，聊天重新持有")
+            expect(spin { hub.run(sid)?.phase == .ready }, "重新接续后就绪")
+
+            // 已被结构化聊天持有时，按会话打开不得再起终端。
+            _ = ok("session.open", ["projectPath": repo, "cwd": repo, "sessionId": sid])
+            expect(store.active == nil && store.structuredTarget?.sid == sid, "持有中的会话重复打开仍回到聊天视图")
+
+            // 关闭视图不结束执行器；App 退出时统一结束。
+            _ = ok("app.command", ["name": "closeTerminal"])
+            expect(store.structuredTarget == nil && hub.isLive(sid), "关闭视图保留执行器，可重新挂接")
+            _ = ok("session.open", ["projectPath": repo, "cwd": repo, "sessionId": sid])
+            expect(store.structuredTarget?.sid == sid, "重新打开挂回同一执行器")
+
+            // 输入框快捷切换：模式与模型走 stream-json 控制请求即时生效；推理强度按原 ID 重启。
+            _ = ok("sessionChat.runtime", ["sessionId": sid, "key": "mode", "value": "plan"])
+            expect(spin { claudeLog().contains("set_permission_mode") } && hub.run(sid)?.runtime["mode"]?.stringValue == "plan",
+                   "切换权限模式发出 set_permission_mode 并记录在会话上")
+            _ = ok("sessionChat.runtime", ["sessionId": sid, "key": "model", "value": "sonnet"])
+            expect(spin { claudeLog().contains("set_model") }, "切换模型发出 set_model")
+            let (_, badValue) = call("sessionChat.runtime", ["sessionId": sid, "key": "model", "value": "no-such-model"])
+            expect(badValue != nil, "不在可选项里的值被拒绝")
+            let spawnsBefore = claudeLog().components(separatedBy: "\"spawn\"").count
+            _ = ok("sessionChat.runtime", ["sessionId": sid, "key": "effort", "value": "low"])
+            expect(spin(20) { claudeLog().components(separatedBy: "\"spawn\"").count > spawnsBefore && hub.run(sid)?.phase == .ready },
+                   "切换推理强度后按原会话重新接续")
+            let lastSpawn = claudeLog().split(separator: "\n").last { $0.contains("\"spawn\"") }.map(String.init) ?? ""
+            expect(lastSpawn.contains("\"--effort\", \"low\"") || lastSpawn.contains("\"--effort\",\"low\""),
+                   "重启参数带上新的推理强度与权限模式：\(lastSpawn.prefix(300))")
+            expect(lastSpawn.contains("plan") && lastSpawn.contains("sonnet"), "重启沿用本会话改过的模式与模型")
+
+            let (_, unsupported) = call("session.setOpenMode", ["sessionId": sid, "mode": "bogus"])
+            expect(unsupported != nil, "未知打开方式应被拒绝")
+            expect(InteractionMode.resolve(recorded: "structured", provider: .dsh, global: .terminal, overrides: [:]) == .terminal,
+                   "DeepSeek 不支持结构化聊天时回到终端")
+
+            // Codex：CLI 分配线程 ID，占位 ID 换成原始 ID 后事件仍要送达同一个聊天。
+            let fakeCodex = tempRoot.appendingPathComponent("fake-codex")
+            try FileManager.default.copyItem(atPath: FileManager.default.currentDirectoryPath + "/Tests/WorkRegression/fake-codex-app-server.py",
+                                             toPath: fakeCodex.path)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCodex.path)
+            setenv("CLAUDE_PICKER_CODEX_BIN", fakeCodex.path, 1)
+            let codexCreated = ok("session.create", ["projectPath": repo, "title": "Codex 结构化", "mode": "current",
+                                                     "provider": "codex", "openMode": "structured"]) as? [String: Any]
+            let placeholder = codexCreated?["sessionId"] as? String ?? ""
+            expect(placeholder.hasPrefix("pending-codex-"), "Codex 新会话先用占位 ID")
+            expect(spin { (store.structuredTarget?.sid ?? "").hasPrefix("fake-thread-") }, "取得 Codex 原始线程 ID 后改用原始 ID")
+            let threadId = store.structuredTarget?.sid ?? ""
+            expect(spin { hub.run(threadId)?.phase == .ready }, "回绑后仍收到就绪事件")
+            _ = ok("sessionChat.send", ["sessionId": threadId, "text": "你好 Codex"])
+            expect(spin { (hub.run(threadId)?.events ?? []).contains { $0["kind"]?.stringValue == "assistant"
+                                                                   && $0["payload"]?["text"]?.stringValue == "收到：你好 Codex" } },
+                   "Codex 回复送达聊天")
+            expect(store.openMode(for: threadId, provider: .codex) == .structured
+                   && store.session(id: threadId)?.provider == .codex, "会话记录随原始 ID 迁移")
+            unsetenv("CLAUDE_PICKER_CODEX_BIN")
+
+            hub.terminateAll()
+            expect(!hub.isLive(sid) && !SessionOwnership.shared.heldByTerminal(sid), "退出时结束执行器并释放会话")
+            store.closeTerminal()
+            unsetenv("CLAUDE_PICKER_CLAUDE_BIN")
+    } catch {
+        expect(false, "结构化聊天回归准备失败：\(error)")
+    }
 }
 
 // 回归测试会改 tree.json / settings.json：只允许发生在调试数据目录或临时 HOME 里（脚本负责设置）。

@@ -6,7 +6,6 @@ import {
   Cat,
   ChatCircleDots,
   CheckCircle,
-  Copy,
   FolderOpen,
   Info,
   PlugsConnected,
@@ -21,12 +20,14 @@ import { errorText, request } from '../bridge.js';
 import VersionUpdates from './VersionUpdates.jsx';
 import { relativeTime } from '../ui.jsx';
 import { confirmAction } from './confirm.jsx';
+import { DeepSeekStatus } from './DeepSeekMaintenance.jsx';
 import { ModalFrame } from './WorkModals.jsx';
 import { NavigationSettings } from '../ModuleViews.jsx';
 import { PetSettings } from '../pet/PetSettings.jsx';
 
 const PAGES = [
   ['appearance', '界面与会话', SlidersHorizontal],
+  ['cli', 'CLI 引擎', Robot],
   ['navigation', '顶部页签', SquaresFour],
   ['pet', '桌宠', Cat],
   ['tapd', 'TAPD 连接', PlugsConnected],
@@ -36,52 +37,185 @@ const PAGES = [
   ['updates', '版本更新', Info],
 ];
 
-function Appearance({ settings, providers = [], capacity, onChange, notify }) {
+/// 「可安装」目录：安装命令登记在原生端白名单里，这里只按 ID 触发，执行前展示完整命令并确认。
+function Installables({ notify }) {
+  const [items, setItems] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [log, setLog] = useState(null);
+  const load = () => request('cli.installables', {}, { timeoutMs: 60000 }).then(setItems).catch((cause) => notify(errorText(cause), true));
+  useEffect(() => { load(); }, []);
+  async function install(item) {
+    const ok = await confirmAction({
+      title: `${item.path ? '重新安装' : '安装'} ${item.label}`,
+      text: `将在本机执行官方安装命令：\n${item.install}\n安装脚本来自 ${item.homepage ?? '官方站点'}，会写入你的用户目录。`,
+      confirmLabel: '执行安装',
+      cancelLabel: '取消',
+    });
+    if (!ok) return;
+    setBusy(item.id);
+    setLog(null);
+    try {
+      const result = await request('cli.install', { id: item.id }, { timeoutMs: 660000 });
+      setLog({ id: item.id, ...result });
+      notify(result.ok ? `${item.label} 已安装：${result.version ?? result.path}` : `${item.label} 安装未完成`, !result.ok);
+      load();
+    } catch (cause) {
+      notify(errorText(cause), true);
+    } finally {
+      setBusy(null);
+    }
+  }
+  if (!items) return <p>正在读取可安装列表…</p>;
+  return (
+    <div className="cli-status-list">
+      {items.map((item) => (
+        <div key={item.id} className="cli-status-row installable-row">
+          {item.path ? <CheckCircle size={13} className="green" /> : <XCircle size={13} className="red" />}
+          <b>{item.label}</b>
+          <code title={item.path ?? ''}>
+            {item.path ? `${item.command} · ${item.version ?? '已安装'}` : item.install ? item.install : item.note}
+          </code>
+          {item.install && (
+            <button type="button" disabled={busy != null} onClick={() => install(item)}>
+              {busy === item.id ? '正在安装…' : item.path ? '重新安装 / 更新' : '安装'}
+            </button>
+          )}
+          <small>{item.note}</small>
+          {log?.id === item.id && !log.ok && <pre>{log.log}</pre>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CliEngines({ settings, providers, onChange, notify }) {
+  const [refreshed, setRefreshed] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const list = refreshed ?? providers;
+  const preferences = settings.cliPreferences ?? {};
+  const installed = list.filter((engine) => engine.path || engine.available);
+  const available = installed.filter((engine) => engine.available && preferences[engine.id]?.enabled !== false);
+
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      const snapshot = await request('app.state');
+      setRefreshed(snapshot.providers ?? []);
+    } catch (error) {
+      notify(errorText(error), true);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  return (
+    <>
+      <h3>CLI 引擎</h3>
+      <div className="field" role="group" aria-label="新会话的默认打开方式">
+        新会话的默认打开方式
+        <div className="segmented">
+          {[
+            ['terminal', '原生终端'],
+            ['structured', '结构化聊天'],
+            ['chat', 'Swttch 图形聊天'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={(settings.interactionMode ?? 'terminal') === value ? 'chosen' : ''}
+              onClick={() => onChange({ interactionMode: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <small>
+          打开方式保存在每个会话上，这里只决定新会话和未记录旧会话的初始界面，不会结束已打开的会话。右键会话可改用终端、结构化聊天或 Swttch；切换前会先结束进行中的回合，同一个原始会话只由一端写入。引擎不支持所选方式时（如 DeepSeek、Swttch 下的非 Claude 会话）使用终端。
+        </small>
+      </div>
+
+      <div className="field">
+        <label>默认新会话引擎 <select aria-label="默认新会话引擎"
+          value={available.some((engine) => engine.id === settings.defaultProvider) ? settings.defaultProvider : ''}
+          onChange={(event) => onChange({ defaultProvider: event.target.value })}>
+          <option value="" disabled>请选择可用引擎</option>
+          {available.map((engine) => <option key={engine.id} value={engine.id}>{engine.label}</option>)}
+        </select></label>
+      </div>
+      <div className="field">
+        <label className="follow-session-setting">
+          <span>显示 Claude 提示缓存倒计时（估算）</span>
+          <input type="checkbox" role="switch" checked={settings.promptCacheEnabled !== false}
+            onChange={(event) => onChange({ promptCacheEnabled: event.target.checked })} />
+        </label>
+        <label>缓存时长 <select aria-label="缓存时长" value={settings.promptCacheMinutes ?? 5}
+          disabled={settings.promptCacheEnabled === false}
+          onChange={(event) => onChange({ promptCacheMinutes: Number(event.target.value) })}>
+          {[5, 10, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分钟</option>)}
+        </select></label>
+      </div>
+      <h4>已安装 <button type="button" disabled={refreshing} onClick={refresh}>{refreshing ? '检测中…' : '重新检测'}</button></h4>
+      <div className="cli-status-list">
+        {installed.map((engine) => <div key={engine.id} className="cli-status-row">
+          {engine.available ? <CheckCircle size={13} className="green" /> : <XCircle size={13} className="red" />}
+          <b>{engine.label}{settings.defaultProvider === engine.id ? ' · 默认' : ''}</b>
+          <code title={engine.path}>{engine.command} · {engine.status ?? (engine.available ? '可启动' : '不可用')}</code>
+          <label>
+            <input type="checkbox" aria-label={`启用 ${engine.label}`}
+              checked={preferences[engine.id]?.enabled !== false}
+              onChange={(event) => {
+                const enabled = event.target.checked;
+                const patch = { cliPreferences: { ...preferences, [engine.id]: { ...preferences[engine.id], enabled } } };
+                if (!enabled && settings.defaultProvider === engine.id) {
+                  const fallback = available.find((candidate) => candidate.id !== engine.id);
+                  if (fallback) patch.defaultProvider = fallback.id;
+                }
+                onChange(patch);
+              }} />
+            启用
+          </label>
+          <select aria-label={`${engine.label} 的新会话打开方式`}
+            value={preferences[engine.id]?.mode ?? 'inherit'}
+            onChange={(event) => onChange({
+              cliPreferences: { ...preferences, [engine.id]: { ...preferences[engine.id], mode: event.target.value } },
+            })}>
+            <option value="inherit">跟随默认</option>
+            {(preferences[engine.id]?.modes ?? ['terminal']).map((mode) => (
+              <option key={mode} value={mode}>{MODE_LABEL[mode] ?? mode}</option>
+            ))}
+          </select>
+        </div>)}
+        {!installed.length && <p>未检测到可执行文件</p>}
+      </div>
+      <h4>DeepSeek Harness 维护</h4>
+      <label className="follow-session-setting">
+        <span>启动时与每 6 小时检查 DeepSeek 新版本和环境，有问题时提示升级</span>
+        <input type="checkbox" role="switch" checked={settings.deepseekAutoCheck !== false}
+          onChange={(event) => onChange({ deepseekAutoCheck: event.target.checked })} />
+      </label>
+      <DeepSeekStatus notify={notify} />
+      <h4>可安装</h4>
+      <ul>
+        {list.filter((engine) => !installed.includes(engine)).map((engine) =>
+          <li key={engine.id}>{engine.label} · <code>{engine.command}</code> · {engine.status ?? '未安装'}</li>)}
+      </ul>
+      <Installables notify={notify} />
+      <label className="follow-session-setting">
+        <span>扫描 Antigravity 历史会话</span>
+        <input type="checkbox" role="switch" checked={settings.scanAntigravity !== false}
+          onChange={(event) => onChange({ scanAntigravity: event.target.checked })} />
+      </label>
+    </>
+  );
+}
+
+function Appearance({ settings, capacity, onChange, notify }) {
   const [slots, setSlots] = useState(capacity.slots);
   useEffect(() => setSlots(capacity.slots), [capacity.slots]);
   return (
     <>
       <h3>界面与会话</h3>
       <p>这些偏好即时生效，不影响正在执行的 Work。</p>
-      <div className="field" role="group" aria-label="CLI 引擎">
-        CLI 引擎
-        {providers.length > 0 && (
-          <div className="cli-status-list">
-            {providers.map((prov) => (
-              <div key={prov.id} className="cli-status-row">
-                {prov.available ? <CheckCircle size={13} className="green" /> : <XCircle size={13} className="red" />}
-                <b>{prov.label}</b>
-                <code>{prov.available ? (prov.path ?? prov.command) : `${prov.command}（未安装）`}</code>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="segmented" style={{ marginTop: 6 }}>
-          {[
-            ['claude', '默认新建：Claude Code'],
-            ['antigravity', '默认新建：Antigravity'],
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={(settings.defaultProvider ?? 'claude') === value ? 'chosen' : ''}
-              onClick={() => onChange({ defaultProvider: value })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <label className="follow-session-setting" style={{ marginTop: 8 }}>
-          <span>扫描并聚合 Antigravity 历史会话（~/.gemini/antigravity-cli）</span>
-          <input
-            type="checkbox"
-            role="switch"
-            aria-label="扫描 Antigravity 历史会话"
-            checked={settings.scanAntigravity !== false}
-            onChange={(event) => onChange({ scanAntigravity: event.target.checked })}
-          />
-        </label>
-      </div>
       <label className="font-slider">
         界面字号
         <input
@@ -127,27 +261,6 @@ function Appearance({ settings, providers = [], capacity, onChange, notify }) {
           ))}
         </div>
         <small>工作空间：会话 + 详情；任务看板：启动时先看 Work 中心；专注对话：详情默认收起、会话居中。</small>
-      </div>
-      <div className="field" role="group" aria-label="普通会话的交互方式">
-        普通会话的交互方式
-        <div className="segmented">
-          {[
-            ['terminal', '原生终端'],
-            ['chat', '图形聊天（实验）'],
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={(settings.interactionMode ?? 'terminal') === value ? 'chosen' : ''}
-              onClick={() => onChange({ interactionMode: value })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <small>
-          切换会结束另一种方式下运行中的普通会话（历史保留），切换前会再确认一次。Work 始终由结构化执行器驱动，不受这个选项影响；同一个会话不会被两种方式同时持有。
-        </small>
       </div>
       <div className="field">
         同时执行的 Work 数量
@@ -266,6 +379,110 @@ function SecretField({ label, saved, placeholder, onSave, onClear, hint }) {
   );
 }
 
+const MCP_STAGE = {
+  input: '项目 ID',
+  credential: '凭据',
+  launch: '启动服务',
+  handshake: 'MCP 握手',
+  tools: '工具发现',
+  project: '项目试读',
+  saved: '已保存',
+};
+
+/// TAPD MCP 一键配置：握手、工具发现、逐项目只读试读，全部通过才保存。
+function TapdMcpSetup({ info, onSaved, notify }) {
+  const [ids, setIds] = useState('');
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const tokenSaved = info.prerequisites.tokenSet;
+
+  async function run() {
+    if (!ids.trim() || busy) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const outcome = await request(
+        'tapd.mcpSetup',
+        { workspaceIds: ids, ...(token.trim() ? { token: token.trim() } : {}) },
+        { timeoutMs: 240000 },
+      );
+      setResult(outcome);
+      if (outcome.ok) {
+        setToken('');
+        setIds('');
+        notify(outcome.message);
+        onSaved();
+      }
+    } catch (cause) {
+      setResult({ ok: false, stage: 'launch', message: errorText(cause) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="tapd-mcp-setup">
+      <h4>一键配置 MCP</h4>
+      <p>
+        使用官方 <code>{info.prerequisites.mcpPackage}</code>，由 <code>uvx</code> 在本机以 stdio 方式启动
+        {info.prerequisites.mcpCommand ? `（${info.prerequisites.mcpCommand}）` : '（未找到 uvx，请先安装 uv）'}。
+        项目 ID 是 TAPD 项目链接 <code>tapd.cn/&lt;项目 ID&gt;/…</code> 中的数字。配置只做握手、工具发现和每个项目的只读试读，全部通过才保存；
+        已配置的项目保留启停与仓库映射。令牌需要能读取这些项目，回填评论和流转状态还需要对应的写权限。
+      </p>
+      <label className="field">
+        项目 ID（可多个，换行、空格或逗号分隔）
+        <textarea rows={2} value={ids} placeholder="例如 20355782, 69850123" onChange={(event) => setIds(event.target.value)} />
+      </label>
+      <label className="field">
+        TAPD 个人令牌{tokenSaved ? '（留空沿用已保存的令牌）' : ''}
+        <input type="password" autoComplete="off" value={token} placeholder="在 TAPD「个人设置 → 个人令牌」里生成"
+          onChange={(event) => setToken(event.target.value)} />
+      </label>
+      <div className="settings-inline">
+        <button className="primary" disabled={busy || !ids.trim() || (!tokenSaved && !token.trim())} onClick={run}>
+          {busy ? '正在验证…（首次需下载服务）' : '验证并保存'}
+        </button>
+      </div>
+      {result && (
+        <div className={`pane-note ${result.ok ? '' : 'error'}`} role="status">
+          {result.ok ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
+          <div>
+            <b>{MCP_STAGE[result.stage] ?? result.stage}：{result.message}</b>
+            {result.detail && <small> {result.detail}</small>}
+            {!result.ok && <small> 原有配置未改动，修正后可重试。</small>}
+            {(result.projects ?? []).length > 0 && (
+              <ul>
+                {result.projects.map((item) => (
+                  <li key={item.id}>
+                    {item.ok ? '✓' : '✗'} {item.id}
+                    {item.name ? ` · ${item.name}` : ''}
+                    {item.message ? ` · ${item.message}` : ''}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(result.scenarios ?? []).length > 0 && <McpScenarios scenarios={result.scenarios} />}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function McpScenarios({ scenarios }) {
+  return (
+    <div className="mcp-scenarios">
+      {scenarios.map((item) => (
+        <span key={item.id} className={`pill ${item.available ? 'neutral' : 'red'}`}
+          title={item.available ? '服务提供所需工具' : `缺少工具：${item.missing.join('、')}`}>
+          {item.available ? '✓' : '✗'} {item.label}{item.write ? '（写）' : ''}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function Tapd({ projects, notify, onDirty }) {
   const [info, setInfo] = useState(null);
   const [form, setForm] = useState(null);
@@ -349,7 +566,41 @@ function Tapd({ projects, notify, onDirty }) {
   return (
     <>
       <h3>TAPD 连接</h3>
-      <p>通过本机的 tapd-cli 读取分配给你的待办。个人令牌保存在 macOS 钥匙串里，不会写进设置文件、日志，也不会再显示出来。</p>
+      <p>
+        默认通过 TAPD MCP 读取分配给你的待办；按编号查询和「已创建」仍可使用本机的 tapd-cli。个人令牌保存在 macOS 钥匙串里，
+        不会写进设置文件、日志，也不会再显示出来。
+      </p>
+      <div className="field" role="group" aria-label="TAPD 连接方式">
+        连接方式
+        <div className="segmented">
+          {[
+            ['mcp', 'MCP'],
+            ['cli', 'tapd-cli'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={(form.transport ?? 'cli') === value ? 'chosen' : ''}
+              disabled={value === 'mcp' && !form.mcpCheckedAt}
+              title={value === 'mcp' && !form.mcpCheckedAt ? '先完成下方的一键配置' : ''}
+              onClick={() => setForm({ ...form, transport: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {form.mcpCheckedAt && <small>MCP 最近验证：{new Date(form.mcpCheckedAt).toLocaleString()}</small>}
+      </div>
+      <TapdMcpSetup
+        info={info}
+        notify={notify}
+        onSaved={() =>
+          request('tapd.settings').then((result) => {
+            setInfo(result);
+            setForm(result.settings);
+          })
+        }
+      />
       <div className="prereq-list">
         <div>
           {pre.cli ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
@@ -409,7 +660,8 @@ function Tapd({ projects, notify, onDirty }) {
         {test &&
           (test.connected ? (
             <span className="green">
-              <CheckCircle size={14} /> 已连接：{test.user.name}（{test.user.nick}）
+              <CheckCircle size={14} /> 已连接：
+              {test.user ? `${test.user.name}（${test.user.nick}）` : `TAPD MCP ${test.server?.name ?? ''} ${test.server?.version ?? ''}`}
             </span>
           ) : (
             <span className="red">
@@ -417,6 +669,7 @@ function Tapd({ projects, notify, onDirty }) {
               {test.detail ? `：${test.detail}` : ''}
             </span>
           ))}
+        {test?.scenarios && <McpScenarios scenarios={test.scenarios} />}
       </div>
       <label className="check-option">
         <input type="checkbox" checked={form.enabled === true} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
@@ -523,11 +776,223 @@ const BOT_STATE = {
   disabled: ['未连接', 'neutral'],
 };
 
+const lines = (text) => text.split(/[\n,，、;；\s]+/).map((item) => item.trim()).filter(Boolean);
+
+/// 单个机器人的编辑表单：凭据、模式、默认 CLI 与生效范围（人员 / 场景 / 项目三项交集）。
+function WecomBotEditor({ bot, catalog, notify, onSaved, onDeleted }) {
+  const [form, setForm] = useState(bot);
+  const [users, setUsers] = useState((bot.scope?.users ?? []).join('\n'));
+  const [initiators, setInitiators] = useState((bot.scope?.initiators ?? []).join('\n'));
+  const [deciders, setDeciders] = useState((bot.scope?.deciders ?? []).join('\n'));
+  const [groups, setGroups] = useState((bot.scope?.groups ?? []).map((group) => `${group.chatId} ${group.name ?? ''}`.trim()).join('\n'));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const scope = form.scope ?? {};
+  const setScope = (patch) => setForm((current) => ({ ...current, scope: { ...(current.scope ?? {}), ...patch } }));
+  const status = bot.status;
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const payload = {
+        ...form,
+        scope: {
+          ...scope,
+          users: lines(users),
+          initiators: scope.initiators == null ? null : lines(initiators),
+          deciders: lines(deciders),
+          groups: groups.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+            const [chatId, ...rest] = line.split(/\s+/);
+            return { chatId, name: rest.join(' ') || chatId };
+          }),
+        },
+      };
+      await request('source.saveBot', { bot: payload });
+      notify(`已保存「${form.name}」`);
+      onSaved();
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="wecom-bot-editor">
+      <div className="robot-connection">
+        <div>
+          <PlugsConnected size={15} />
+          <b>{form.name || '新机器人'}</b>
+          <small>{status?.message ?? (status?.state === 'connected' ? '收发消息正常' : '启用并保存 Secret 后自动连接')}</small>
+        </div>
+        <span className={`pill ${BOT_STATE[status?.state]?.[1] ?? 'neutral'}`}>{BOT_STATE[status?.state]?.[0] ?? '未连接'}</span>
+        {bot.id && (
+          <button disabled={!bot.enabled || !bot.botId || !bot.secretSaved}
+            onClick={() => request('source.reconnectBot', { id: bot.id }).then(() => notify('正在重新连接…'))}>
+            重新连接
+          </button>
+        )}
+      </div>
+      <div className="cli-worktree-grid">
+        <label className="field">名称<input value={form.name ?? ''} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
+        <label className="field">Bot ID<input value={form.botId ?? ''} autoComplete="off" onChange={(event) => setForm({ ...form, botId: event.target.value })} /></label>
+        <label className="field">企业 ID（可选）<input value={form.corpId ?? ''} autoComplete="off" onChange={(event) => setForm({ ...form, corpId: event.target.value })} /></label>
+        <label className="field">对话模式
+          <select value={form.mode ?? 'chat'} onChange={(event) => setForm({ ...form, mode: event.target.value })}>
+            <option value="chat">直接对话</option>
+            <option value="work">创建和跟进 Work</option>
+          </select>
+        </label>
+        <label className="field">默认 CLI（只影响新绑定）
+          <select value={form.defaultCli ?? 'claude'} disabled={form.mode === 'work'}
+            onChange={(event) => setForm({ ...form, defaultCli: event.target.value })}>
+            {catalog.engines.map((engine) => <option key={engine.id} value={engine.id}>{engine.label}</option>)}
+          </select>
+        </label>
+        <label className="check-option">
+          <input type="checkbox" checked={form.enabled === true} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
+          启用
+        </label>
+      </div>
+      {bot.id && (
+        <SecretField
+          label="Secret"
+          saved={Boolean(bot.secretSaved)}
+          placeholder="企业微信管理后台 → 智能机器人 → 获取 Secret"
+          hint="每个机器人的 Secret 单独保存在钥匙串。同一组凭据只能由一处连接持有，在别处连接时这里会被顶替且不自动重连。"
+          onSave={async (secret) => {
+            await request('source.setBotSecret', { id: bot.id, secret });
+            notify('Secret 已保存到钥匙串');
+            onSaved();
+          }}
+          onClear={() => request('source.clearBotSecret', { id: bot.id }).then(onSaved)}
+        />
+      )}
+      <h4>生效范围（三项同时满足才处理，空集合一律拒绝）</h4>
+      <label className="check-option">
+        <input type="checkbox" checked={scope.allUsers === true} onChange={(event) => setScope({ allUsers: event.target.checked })} />
+        全部人员
+      </label>
+      {!scope.allUsers && (
+        <label className="field">使用者 userid（可以对话；换行或逗号分隔）
+          <textarea rows={2} value={users} onChange={(event) => setUsers(event.target.value)} />
+        </label>
+      )}
+      <h4>角色组</h4>
+      <label className="check-option">
+        <input type="checkbox" checked={scope.initiators == null}
+          onChange={(event) => setScope({ initiators: event.target.checked ? null : lines(initiators) })} />
+        所有使用者都可以发起 Work
+      </label>
+      {scope.initiators != null && (
+        <label className="field">任务发起人 userid（可创建、追加 Work）
+          <textarea rows={2} value={initiators} onChange={(event) => setInitiators(event.target.value)} />
+        </label>
+      )}
+      <label className="field">拍板人 userid（除发起人外，也可以在决策卡上做决定）
+        <textarea rows={2} value={deciders} onChange={(event) => setDeciders(event.target.value)} />
+      </label>
+      <small className="setting-hint">
+        同一条群消息同时 @ 了多个机器人时，按列表顺序由第一个有权限的机器人处理，其余回复由谁处理。拍板卡 30 分钟内有效，Work 确认卡 24 小时内有效。
+      </small>
+      <h4>场景</h4>
+      <label className="check-option">
+        <input type="checkbox" checked={scope.single === true} onChange={(event) => setScope({ single: event.target.checked })} />
+        接受私聊
+      </label>
+      <label className="check-option">
+        <input type="checkbox" checked={scope.allGroups === true} onChange={(event) => setScope({ allGroups: event.target.checked })} />
+        全部群聊
+      </label>
+      {!scope.allGroups && (
+        <label className="field">指定群聊（每行「群 chatid 名称」，名称仅用于展示）
+          <textarea rows={2} value={groups} onChange={(event) => setGroups(event.target.value)} />
+        </label>
+      )}
+      <label className="check-option">
+        <input type="checkbox" checked={scope.allProjects === true} onChange={(event) => setScope({ allProjects: event.target.checked })} />
+        全部已登记项目
+      </label>
+      {!scope.allProjects && (
+        <div className="mapping-chips">
+          {catalog.projects.map((project) => {
+            const on = (scope.projects ?? []).includes(project.id);
+            return (
+              <label className="check-option" key={project.id} title={project.path}>
+                <input type="checkbox" checked={on} onChange={() => setScope({
+                  projects: on ? scope.projects.filter((id) => id !== project.id) : [...(scope.projects ?? []), project.id],
+                })} />
+                {project.name}
+              </label>
+            );
+          })}
+        </div>
+      )}
+      <small className="setting-hint">
+        只选一个项目时，直接对话在该项目目录进行；多个项目时由对话说明目标。会话按企业 / 机器人 / 私聊或群聊 / 发送人 / 项目分别续聊。
+        单选问题会推送待拍板卡片，也可以回复编号。
+      </small>
+      {error && <div className="pane-note error" role="alert"><Warning size={14} />{error}</div>}
+      <div className="settings-actions">
+        {bot.id && (
+          <button onClick={() => request('source.deleteBot', { id: bot.id }).then(() => { notify('已删除'); onDeleted(); })}>
+            删除机器人
+          </button>
+        )}
+        <button className="primary" disabled={busy} onClick={save}>{busy ? '正在保存…' : '保存机器人'}</button>
+      </div>
+    </div>
+  );
+}
+
+function WecomBots({ notify }) {
+  const [catalog, setCatalog] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [error, setError] = useState(null);
+  const load = () => request('source.bots').then(setCatalog).catch((cause) => setError(errorText(cause)));
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, 4000);
+    return () => window.clearInterval(timer);
+  }, []);
+  if (!catalog) return error ? <div className="pane-note error">{error}</div> : null;
+  const current = selected === 'new'
+    ? { name: '新机器人', enabled: false, mode: 'chat', defaultCli: 'claude', scope: {} }
+    : catalog.bots.find((bot) => bot.id === selected);
+  return (
+    <div className="wecom-bots">
+      <h4>机器人列表</h4>
+      {!catalog.migrated && catalog.bots.length > 0 && (
+        <small className="setting-hint">保存任一机器人后，上方的单机器人设置会迁移为列表中的一项，原有 Secret 与行为保持不变。</small>
+      )}
+      <div className="mapping-chips">
+        {catalog.bots.map((bot) => (
+          <button key={bot.id} className={selected === bot.id ? 'chosen' : ''} onClick={() => setSelected(bot.id)}>
+            <span className={`pill ${BOT_STATE[bot.status?.state]?.[1] ?? 'neutral'}`}>{BOT_STATE[bot.status?.state]?.[0] ?? '—'}</span>
+            {bot.name}
+          </button>
+        ))}
+        <button onClick={() => setSelected('new')}>新增机器人</button>
+      </div>
+      {current && (
+        <WecomBotEditor
+          key={selected}
+          bot={current}
+          catalog={catalog}
+          notify={notify}
+          onSaved={() => { load(); if (selected === 'new') setSelected(null); }}
+          onDeleted={() => { setSelected(null); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
 function Wecom({ notify, onDirty, onOpenConversations }) {
   const [overview, setOverview] = useState(null);
   const [bot, setBot] = useState(null);
   const [form, setForm] = useState(null);
-  const [command, setCommand] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -541,7 +1006,6 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
   }
   useEffect(() => {
     load();
-    request('source.mcpCommand').then(setCommand).catch(() => {});
     const poll = () => request('source.botStatus').then(setBot).catch(() => {});
     poll();
     const timer = window.setInterval(poll, 2500);
@@ -569,7 +1033,6 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
   }
 
   if (!form) return error ? <div className="pane-note error">{error}</div> : <div className="pane-note">正在读取…</div>;
-  const commandLine = command ? [command.command, ...command.args].map((part) => (part.includes(' ') ? `"${part}"` : part)).join(' ') : '';
   return (
     <>
       <div className="robot-heading">
@@ -615,7 +1078,7 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
         label="Secret"
         saved={Boolean(bot?.secretSaved)}
         placeholder="在同一页点「获取 Secret」"
-        hint="Secret 只保存在钥匙串。一个机器人同一时间只能保持一条长连接：在别处（例如另一台电脑或 WorkBuddy）用同一组凭据连接时，这里会被顶替断开。"
+        hint="Secret 只保存在钥匙串。一个机器人同一时间只能保持一条长连接：在另一台电脑用同一组凭据连接时，这里会被顶替断开。"
         onSave={async (secret) => {
           await request('source.setSecret', { secret });
           notify('Secret 已保存到钥匙串');
@@ -651,7 +1114,7 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
       {form.mode === 'work' && <>
       <div className="static-rule">
         <Info size={14} />
-        接收方式（群内 @ / 私聊）由 WorkBuddy 一侧决定，应用不配置也不臆测。
+        可按企业微信机器人连接配置接收消息。
       </div>
       <label className="check-option">
         <input type="checkbox" checked={form.autoStart === true} onChange={(event) => setForm({ ...form, autoStart: event.target.checked })} />
@@ -693,21 +1156,6 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
 
       </>}
 
-      <h4>通过 WorkBuddy 接入（可选）</h4>
-      <p>
-        不用上面的机器人长连接、改由 WorkBuddy 收发时，把下面的命令作为 MCP 工具服务添加到 WorkBuddy（stdio）。
-        {overview.lastSeen ? `最近一次调用：${relativeTime(overview.lastSeen)}。` : '目前还没有收到过调用。'}
-      </p>
-      <div className="code-box copy-box">
-        <code>{commandLine || '正在读取…'}</code>
-        <button
-          aria-label="复制命令"
-          title="复制命令"
-          onClick={() => navigator.clipboard?.writeText(commandLine).then(() => notify('已复制'))}
-        >
-          <Copy size={13} />
-        </button>
-      </div>
       {error && (
         <div className="pane-note error" role="alert">
           <Warning size={14} />
@@ -723,6 +1171,7 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
           {saving ? '正在保存…' : '保存配置'}
         </button>
       </div>
+      <WecomBots notify={notify} />
     </>
   );
 }
@@ -814,7 +1263,6 @@ function Agent({ notify }) {
       <h4>尚未接入</h4>
       {[
         '把选定的技能、知识与仓规注入到 Run',
-        '检测 / 应用 WorkBuddy 同步（会修改用户级配置，需要单独验证）',
         '守卫覆盖检查与权限规则回放',
         '知识改进建议',
       ].map((text) => (
@@ -827,6 +1275,8 @@ function Agent({ notify }) {
     </>
   );
 }
+
+const MODE_LABEL = { terminal: '终端', structured: '结构化聊天', chat: 'Swttch' };
 
 export default function SettingsModal({
   initialPage,
@@ -874,10 +1324,10 @@ export default function SettingsModal({
         </nav>
         <div className="settings-detail">
           {page === 'updates' && <VersionUpdates />}
+          {page === 'cli' && <CliEngines settings={settings} providers={providers} onChange={onChange} notify={notify} />}
           {page === 'appearance' && (
             <Appearance
               settings={settings}
-              providers={providers}
               capacity={capacity}
               onChange={onChange}
               notify={notify}

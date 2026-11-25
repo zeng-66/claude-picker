@@ -281,6 +281,16 @@ struct GitService: Sendable {
     }
 
     /// 签出分支。远程分支（`origin/foo`）会建同名本地跟踪分支；本地已有同名分支时直接切过去。
+    /// 工作区导航不得把未提交改动带到另一条分支。
+    func switchWorkspaceBranch(projectPath: String, branch: String) async throws {
+        let snapshot = try await status(projectPath: projectPath)
+        guard snapshot.branch != branch else { return }
+        guard snapshot.clean else {
+            throw GitError.commandFailed("当前工作区有未提交改动，请先处理后再切换分支", recoverable: true)
+        }
+        try await switchBranch(projectPath: projectPath, branch: branch)
+    }
+
     func switchBranch(projectPath: String, branch: String) async throws {
         try Self.requireSafeRevision(branch)
         let remotes = try await remoteNames(in: projectPath)

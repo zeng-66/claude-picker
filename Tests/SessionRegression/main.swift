@@ -114,5 +114,25 @@ check(handoffFromAgy.contains("<thread-handoff>") && handoffFromAgy.contains("An
       && !handoffFromAgy.contains("<USER_REQUEST>"),
       "HandoffBuilder produces clean 4-layer envelope from Antigravity transcript")
 
+// 逐会话打开方式：会话记录优先，旧配置可读，不支持的引擎回到终端。
+check(InteractionMode.resolve(recorded: nil, provider: .claude, global: .chat, overrides: [:]) == .chat,
+      "未记录的旧会话沿用全局 Swttch 设置")
+check(InteractionMode.resolve(recorded: nil, provider: .antigravity, global: .chat, overrides: [:]) == .terminal,
+      "Swttch 仅支持 Claude，其它引擎回到终端")
+check(InteractionMode.resolve(recorded: "terminal", provider: .claude, global: .structured, overrides: [:]) == .terminal,
+      "会话记录优先于全局默认")
+check(InteractionMode.resolve(recorded: nil, provider: .codex, global: .terminal, overrides: ["codex": .structured]) == .structured,
+      "引擎覆盖决定新会话打开方式")
+check(InteractionMode.resolve(recorded: "structured", provider: .dsh, global: .terminal, overrides: [:]) == .terminal,
+      "DeepSeek 不支持结构化聊天")
+check(InteractionMode.resolve(recorded: "bogus", provider: .claude, global: .terminal, overrides: [:]) == .terminal,
+      "无法识别的记录回到默认")
+let legacySettings = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"interactionMode":"chat"}"#.utf8))
+check(legacySettings.interactionMode == .chat && legacySettings.providerModes.isEmpty, "旧版 settings.json 的图形聊天设置仍可读")
+let futureSettings = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"interactionMode":"structured","providerModes":{"codex":"structured"}}"#.utf8))
+check(futureSettings.interactionMode == .structured && futureSettings.providerModes["codex"] == .structured, "新打开方式字段可读")
+let legacyTree = try JSONDecoder().decode(TreeOrder.self, from: Data(#"{"projects":["/tmp"],"titles":{"a":"b"}}"#.utf8))
+check(legacyTree.sessionModes.isEmpty && legacyTree.titles["a"] == "b", "旧版 tree.json 缺少 sessionModes 时仍可读")
+
 if failures > 0 { exit(1) }
 print("Session regression checks passed")

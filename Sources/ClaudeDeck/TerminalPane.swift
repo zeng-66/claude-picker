@@ -105,7 +105,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
 
     private static func theme(for provider: AgentProvider) -> TerminalTheme {
         switch provider {
-        case .claude:
+        case .claude, .codex, .dsh:
             return TerminalTheme(
                 background: kTerminalBackground,
                 foreground: NSColor(srgbRed: 0.86, green: 0.85, blue: 0.84, alpha: 1),
@@ -148,11 +148,12 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         let execLabel: String
         switch provider {
         case .claude:
-            var c = "exec claude"
+            let executable = shellQuote(CliBinaryLocator.find(provider) ?? provider.commandName)
+            var c = "exec \(executable)"
             if let r = resumeId {
-                c = "exec claude --resume \(shellQuote(r))"
+                c = "exec \(executable) --resume \(shellQuote(r))"
             } else if let s = sessionId {
-                c = "exec claude --session-id \(shellQuote(s))"
+                c = "exec \(executable) --session-id \(shellQuote(s))"
             }
             c += " " + options.flags()
             if resumeId == nil {
@@ -163,9 +164,10 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
             cmd = c
             execLabel = "claude"
         case .antigravity:
-            var c = "exec agy"
+            let executable = shellQuote(CliBinaryLocator.find(provider) ?? provider.commandName)
+            var c = "exec \(executable)"
             if let r = resumeId, !r.isEmpty {
-                c = "exec agy --conversation \(shellQuote(r))"
+                c = "exec \(executable) --conversation \(shellQuote(r))"
             }
             let flags = agyOptions.flags()
             if !flags.isEmpty { c += " " + flags }
@@ -174,8 +176,27 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
             }
             cmd = c
             execLabel = "agy"
+        case .codex, .dsh:
+            execLabel = provider.commandName
+            let executable = shellQuote(CliBinaryLocator.find(provider) ?? execLabel)
+            var command = "exec \(executable)"
+            if provider == .dsh { command += " --backend dsh" }
+            if let resumeId {
+                command += provider == .codex ? " resume" : " --resume"
+                command += " \(shellQuote(resumeId))"
+            } else if let prompt = initialPrompt, !prompt.isEmpty {
+                command += " -- \(shellQuote(prompt))"
+            }
+            cmd = command
         }
-        args.append(cmd)
+        // nvm 等安装的 CLI 是 `#!/usr/bin/env node` 脚本；`zsh -lc` 不读 .zshrc，找不到 node。
+        // 把可执行文件所在目录放到 PATH 最前面，同目录里的 node 随之可用。
+        if let found = CliBinaryLocator.find(provider) {
+            let dir = (found as NSString).deletingLastPathComponent
+            args.append("export PATH=\(shellQuote(dir)):\"$PATH\"; \(cmd)")
+        } else {
+            args.append(cmd)
+        }
         let env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         view.startProcess(executable: "/bin/zsh", args: args, environment: env,
                           execName: execLabel, currentDirectory: cwd)
@@ -256,6 +277,51 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
 
     /// 切走后仍在执行或新开始执行的任务，完成后才会产生未读标记。
     private(set) var awayOutput = false
+
+    /// 结束终端并等整棵进程树真正退出后再回调（交接同一原始会话前必须如此，
+    /// 例如 Codex 的 npm 启动器还会拉起原生子进程，子进程未退出前线程仍被它持有）。超时后强制结束残留进程。
+    func terminateAndWait(timeout: TimeInterval = 6, completion: @escaping @MainActor (Bool) -> Void) {
+        let root = pid
+        guard alive, root > 0 else {
+            terminate()
+            completion(true)
+            return
+        }
+        let tree = Self.processTree(root: root)
+        terminate()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let deadline = Date().addingTimeInterval(timeout)
+            func running() -> [pid_t] { tree.filter { kill($0, 0) == 0 } }
+            while !running().isEmpty, Date() < deadline { usleep(100_000) }
+            var left = running()
+            if !left.isEmpty {
+                for pid in left { kill(pid, SIGKILL) }
+                let hard = Date().addingTimeInterval(1.5)
+                while !running().isEmpty, Date() < hard { usleep(100_000) }
+                left = running()
+            }
+            let gone = left.isEmpty
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(gone) } }
+        }
+    }
+
+    /// 根进程及其全部后代（`ps` 的 pid/ppid 快照）。
+    nonisolated static func processTree(root: pid_t) -> [pid_t] {
+        let result = Proc.run("/bin/ps", ["-A", "-o", "pid=,ppid="], timeout: 5)
+        var children: [pid_t: [pid_t]] = [:]
+        for line in result.stdout.split(separator: "\n") {
+            let parts = line.split(separator: " ").compactMap { pid_t($0) }
+            if parts.count == 2 { children[parts[1], default: []].append(parts[0]) }
+        }
+        var out: [pid_t] = [root], queue = [root]
+        while let next = queue.popLast() {
+            for child in children[next] ?? [] where !out.contains(child) {
+                out.append(child)
+                queue.append(child)
+            }
+        }
+        return out
+    }
 
     func terminate() {
         guard alive else { return }

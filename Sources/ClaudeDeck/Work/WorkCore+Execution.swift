@@ -100,7 +100,7 @@ extension WorkCore {
                 do {
                     let prepared = try WorkspaceService.prepare(work: snapshot, project: project)
                     let targetProvider = AgentProvider.parse(snapshot.executor)
-                    let foundBin = targetProvider == .claude ? ClaudeLocator.find() : CliBinaryLocator.findAgy()
+                    let foundBin = AgentExecutorFactory.executable(for: targetProvider)
                     guard let executable = foundBin else {
                         throw WorkError.unavailable("找不到 \(targetProvider.label)（\(targetProvider.commandName)）。请先安装并登录，或确认它在登录 shell 的 PATH 里。")
                     }
@@ -142,18 +142,12 @@ extension WorkCore {
                                         sessionId: sessionId, resume: known, permissionMode: work.permissionMode,
                                         model: work.model, effort: nil, environment: LoginEnv.shared.environment)
             let token = UUID().uuidString
-            let process: any AgentExecutorProcess
-            switch targetProvider {
-            case .claude:
-                process = ClaudeProcess(config: config) { [weak self] event in
-                    guard let self else { return }
-                    self.queue.async { self.handle(workId: workId, token: token, event: event) }
-                }
-            case .antigravity:
-                process = ACPProcess(config: config) { [weak self] event in
-                    guard let self else { return }
-                    self.queue.async { self.handle(workId: workId, token: token, event: event) }
-                }
+            guard let process = AgentExecutorFactory.make(config, onEvent: { [weak self] event in
+                guard let self else { return }
+                self.queue.async { self.handle(workId: workId, token: token, event: event) }
+            }) else {
+                fail(workId: workId, runId: runId, message: "\(targetProvider.label) 目前只支持原生终端", detail: nil)
+                return
             }
             do {
                 try process.start()

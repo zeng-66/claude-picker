@@ -354,6 +354,23 @@ do {
         check(error.code == .branchExists, "重名分支错误码应为 BRANCH_EXISTS，实际 \(error.code.rawValue)")
     }
 
+    let dirty = URL(fileURLWithPath: work).appendingPathComponent("dirty.txt")
+    try "unsaved work".write(to: dirty, atomically: true, encoding: .utf8)
+    do {
+        try await git.switchWorkspaceBranch(projectPath: work, branch: "feat/x")
+        failures += 1
+        print("FAIL 工作区导航不得切换有改动的仓库")
+    } catch let error as GitError {
+        let branch = try await git.currentBranch(projectPath: work)
+        check(error.code == .commandFailed && branch == "main", "工作区导航失败应保留原分支")
+        check(FileManager.default.fileExists(atPath: dirty.path), "工作区导航失败应保留未提交文件")
+    }
+    try FileManager.default.removeItem(at: dirty)
+    try await git.switchWorkspaceBranch(projectPath: work, branch: "feat/x")
+    let cleanCheckout = try await git.currentBranch(projectPath: work)
+    check(cleanCheckout == "feat/x", "干净工作区应允许导航到目标分支")
+    try await git.switchBranch(projectPath: work, branch: "main")
+
     // 签出 + 在分支上提交 + 推送（无上游 → 建立上游）
     try await git.switchBranch(projectPath: work, branch: "feat/x")
     let afterSwitch = try await git.currentBranch(projectPath: work)

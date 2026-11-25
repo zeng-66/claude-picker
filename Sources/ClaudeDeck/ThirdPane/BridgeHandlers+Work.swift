@@ -209,6 +209,13 @@ enum WorkHandlers: BridgeModule {
                 for (key, value) in patch where ["enabled", "cliPath", "workspaces", "syncOnLaunch", "endpoint"].contains(key) {
                     current[key] = value
                 }
+                // 传输方式只能在 cli / mcp 之间切换；切到 MCP 需要先通过一键配置。
+                if let transport = patch["transport"]?.stringValue, ["cli", "mcp"].contains(transport) {
+                    if transport == "mcp", current["mcpCheckedAt"] == nil {
+                        throw WorkError.rejected("请先用「一键配置」验证 TAPD MCP，再切换到 MCP。")
+                    }
+                    current["transport"] = .string(transport)
+                }
                 try core.putSetting("tapd", .object(current))
             }
             let config = TapdAdapter.settings(core)
@@ -219,7 +226,11 @@ enum WorkHandlers: BridgeModule {
         case "tapd.clearToken":
             Keychain.delete(.tapdToken)
             return .obj(["prerequisites": TapdAdapter.prerequisites(core)])
+        case "tapd.mcpSetup":
+            return try TapdMcp.setup(core, idsText: p["workspaceIds"]?.stringValue ?? "",
+                                     token: p["token"]?.stringValue, server: p["server"])
         case "tapd.test":
+            if TapdMcp.isEnabled(core) { return TapdMcp.test(core) }
             do {
                 let me = try TapdAdapter.whoami(core)
                 return .obj(["connected": .bool(true), "user": .obj(["nick": .string(me.nick), "name": .string(me.name)]),
@@ -352,6 +363,31 @@ enum WorkHandlers: BridgeModule {
         // MARK: 企业微信 / WorkBuddy
         case "source.overview":
             return SourceGateway.overview(core)
+
+        // 多机器人：每个 Bot 独立的凭据、模式、默认 CLI 与生效范围（人员 / 场景 / 项目三项交集）。
+        case "source.bots":
+            return WecomBotAdmin.list(core)
+        case "source.saveBot":
+            let saved = try WecomBotAdmin.save(core, p["bot"] ?? .null)
+            WecomBot.shared.refresh()
+            return saved
+        case "source.deleteBot":
+            try WecomBotAdmin.delete(core, id: try text(p, "id"))
+            WecomBot.shared.refresh()
+            return WecomBotAdmin.list(core)
+        case "source.setBotSecret":
+            let id = try text(p, "id")
+            try WecomBotConfig.setSecret(id, p["secret"]?.stringValue ?? "")
+            WecomBot.shared.refresh(botLocalId: id, force: true)
+            return .obj(["saved": .bool(true)])
+        case "source.clearBotSecret":
+            let id = try text(p, "id")
+            WecomBotConfig.clearSecret(id)
+            WecomBot.shared.refresh()
+            return .obj(["saved": .bool(false)])
+        case "source.reconnectBot":
+            WecomBot.shared.refresh(botLocalId: try text(p, "id"), force: true)
+            return .obj(["ok": .bool(true)])
         case "source.settings":
             guard case .object(let patch)? = p["patch"] else { return SourceGateway.settings(core) }
             var current = SourceGateway.settings(core).objectValue ?? [:]

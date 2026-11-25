@@ -93,6 +93,7 @@ enum Bridge {
         McpHandlers.self,
         AppHandlers.self,
         SessionHandlers.self,
+        CliHandlers.self,
         WorkHandlers.self,
         UpdateHandlers.self,
         PetHandlers.self,
@@ -103,7 +104,8 @@ enum Bridge {
     /// 留在主线程。
     static func runsInBackground(_ method: String) -> Bool {
         method.hasPrefix("git.") || method.hasPrefix("file.") || method.hasPrefix("mcp.") || method.hasPrefix("update.")
-            || method == "session.create" || WorkHandlers.handles(method)
+            || method == "session.create" || method == "session.setOpenMode" || method.hasPrefix("cli.")
+            || WorkHandlers.handles(method)
     }
 
     static func dispatch(method: String, params: Any?) throws -> BridgeOutcome {

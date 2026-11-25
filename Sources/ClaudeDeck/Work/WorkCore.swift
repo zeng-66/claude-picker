@@ -201,6 +201,7 @@ final class WorkCore: @unchecked Sendable {
                 "executor": .obj([
                     "claude": .str(ClaudeLocator.find()),
                     "antigravity": .str(CliBinaryLocator.findAgy()),
+                    "codex": .str(CliBinaryLocator.find(.codex)),
                 ]),
             ])
         }
@@ -545,7 +546,7 @@ final class WorkCore: @unchecked Sendable {
     /// 关闭旧执行器常驻进程、清空当前单引擎 sessionId，下一轮启动新引擎时自动从 `run_events` 拼装 `<thread-handoff>` 前情上下文。
     func switchExecutor(workId: String, executor raw: String, model: String? = nil, permissionMode: String? = nil) throws -> JSONValue {
         let target = AgentProvider.parse(raw)
-        let executable = target == .claude ? ClaudeLocator.find() : CliBinaryLocator.findAgy()
+        let executable = AgentExecutorFactory.executable(for: target)
         guard executable != nil else {
             throw WorkError.unavailable("本机未检测到 \(target.label)（\(target.commandName)），请先安装并登录后再切换。")
         }

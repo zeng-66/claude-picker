@@ -69,7 +69,7 @@ export default function WorkspaceTab({ projectPath, status, statusError, stamp, 
   const [committing, setCommitting] = useState(false);
   const [picked, setPicked] = useState(null);
   const [fileView, setFileView] = useState('差异');
-  const [diffMode, setDiffMode] = useStored('diffMode', '统一');
+  const [diffMode, setDiffMode] = useStored('diffMode', '并排');
   const [collapsed, setCollapsed] = useStored('changesCollapsed', false);
   const [changesWidth, setChangesWidth] = useStored('changesWidth', DEFAULT_WIDTH);
   const [changeRows, setChangeRows] = useStored('changeRows', DEFAULT_ROWS);
@@ -409,6 +409,8 @@ export default function WorkspaceTab({ projectPath, status, statusError, stamp, 
         ) : (
           <>
             <DiffView
+              key={selectedKey}
+              sides={selected.group ? ['HEAD', '暂存区'] : ['暂存区', '工作区']}
               hunks={diff.hunks}
               mode={diffMode}
               action={
