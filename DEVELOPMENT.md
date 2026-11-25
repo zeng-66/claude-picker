@@ -957,3 +957,12 @@ macOS 上桌宠改为整个桌面可见的透明悬浮窗（`Sources/ClaudeDeck/
 - 回归：合并后的 `test` 上会话、终端（新增全屏 CLI 单击上报、Shift 单击保持本地选中两项断言）、桥接回归通过。
 - 界面验收：开发调试包使用独立临时数据目录，在临时演示仓库中新建 Claude Code 2.1.332 会话，用 agent-desktop 真实点击确认：点击「Searched for 1 pattern, read 1 file」展开为 Read 与 Bash 两条工具调用；单击输出中的 `https://example.com/docs` 在浏览器打开；终端右键弹出复制 / 粘贴 / 全选菜单。
 - 待处理事项：本机 `/Applications/ClaudePickerTest.app` 正在使用，未覆盖安装，需用户退出后用新 DMG 替换。全屏模式下普通拖动交给 Claude Code 处理，本地选字需按住 Shift 或 Option 拖动；Codex CLI 的点击行为未验证。
+
+### 2026-11-25 macOS 测试包交付（多 CLI 与工作区改造）
+
+- `codex/wt-20261119` 的未提交改动提交为 `605579c` 并推送，合并到 `codex/agent-workspace-development-spec`（`5c908be`），再合并到 `test`（`7ba9944`），构建 `1.0.0 (2026112502)`。本次测试范围为多 CLI 与工作区改造（Codex / DeepSeek 接入、逐会话打开方式与结构化聊天、TAPD MCP、企微多机器人与决策卡、Windows 新引擎），以及同日的终端鼠标点击上报。
+- 合并 `test` 时 `DEVELOPMENT.md` 末尾两段交付记录冲突，两段均保留并按日期排序。
+- 使用 `BUILD_NUMBER=2026112502 ./scripts/build-app.sh --test --with-chat --dmg` 生成 `dist-test/ClaudePickerTest.app` 与 `dist-test/ClaudePickerTest-1.0.0.dmg`。深度签名校验和 DMG 校验均通过。
+- 回归：来源分支、合并后的当前分支与合并后的 `test` 上，会话 / 终端 / 桥接回归、Work 292 项、Git 回归、Desktop 与 Desktop 引擎回归均通过。
+- 界面验收：新测试包以独立临时数据目录和内存钥匙串（`CLAUDE_PICKER_KEYCHAIN=memory`，不连接企微机器人）启动，主窗口、项目树、引擎选择与额度栏显示正常。多 CLI 功能的控件级验收沿用上方 2026-11-19 记录，本次未重复执行。
+- 待处理事项：用新 DMG 替换 `/Applications/ClaudePickerTest.app`；Windows 安装与各引擎运行、DeepSeek 升级提示条真机触发、群内第二位成员点击拍板卡仍待验收；11-19 记录提到的第二个企微机器人 Secret 建议在企微后台重置。
