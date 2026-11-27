@@ -303,5 +303,40 @@ MainActor.assumeIsolated {
     check(!session.handleActivatedLink("https://example.com/docs"),
           "web links are not intercepted as local files")
 }
+// 接力信封是多行的：用真实 /bin/zsh 启动 claude / codex，确认多行提示词原样到达 CLI。
+// zsh 按 argv[0] 首字母选仿真模式，c 开头（claude、codex）会进入 csh 仿真，单引号不能跨行，曾导致 `zsh:1: unmatched '`。
+MainActor.assumeIsolated {
+    let probeDir = directory.appendingPathComponent("handoff-probe", isDirectory: true)
+    try? FileManager.default.createDirectory(at: probeDir, withIntermediateDirectories: true)
+    let recorder = probeDir.appendingPathComponent("fake-cli")
+    try? "#!/bin/sh\nfor last; do :; done\nprintf '%s' \"$last\" > \"$0.out\"\nexec /bin/cat\n"
+        .write(to: recorder, atomically: true, encoding: .utf8)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: recorder.path)
+    let previousShell = ProcessInfo.processInfo.environment["CLAUDE_PICKER_TEST_SHELL"]
+    setenv("CLAUDE_PICKER_TEST_SHELL", "/bin/zsh", 1)
+    setenv("CLAUDE_PICKER_CLAUDE_BIN", recorder.path, 1)
+    setenv("CLAUDE_PICKER_CODEX_BIN", recorder.path, 1)
+    defer {
+        if let previousShell { setenv("CLAUDE_PICKER_TEST_SHELL", previousShell, 1) }
+        unsetenv("CLAUDE_PICKER_CLAUDE_BIN")
+        unsetenv("CLAUDE_PICKER_CODEX_BIN")
+    }
+    check(TerminalSession.shellArgv0 == "zsh", "the launch shell keeps argv[0] = zsh")
+    let prompt = "<thread-handoff>\n第一行 `code` $HOME 'quoted' \"double\"\n\n## 3. 最近对话\n</thread-handoff>"
+    for provider in [AgentProvider.claude, .codex] {
+        let output = URL(fileURLWithPath: recorder.path + ".out")
+        try? FileManager.default.removeItem(at: output)
+        let session = TerminalSession(cwd: probeDir.path, resumeId: nil, sessionId: UUID().uuidString.lowercased(),
+                                      prompt: prompt, provider: provider, options: RenderOptions(), fontName: "", fontSize: 12)
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline, !FileManager.default.fileExists(atPath: output.path) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        let received = (try? String(contentsOf: output, encoding: .utf8)) ?? "<none>"
+        check(received == prompt, "\(provider.rawValue) receives the multi-line handoff prompt intact, got \(received.prefix(80))")
+        session.terminate()
+    }
+}
+
 if failures > 0 { exit(1) }
 print("Terminal regression checks passed")

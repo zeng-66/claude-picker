@@ -234,6 +234,9 @@ enum TerminalLinkResolver {
 
 /// 一个内嵌终端会话：包装 LocalProcessTerminalView，负责启停 claude。
 final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalViewDelegate, @unchecked Sendable {
+    /// 启动 CLI 的 zsh 的 argv[0]。不能用 CLI 名：见 `start` 里的说明（c 开头会触发 csh 仿真）。
+    static let shellArgv0 = "zsh"
+
     @Published private(set) var title: String = ""
     @Published private(set) var alive = false
     /// 优先使用 OSC 7501 任务状态，兼容旧版 CLI 的 OSC 标题忙闲信号。
@@ -393,7 +396,6 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         guard !alive else { return }
         var args = ["-lc"]
         let cmd: String
-        let execLabel: String
         switch provider {
         case .claude:
             let executable = shellQuote(CliBinaryLocator.find(provider) ?? provider.commandName)
@@ -410,7 +412,6 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
                 if let prompt = initialPrompt, !prompt.isEmpty { c += " -- \(shellQuote(prompt))" }
             }
             cmd = c
-            execLabel = "claude"
         case .antigravity:
             let executable = shellQuote(CliBinaryLocator.find(provider) ?? provider.commandName)
             var c = "exec \(executable)"
@@ -423,10 +424,8 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
                 c += " -i \(shellQuote(prompt))"
             }
             cmd = c
-            execLabel = "agy"
         case .codex:
-            execLabel = provider.commandName
-            let executable = shellQuote(CliBinaryLocator.find(provider) ?? execLabel)
+            let executable = shellQuote(CliBinaryLocator.find(provider) ?? provider.commandName)
             let flags = codexOptions.flags()
             var command = "exec \(executable)"
             if let resumeId {
@@ -441,8 +440,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
             }
             cmd = command
         case .dsh:
-            execLabel = provider.commandName
-            let executable = shellQuote(CliBinaryLocator.find(provider) ?? execLabel)
+            let executable = shellQuote(CliBinaryLocator.find(provider) ?? provider.commandName)
             var command = "exec \(executable) --backend dsh"
             if let resumeId {
                 command += " --resume \(shellQuote(resumeId))"
@@ -460,8 +458,11 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
             args.append(cmd)
         }
         let env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
+        // argv[0] 必须是 zsh：zsh 按 argv[0] 首字母选择仿真模式，`claude`、`codex` 以 c 开头会进入 csh 仿真，
+        // 开启 CSH_JUNKIE_QUOTES 后单引号字符串不能跨行，多行的接力信封会报 `zsh:1: unmatched '` 并直接退出。
+        // exec 之后进程名由 CLI 自己决定，这里不需要用 CLI 名充当 argv[0]。
         view.startProcess(executable: "/bin/zsh", args: args, environment: env,
-                          execName: execLabel, currentDirectory: cwd)
+                          execName: Self.shellArgv0, currentDirectory: cwd)
         alive = true
         readyAt = Date().addingTimeInterval(provider == .dsh ? 3.0 : (provider == .antigravity ? 2.2 : 1.6))
         if provider == .antigravity {
