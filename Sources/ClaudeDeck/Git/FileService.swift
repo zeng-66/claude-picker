@@ -9,6 +9,8 @@ struct FileService: Sendable {
     static let textPreviewLimit = 1024 * 1024
     /// 图片 / PDF 加进 `content` 的 data URL 上限；超过只回元信息，前端提示用系统程序打开。
     static let binaryPreviewLimit = 8 * 1024 * 1024
+    /// 音频 / 视频加进 `content` 的 data URL 上限。
+    static let mediaPreviewLimit = 16 * 1024 * 1024
     /// `read` 的硬上限，防止前端传个巨大的 `maxBytes` 把进程内存打满。
     static let maxReadBytes = 16 * 1024 * 1024
     /// 默认不展示、不遍历的名字。`CLAUDE_PICKER_IGNORED_NAMES=foo,bar` 可追加。
@@ -80,9 +82,14 @@ struct FileService: Sendable {
         let root = try Self.projectRoot(projectPath)
         let file = try Self.resolve(path, in: root)
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory),
-              !isDirectory.boolValue else {
+        guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory) else {
             throw GitError.commandFailed("文件不存在：\(path)", recoverable: true)
+        }
+        guard !isDirectory.boolValue else {
+            throw GitError.commandFailed("不能预览目录：\(path)", recoverable: true)
+        }
+        guard FileManager.default.isReadableFile(atPath: file.path) else {
+            throw GitError.permissionDenied("没有权限读取：\(path)")
         }
 
         let values = try file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
@@ -97,18 +104,41 @@ struct FileService: Sendable {
             head = (try? handle.read(upToCount: 8192)) ?? Data()
             try? handle.close()
         }
-        let binaryByExtension = kind == .image || kind == .pdf
-        var isBinary = binaryByExtension || head.contains(0)
+        let mediaByExtension = kind == .audio || kind == .video
+        let dataUrlByExtension = kind == .image || kind == .pdf || mediaByExtension
+        let structuredBinary = kind == .document || kind == .spreadsheet || kind == .presentation || kind == .archive
+        var isBinary = dataUrlByExtension || structuredBinary || head.contains(0)
 
         var content: String?
         var truncated = false
-        if binaryByExtension {
-            // 图片 / PDF 走 data URL（复用 `content` 字段）：WKWebView 不能直接读本地
-            // file://，前端拿到后塞给 <img> / <object> 即可，不需要额外开桥方法。
-            if size <= Self.binaryPreviewLimit, let data = try? Data(contentsOf: file) {
+        var sheets: [SpreadsheetSheet]?
+        var slides: [PresentationSlide]?
+        var entries: [[String]]?
+
+        if dataUrlByExtension {
+            // 图片 / PDF / 音视频走 data URL（复用 `content` 字段）：WKWebView 不能直接读本地
+            // file://，前端拿到后塞给 <img> / <object> / <audio> / <video> 即可。
+            let byteLimit = mediaByExtension ? Self.mediaPreviewLimit : Self.binaryPreviewLimit
+            if size <= byteLimit, let data = try? Data(contentsOf: file) {
                 content = "data:\(Self.mimeType(forExtension: file.pathExtension));base64,\(data.base64EncodedString())"
             }
             truncated = true
+        } else if structuredBinary {
+            truncated = true
+            if size <= DocumentPreview.maxInspectBytes {
+                switch kind {
+                case .document:
+                    content = DocumentPreview.docxMarkdown(file: file)
+                case .spreadsheet:
+                    sheets = DocumentPreview.xlsxSheets(file: file)
+                case .presentation:
+                    slides = DocumentPreview.pptxSlides(file: file)
+                case .archive:
+                    entries = DocumentPreview.archiveEntries(file: file)
+                default:
+                    break
+                }
+            }
         } else if !isBinary {
             if size > limit {
                 truncated = true
@@ -133,7 +163,24 @@ struct FileService: Sendable {
                            isBinary: isBinary,
                            content: content,
                            truncated: truncated,
-                           kind: kind)
+                           kind: kind,
+                           sheets: sheets,
+                           slides: slides,
+                           entries: entries)
+    }
+
+    /// 校验目标文件落在项目根内且已存在（非目录），供「打开方式」等原生能力复用边界检查。
+    static func resolveExistingFile(projectPath: String, path: String) throws -> URL {
+        let root = try projectRoot(projectPath)
+        let file = try resolve(path, in: root)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory) else {
+            throw GitError.commandFailed("文件不存在：\(path)", recoverable: true)
+        }
+        guard !isDirectory.boolValue else {
+            throw GitError.commandFailed("目标路径是目录：\(path)", recoverable: true)
+        }
+        return file
     }
 
     func stat(projectPath: String, path: String) async throws -> FileStat {
@@ -273,6 +320,15 @@ struct FileService: Sendable {
         case "tiff", "tif": return "image/tiff"
         case "heic": return "image/heic"
         case "pdf": return "application/pdf"
+        case "wav": return "audio/wav"
+        case "mp3": return "audio/mpeg"
+        case "m4a": return "audio/mp4"
+        case "aac": return "audio/aac"
+        case "ogg": return "audio/ogg"
+        case "flac": return "audio/flac"
+        case "mp4", "m4v": return "video/mp4"
+        case "mov": return "video/quicktime"
+        case "webm": return "video/webm"
         default: return "application/octet-stream"
         }
     }

@@ -11,6 +11,12 @@ enum FileKind: String, Codable, Sendable, CaseIterable {
     case csv
     case image
     case pdf
+    case document
+    case spreadsheet
+    case presentation
+    case audio
+    case video
+    case archive
     case other
 
     private static let byExtension: [String: FileKind] = [
@@ -21,6 +27,13 @@ enum FileKind: String, Codable, Sendable, CaseIterable {
         "png": .image, "jpg": .image, "jpeg": .image, "gif": .image, "webp": .image,
         "svg": .image, "ico": .image, "bmp": .image, "tiff": .image, "heic": .image,
         "pdf": .pdf,
+        "docx": .document,
+        "xlsx": .spreadsheet,
+        "pptx": .presentation,
+        "wav": .audio, "mp3": .audio, "m4a": .audio, "aac": .audio, "ogg": .audio, "flac": .audio,
+        "mp4": .video, "mov": .video, "webm": .video, "m4v": .video,
+        "zip": .archive, "jar": .archive, "war": .archive, "epub": .archive,
+        "tar": .archive, "tgz": .archive, "gz": .archive, "bz2": .archive, "xz": .archive,
     ]
 
     private static let codeExtensions: Set<String> = [
@@ -218,7 +231,7 @@ struct CommitResult: Codable, Sendable, Equatable {
     let amended: Bool
 }
 
-/// SPEC §7.4。`path` 省略时由能力层拼 `项目根/.worktrees/{branchSlug}`。
+/// 路径须是项目 .worktrees 的直接子目录。省略时按分支名生成目录。
 struct CreateWorktreeInput: Codable, Sendable, Equatable {
     let projectPath: String
     let branch: String
@@ -254,16 +267,49 @@ struct FileNode: Codable, Sendable, Equatable, Identifiable {
     var id: String { path }
 }
 
+struct SpreadsheetSheet: Codable, Sendable, Equatable {
+    let name: String
+    let rows: [[String]]
+}
+
+struct PresentationSlide: Codable, Sendable, Equatable {
+    let title: String
+    let body: String
+}
+
 struct FileContent: Codable, Sendable, Equatable {
     let path: String
     let size: Int
     let modifiedAt: String
     let isBinary: Bool
-    /// 文本且未超过调用方给的 `maxBytes` 时才有值。
+    /// 文本且未超过调用方给的 `maxBytes` 时才有值；图片 / PDF / 音视频为 data URL；Word 文档为提取后的 Markdown 正文。
     let content: String?
     /// 内容被截断（二进制或超过 maxBytes）时为 true。
     let truncated: Bool
     let kind: FileKind
+    /// Excel 工作表预览数据。
+    let sheets: [SpreadsheetSheet]?
+    /// PowerPoint 幻灯片预览数据。
+    let slides: [PresentationSlide]?
+    /// 压缩包只读文件清单（`[文件名, 格式化大小]`）。
+    let entries: [[String]]?
+
+    init(path: String, size: Int, modifiedAt: String, isBinary: Bool,
+         content: String?, truncated: Bool, kind: FileKind,
+         sheets: [SpreadsheetSheet]? = nil,
+         slides: [PresentationSlide]? = nil,
+         entries: [[String]]? = nil) {
+        self.path = path
+        self.size = size
+        self.modifiedAt = modifiedAt
+        self.isBinary = isBinary
+        self.content = content
+        self.truncated = truncated
+        self.kind = kind
+        self.sheets = sheets
+        self.slides = slides
+        self.entries = entries
+    }
 }
 
 struct FileStat: Codable, Sendable, Equatable {

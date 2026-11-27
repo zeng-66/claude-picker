@@ -1,6 +1,7 @@
+import AppKit
 import Foundation
 
-/// 文件树与文件内容（`file.list` / `file.read` / `file.stat` / `file.write`）。
+/// 文件树与文件内容（`file.list` / `file.read` / `file.stat` / `file.write` / `file.openWithApps` / `file.openWith`）。
 /// 路径一律经 `FileService` 校验，realpath 后必须仍在项目根内。
 enum FileHandlers: BridgeModule {
     static func handle(_ method: String, params: Any?) throws -> BridgeOutcome {
@@ -54,9 +55,122 @@ enum FileHandlers: BridgeModule {
             }
             return .handled(["modifiedAt": modifiedAt])
 
+        case "file.openWithApps":
+            let input = try object(params, method: method)
+            let projectPath = try requiredString(input, "projectPath", method: method)
+            let filePath = try requiredString(input, "filePath", method: method)
+            let fileURL = try FileService.resolveExistingFile(projectPath: projectPath, path: filePath)
+            let apps = Self.applicationsForFile(fileURL)
+            return .handled(["apps": apps])
+
+        case "file.openWith":
+            let input = try object(params, method: method)
+            let projectPath = try requiredString(input, "projectPath", method: method)
+            let filePath = try requiredString(input, "filePath", method: method)
+            let appPath = try optionalString(input, "appPath", method: method)
+            let fileURL = try FileService.resolveExistingFile(projectPath: projectPath, path: filePath)
+            let openedName = try Self.openFile(fileURL, appPath: appPath)
+            return .handled(["ok": true, "appName": openedName])
+
         default:
             return .unknown
         }
+    }
+
+    // MARK: - Launch Services（打开方式）
+
+    private static func applicationsForFile(_ fileURL: URL) -> [[String: Any]] {
+        let workspace = NSWorkspace.shared
+        let defaultURL = workspace.urlForApplication(toOpen: fileURL)?.resolvingSymlinksInPath().standardizedFileURL
+        let rawURLs = workspace.urlsForApplications(toOpen: fileURL)
+
+        var seen = Set<String>()
+        var defaultEntry: [String: Any]?
+        var others: [(name: String, entry: [String: Any])] = []
+
+        func makeEntry(url: URL, isDefault: Bool) -> (name: String, entry: [String: Any]) {
+            let bundle = Bundle(url: url)
+            let displayName = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+                ?? FileManager.default.displayName(atPath: url.path)
+            let cleanName = displayName.hasSuffix(".app") ? String(displayName.dropLast(4)) : displayName
+            let entry: [String: Any] = [
+                "name": cleanName,
+                "path": url.path,
+                "bundleId": bundle?.bundleIdentifier ?? "",
+                "isDefault": isDefault,
+            ]
+            return (cleanName, entry)
+        }
+
+        if let defaultURL {
+            seen.insert(defaultURL.path)
+            defaultEntry = makeEntry(url: defaultURL, isDefault: true).entry
+        }
+        for raw in rawURLs {
+            let normalized = raw.resolvingSymlinksInPath().standardizedFileURL
+            guard seen.insert(normalized.path).inserted else { continue }
+            others.append(makeEntry(url: normalized, isDefault: false))
+        }
+        others.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+        var result: [[String: Any]] = []
+        if let defaultEntry { result.append(defaultEntry) }
+        result.append(contentsOf: others.map(\.entry))
+        return result
+    }
+
+    private static func openFile(_ fileURL: URL, appPath: String?) throws -> String {
+        let workspace = NSWorkspace.shared
+        let targetAppURL: URL
+        if let appPath, !appPath.isEmpty {
+            let normalized = URL(fileURLWithPath: appPath).resolvingSymlinksInPath().standardizedFileURL
+            let allowed = Set(
+                ([workspace.urlForApplication(toOpen: fileURL)].compactMap { $0 }
+                 + workspace.urlsForApplications(toOpen: fileURL))
+                .map { $0.resolvingSymlinksInPath().standardizedFileURL.path }
+            )
+            var isDir: ObjCBool = false
+            let isAppBundle = normalized.pathExtension.lowercased() == "app"
+                && FileManager.default.fileExists(atPath: normalized.path, isDirectory: &isDir)
+                && isDir.boolValue
+            guard allowed.contains(normalized.path) || isAppBundle else {
+                throw GitError.commandFailed("找不到所选应用：\(appPath)", recoverable: true)
+            }
+            targetAppURL = normalized
+        } else if let defaultURL = workspace.urlForApplication(toOpen: fileURL) {
+            targetAppURL = defaultURL.resolvingSymlinksInPath().standardizedFileURL
+        } else {
+            throw GitError.commandFailed("没有找到可打开此文件的默认应用", recoverable: true)
+        }
+
+        let appName = (Bundle(url: targetAppURL)?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (Bundle(url: targetAppURL)?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? targetAppURL.deletingPathExtension().lastPathComponent
+
+        let box = SyncBox<String>()
+        let done = DispatchSemaphore(value: 0)
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        workspace.open([fileURL], withApplicationAt: targetAppURL, configuration: config) { _, error in
+            if let error {
+                box.store(.failure(GitError.commandFailed(
+                    "无法使用「\(appName)」打开文件",
+                    detail: error.localizedDescription,
+                    recoverable: true
+                )))
+            } else {
+                box.store(.success(appName))
+            }
+            done.signal()
+        }
+        if done.wait(timeout: .now() + 10) == .timedOut {
+            throw GitError.commandFailed("使用「\(appName)」打开文件超时", recoverable: true)
+        }
+        guard let outcome = box.load() else {
+            throw GitError.commandFailed("使用「\(appName)」打开文件失败", recoverable: true)
+        }
+        return try outcome.get()
     }
 
     // MARK: - 参数

@@ -548,6 +548,14 @@ do {
     } catch let error as GitError {
         check(error.code == .permissionDenied, "越界路径错误码应为 PERMISSION_DENIED，实际 \(error.code.rawValue)")
     }
+    do {
+        _ = try await git.createWorktree(
+            CreateWorktreeInput(projectPath: work, branch: "visible-tree", path: "visible-tree"))
+        failures += 1; print("FAIL 项目内可跟踪的工作树目录应被拒绝")
+    } catch let error as GitError {
+        check(error.code == .permissionDenied, "可跟踪的目录应被拒绝")
+        check(shell("git -C \(q(work)) branch --list visible-tree").isEmpty, "拒绝后不应创建分支")
+    }
 
     // 主工作树不可移除；有未提交改动时不强删
     do {
@@ -571,6 +579,134 @@ do {
 } catch {
     failures += 1
     print("FAIL Worktree 用例：\(error)")
+}
+
+// MARK: - 12. 富文件类型预览（DOCX / XLSX / PPTX / ZIP / 音视频 / 目录错误）
+
+do {
+    let base = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gitreg-preview-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.resolvingSymlinksInPath().path
+    try FileManager.default.createDirectory(atPath: root + "/subdir", withIntermediateDirectories: true)
+
+    // 用系统 python3 zipfile 构造最小合规的 docx / xlsx / pptx / zip / wav / mp4
+    _ = shell("""
+    /usr/bin/python3 - \(shellQuote(root)) <<'PY'
+    import os, sys, zipfile
+
+    root = sys.argv[1]
+
+    with zipfile.ZipFile(os.path.join(root, "doc.docx"), "w") as z:
+        z.writestr("word/document.xml", '''<?xml version="1.0" encoding="UTF-8"?>
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>设计评审</w:t></w:r></w:p>
+            <w:p><w:r><w:t>正文内容支持第三栏预览。</w:t></w:r></w:p>
+          </w:body>
+        </w:document>''')
+
+    with zipfile.ZipFile(os.path.join(root, "report.xlsx"), "w") as z:
+        z.writestr("xl/workbook.xml", '''<?xml version="1.0" encoding="UTF-8"?>
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets>
+            <sheet name="进度" sheetId="1" r:id="rId1"/>
+            <sheet name="文件" sheetId="2" r:id="rId2"/>
+          </sheets>
+        </workbook>''')
+        z.writestr("xl/_rels/workbook.xml.rels", '''<?xml version="1.0" encoding="UTF-8"?>
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+          <Relationship Id="rId2" Target="worksheets/sheet2.xml"/>
+        </Relationships>''')
+        z.writestr("xl/sharedStrings.xml", '''<?xml version="1.0" encoding="UTF-8"?>
+        <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <si><t>功能</t></si><si><t>状态</t></si><si><t>文本预览</t></si><si><t>完成</t></si>
+        </sst>''')
+        z.writestr("xl/worksheets/sheet1.xml", '''<?xml version="1.0" encoding="UTF-8"?>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData>
+            <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+            <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="s"><v>3</v></c></row>
+          </sheetData>
+        </worksheet>''')
+        z.writestr("xl/worksheets/sheet2.xml", '''<?xml version="1.0" encoding="UTF-8"?>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData>
+            <row r="1"><c r="A1" t="inlineStr"><is><t>样本</t></is></c><c r="B1"><v>42</v></c></row>
+          </sheetData>
+        </worksheet>''')
+
+    with zipfile.ZipFile(os.path.join(root, "deck.pptx"), "w") as z:
+        z.writestr("ppt/slides/slide1.xml", '''<?xml version="1.0" encoding="UTF-8"?>
+        <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+               xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+          <p:cSld><p:spTree>
+            <p:sp><p:nvSpPr><p:nvPr><p:ph type="ctrTitle"/></p:nvPr></p:nvSpPr>
+              <p:txBody><a:p><a:r><a:t>第一页标题</a:t></a:r></a:p></p:txBody></p:sp>
+            <p:sp><p:nvSpPr><p:nvPr/></p:nvSpPr>
+              <p:txBody><a:p><a:r><a:t>第一页正文</a:t></a:r></a:p></p:txBody></p:sp>
+          </p:spTree></p:cSld>
+        </p:sld>''')
+        z.writestr("ppt/slides/slide2.xml", '''<?xml version="1.0" encoding="UTF-8"?>
+        <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+               xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+          <p:cSld><p:spTree>
+            <p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+              <p:txBody><a:p><a:r><a:t>第二页标题</a:t></a:r></a:p></p:txBody></p:sp>
+          </p:spTree></p:cSld>
+        </p:sld>''')
+
+    with zipfile.ZipFile(os.path.join(root, "bundle.zip"), "w") as z:
+        z.writestr("notes/readme.txt", "hello world")
+        z.writestr("data.bin", b"0" * 2048)
+
+    with open(os.path.join(root, "tone.wav"), "wb") as f:
+        f.write(b"RIFF" + bytes.fromhex("24000000") + b"WAVEfmt ")
+    with open(os.path.join(root, "clip.mp4"), "wb") as f:
+        f.write(bytes.fromhex("00000018") + b"ftypmp42")
+    PY
+    """)
+
+    let docx = try await files.read(projectPath: root, path: "doc.docx")
+    check(docx.kind == .document && docx.isBinary, "docx 应识别为只读 document")
+    check(docx.content?.contains("# 设计评审") == true && docx.content?.contains("正文内容支持第三栏预览。") == true,
+          "docx 应解析出标题与正文，实际 \(docx.content ?? "nil")")
+
+    let xlsx = try await files.read(projectPath: root, path: "report.xlsx")
+    check(xlsx.kind == .spreadsheet && xlsx.sheets?.count == 2, "xlsx 应解析出 2 个工作表")
+    check(xlsx.sheets?.first?.name == "进度" && xlsx.sheets?.first?.rows.last == ["文本预览", "完成"],
+          "xlsx 首工作表应解析共享字符串，实际 \(String(describing: xlsx.sheets?.first))")
+    check(xlsx.sheets?.last?.name == "文件" && xlsx.sheets?.last?.rows.first == ["样本", "42"],
+          "xlsx 第二工作表应解析内联文本与数字，实际 \(String(describing: xlsx.sheets?.last))")
+
+    let pptx = try await files.read(projectPath: root, path: "deck.pptx")
+    check(pptx.kind == .presentation && pptx.slides?.count == 2, "pptx 应解析出 2 页幻灯片")
+    check(pptx.slides?.first?.title == "第一页标题" && pptx.slides?.first?.body == "第一页正文",
+          "pptx 第一页应区分标题与正文，实际 \(String(describing: pptx.slides?.first))")
+
+    let zip = try await files.read(projectPath: root, path: "bundle.zip")
+    check(zip.kind == .archive && zip.entries?.count == 2, "zip 应只读列出 2 个文件，实际 \(String(describing: zip.entries))")
+    check(zip.entries?.contains(where: { $0.first == "notes/readme.txt" }) == true, "zip 清单应含 notes/readme.txt")
+    check(!FileManager.default.fileExists(atPath: root + "/notes/readme.txt"), "读取 zip 清单不应解包到磁盘")
+
+    let wav = try await files.read(projectPath: root, path: "tone.wav")
+    check(wav.kind == .audio && wav.content?.hasPrefix("data:audio/wav;base64,") == true, "wav 应返回 audio data URL")
+
+    let mp4 = try await files.read(projectPath: root, path: "clip.mp4")
+    check(mp4.kind == .video && mp4.content?.hasPrefix("data:video/mp4;base64,") == true, "mp4 应返回 video data URL")
+
+    do {
+        _ = try await files.read(projectPath: root, path: "subdir")
+        failures += 1; print("FAIL 读取目录应当返回可读错误")
+    } catch let error as GitError {
+        check(error.message.contains("目录"), "目录目标应给出明确目录提示，实际 \(error.message)")
+    }
+} catch {
+    failures += 1
+    print("FAIL 富文件类型预览用例：\(error)")
 }
 
 if failures > 0 {
