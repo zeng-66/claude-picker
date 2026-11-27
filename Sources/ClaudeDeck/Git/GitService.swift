@@ -548,6 +548,9 @@ struct GitService: Sendable {
     /// 新建分支并在 `项目根/.worktrees/{slug}` 检出。执行前逐项检查，任何一项不满足都不动磁盘：
     /// 是仓库 → 分支名合法 → 分支不存在 → 基准引用存在 → 目标路径在项目内 → 目标路径未被占用。
     func createWorktree(_ input: CreateWorktreeInput) async throws -> WorktreeResult {
+        if let command = input.command?.trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty {
+            return try await ensureUnifiedWorktree(input, command: command)
+        }
         let projectPath = input.projectPath
         guard await isRepository(path: projectPath) else { throw GitError.notARepository(projectPath) }
         let branch = input.branch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -813,7 +816,7 @@ struct GitService: Sendable {
 
     /// 接受 40 位哈希、短哈希，以及 `HEAD` / 分支名 / tag 这类修订名。
     /// 只挡两类危险输入：以 `-` 开头（会被 git 当成选项）和带空白/控制字符的串。
-    private static func isValidRevision(_ hash: String) -> Bool {
+    static func isValidRevision(_ hash: String) -> Bool {
         guard !hash.isEmpty, hash.count <= 256, !hash.hasPrefix("-") else { return false }
         return hash.unicodeScalars.allSatisfy { scalar in
             scalar != " " && !CharacterSet.controlCharacters.contains(scalar)

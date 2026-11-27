@@ -261,7 +261,7 @@ export function BranchesTab({
 
 // ---------- 工作树 ----------
 
-export function WorktreeTab({ projectPath, home, epoch, onCreateWorktree, runGit, worktreeLabels = {} }) {
+export function WorktreeTab({ projectPath, home, epoch, onCreateWorktree, runGit, worktreeLabels = {}, sessions = [] }) {
   const { data, error, loading } = useGitData('git.worktrees', projectPath, epoch);
   const [confirming, setConfirming] = useState(null);
   return (
@@ -291,6 +291,19 @@ export function WorktreeTab({ projectPath, home, epoch, onCreateWorktree, runGit
           {index > 0 &&
             (confirming === item.path ? (
               <>
+                <small className="worktree-remove-note">
+                  {(() => {
+                    const form = (path) => path?.replace(/^\/private(?=\/(?:tmp|var)\/)/, '');
+                    const root = form(item.path);
+                    const inside = sessions.filter((session) => form(session.cwd) === root || form(session.cwd)?.startsWith(root + '/'));
+                    const live = inside.filter((session) => session.running).length;
+                    const parts = [];
+                    if (inside.length) parts.push(`${inside.length} 个历史会话在此目录${live ? `（${live} 个正在运行）` : ''}`);
+                    // 统一目录（不在项目 .worktrees 下）由工作树命令登记，移除后同一任务需先清理登记才能重建。
+                    if (!item.path.startsWith(projectPath + '/.worktrees/')) parts.push('工作树命令中的任务登记会保留');
+                    return parts.length ? parts.join('；') + '。' : '';
+                  })()}
+                </small>
                 <button
                   className="danger"
                   onClick={() => {

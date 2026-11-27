@@ -3128,6 +3128,9 @@ label.settings-row {
 .cli-worktree-target div{display:grid;grid-template-columns:68px minmax(0,1fr);gap:6px}
 .cli-worktree-target dd{margin:0;color:#e7d5c7;overflow-wrap:anywhere}
 .cli-worktree-form .modal-footer{margin-top:2px}
+.worktree-remove-note{color:#d8a77f;font-size:10.5px;max-width:260px}
+.field-error{display:block;margin-top:4px;color:#e48a8a;font-size:10.5px;font-weight:400}
+.field input[aria-invalid="true"]{border-color:#b85c5c}
 .cli-worktree-empty{color:#ada0a0;font-size:10px}
 .cli-worktree-empty{margin:2px 0 6px 43px}
 .terminal-example{max-width:680px;display:grid;gap:9px}

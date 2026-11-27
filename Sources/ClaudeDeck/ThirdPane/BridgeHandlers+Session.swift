@@ -81,6 +81,7 @@ enum SessionHandlers: BridgeModule {
             }
             var cwd = projectPath
             var branch: String?
+            var worktreeAction: String?
             let workspace = dict["workspace"] as? [String: Any] ?? [:]
             if mode == "current", let tree = BridgeSupport.optionalString(workspace, "worktreePath") {
                 let registered = try BridgeSupport.blocking { try await GitService().worktrees(projectPath: projectPath) }
@@ -98,14 +99,13 @@ enum SessionHandlers: BridgeModule {
                 }
                 branch = target
             } else if mode == "worktree" {
-                let target = try BridgeSupport.string(dict, "branch")
-                let base = BridgeSupport.optionalString(dict, "baseBranch")
-                let result = try BridgeSupport.blocking {
-                    try await GitService().createWorktree(
-                        CreateWorktreeInput(projectPath: projectPath, branch: target, baseBranch: base))
-                }
+                var input = dict
+                input["projectPath"] = projectPath
+                let request = try GitHandlers.worktreeRequest(input)
+                let result = try BridgeSupport.blocking { try await GitService().createWorktree(request) }
                 cwd = result.path
                 branch = result.branch
+                worktreeAction = result.action
             }
             let workingDirectory = cwd
             let surface = BridgeSupport.optionalString(dict, "openMode").flatMap(InteractionMode.init(rawValue:))
@@ -122,6 +122,7 @@ enum SessionHandlers: BridgeModule {
                 "provider": provider.rawValue,
             ]
             if let branch { result["branch"] = branch }
+            if let worktreeAction { result["worktreeAction"] = worktreeAction }
             return .handled(result)
 
         // 跨引擎接力续聊：从原会话提取四层 `<thread-handoff>` 上下文，在同目录以目标引擎启动新会话。

@@ -178,17 +178,26 @@ enum GitHandlers: BridgeModule {
         // —— Worktree
         case "git.createWorktree":
             let input = params["input"] as? [String: Any] ?? [:]
-            let request = CreateWorktreeInput(projectPath: try projectPath(input),
-                                              branch: try string(input, "branch"),
-                                              path: optionalString(input, "path"),
-                                              baseBranch: optionalString(input, "baseBranch"))
+            let request = try worktreeRequest(input)
             return .handled(try encode(blocking { try await service.createWorktree(request) }))
+
+        // 设置页「检测」：只读执行 `<command> repo-root`，不创建任何东西。`path` 缺省取已保存的设置。
+        case "git.checkWorktreeCommand":
+            let path = try projectPath(params)
+            let saved = try BridgeSupport.onMain { try AppHandlers.delegate().store.settings.worktreeCommand }
+            let command = optionalString(params, "command") ?? saved
+            let root = try blocking { try await service.worktreeCommandRepoRoot(command: command, projectPath: path) }
+            return .handled(["repoRoot": root, "command": command])
 
         case "git.removeWorktree":
             let input = params["input"] as? [String: Any] ?? [:]
             let request = RemoveWorktreeInput(projectPath: try projectPath(input),
                                               path: try string(input, "path"),
                                               force: boolean(input, "force"))
+            let live = (try? BridgeSupport.onMain { try AppHandlers.delegate().store.liveSessionCount(under: request.path) }) ?? 0
+            guard live == 0 else {
+                throw GitError.commandFailed("这个工作树里还有 \(live) 个会话在运行，请先结束会话再移除", recoverable: true)
+            }
             return try done { try await service.removeWorktree(request) }
 
         default:
@@ -197,6 +206,22 @@ enum GitHandlers: BridgeModule {
     }
 
     // MARK: - 参数
+
+    /// `git.createWorktree` 与 `session.create`（mode = worktree）共用：统一命令从设置读取，前端不能指定。
+    static func worktreeRequest(_ input: [String: Any]) throws -> CreateWorktreeInput {
+        // 没有 AppDelegate（回归测试的纯 Git 段）时按未配置处理，即项目内 `.worktrees` 模式。
+        let command = (try? BridgeSupport.onMain { try AppHandlers.delegate().store.settings.worktreeCommand }) ?? ""
+        let branch = optionalString(input, "branch") ?? ""
+        if command.isEmpty, branch.isEmpty { _ = try string(input, "branch") }
+        return CreateWorktreeInput(projectPath: try projectPath(input),
+                                   branch: branch,
+                                   path: optionalString(input, "path"),
+                                   baseBranch: optionalString(input, "baseBranch"),
+                                   task: optionalString(input, "task"),
+                                   name: optionalString(input, "name"),
+                                   subtask: optionalString(input, "subtask"),
+                                   command: command)
+    }
 
     private static func projectPath(_ params: [String: Any]) throws -> String {
         let raw = try string(params, "projectPath")

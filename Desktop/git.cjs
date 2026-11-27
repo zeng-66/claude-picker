@@ -235,6 +235,211 @@ async function fileRequest(method, params) {
     kind: kind(target),
   };
 }
+// ---------- 工作树：统一命令与归属 ----------
+
+// 与 ai-worktree `component()` 同一规则；见 docs/worktree-unified-entry-plan.md §3。
+const WORKTREE_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const WORKTREE_COMMAND_TIMEOUT = 120000;
+const worktreeComponent = (value) => WORKTREE_COMPONENT.test(value) && !value.endsWith(".");
+
+function worktreeError(message, detail) {
+  const failure = new Error(message);
+  failure.code = "COMMAND_FAILED";
+  failure.recoverable = true;
+  if (detail) failure.detail = detail;
+  return failure;
+}
+
+async function canonical(target) {
+  try {
+    return await fs.realpath(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+// 设置里的命令路径：空 = 项目内 `.worktrees` 模式；否则必须是可执行的绝对路径。
+async function validateWorktreeCommand(raw) {
+  const command = String(raw ?? "").trim();
+  if (!command) return "";
+  if (!path.isAbsolute(command)) throw worktreeError(`工作树命令必须是绝对路径：${command}`);
+  let stat;
+  try {
+    stat = await fs.stat(command);
+  } catch {
+    throw worktreeError(`工作树命令不存在：${command}`);
+  }
+  if (!stat.isFile()) throw worktreeError(`工作树命令不存在：${command}`);
+  if (process.platform !== "win32") {
+    try {
+      await fs.access(command, require("node:fs").constants.X_OK);
+    } catch {
+      throw worktreeError(`工作树命令没有执行权限：${command}`);
+    }
+  }
+  return command;
+}
+
+async function runWorktreeCommand(command, args, timeout) {
+  try {
+    const { stdout } = await execute(command, args, {
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+      timeout,
+      encoding: "utf8",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    return stdout;
+  } catch (error) {
+    if (error.killed || error.signal === "SIGTERM")
+      throw worktreeError(`工作树命令超时（${Math.round(timeout / 1000)}s）`);
+    if (typeof error.code === "string") throw worktreeError(`工作树命令不可用：${command}`, error.message);
+    const stderr = String(error.stderr || "").trim();
+    const prefix = `${path.basename(command)}: `;
+    const lines = stderr.split("\n");
+    const last = lines.findLast((line) => line.startsWith(prefix)) ?? lines.at(-1) ?? "";
+    const message = last.startsWith(prefix) ? last.slice(prefix.length) : last;
+    throw worktreeError(message || `工作树命令失败（退出码 ${error.code}）`);
+  }
+}
+
+function parseWorktreeReply(stdout) {
+  const line = String(stdout).split("\n").filter((item) => item.trim()).at(-1);
+  let reply;
+  try {
+    reply = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!reply || !["created", "reused"].includes(reply.action)) return null;
+  if (typeof reply.path !== "string" || !path.isAbsolute(reply.path)) return null;
+  if (typeof reply.repo_root !== "string" || !path.isAbsolute(reply.repo_root)) return null;
+  return reply;
+}
+
+async function commonDirectory(directory) {
+  const raw = await git(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  return canonical(raw.trim());
+}
+
+async function ensureUnifiedWorktree(input, commandSetting) {
+  const command = await validateWorktreeCommand(commandSetting);
+  const cwd = input.projectPath;
+  const text = (value) => (typeof value === "string" ? value.trim() : "");
+  const task = text(input.task);
+  const name = text(input.name);
+  const subtask = text(input.subtask);
+  if (!task) throw worktreeError("统一工作树需要填写任务标识");
+  for (const [label, value] of [["任务标识", task], ["名称", name], ["子任务", subtask]]) {
+    if (value && !worktreeComponent(value))
+      throw worktreeError(`${label}只能包含字母、数字、点、横线和下划线，最多 100 个字符：${value}`);
+  }
+  if (!worktreeComponent([task, name, subtask].filter(Boolean).join("-")))
+    throw worktreeError("任务标识、名称和子任务合起来不能超过 100 个字符");
+  const branch = text(input.branch);
+  // 未指定基线时与项目模式一致，从项目当前分支起步。
+  const base = text(input.baseBranch) || (await git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], true)).trim();
+  if (branch) ref(branch);
+  if (base) ref(base);
+  const repo = await canonical(cwd);
+  const args = ["ensure", `--repo=${repo}`, `--task=${task}`];
+  if (name) args.push(`--name=${name}`);
+  if (subtask) args.push(`--subtask=${subtask}`);
+  if (base) args.push(`--base=${base}`);
+  if (branch) args.push(`--branch=${branch}`);
+  args.push("--json");
+  const stdout = await runWorktreeCommand(command, args, WORKTREE_COMMAND_TIMEOUT);
+  const reply = parseWorktreeReply(stdout);
+  if (!reply) throw worktreeError("工作树命令返回格式无效", String(stdout).slice(0, 200));
+
+  // 用 Git 复核：主仓库、登记、分支、common dir 任一不符都不登记会话。
+  const list = await gitRequest("git.worktrees", { projectPath: cwd });
+  if (!list.length || (await canonical(list[0].path)) !== (await canonical(reply.repo_root)))
+    throw worktreeError(`工作树命令返回的主仓库与所选项目不一致：${reply.repo_root}`);
+  const target = await canonical(reply.path);
+  let entry = null;
+  for (const item of list) if ((await canonical(item.path)) === target) entry = item;
+  if (!entry) throw worktreeError(`返回的目录不在该仓库的 Git 工作树登记中：${reply.path}`);
+  if (entry.isPrunable || entry.isBare) throw worktreeError(`Git 登记的工作树已不可用：${reply.path}`);
+  if ((entry.branch ?? null) !== (reply.branch ?? null))
+    throw worktreeError(`工作树的检出分支与命令返回不一致：${entry.branch ?? "detached HEAD"}`);
+  if ((await commonDirectory(cwd)) !== (await commonDirectory(target)))
+    throw worktreeError(`返回的目录属于另一个仓库：${reply.path}`);
+  return {
+    path: target,
+    branch: entry.branch,
+    action: reply.action,
+    mode: "unified",
+    task: reply.task ?? null,
+    baseRef: reply.base_ref ?? null,
+    baseCommit: reply.base_commit ?? null,
+    head: entry.head ?? reply.head ?? null,
+  };
+}
+
+// 项目内模式：只能建在 `<项目>/.worktrees/<slug>`，并确认 Git 忽略该目录（与 macOS 一致）。
+async function createProjectWorktree(cwd, input) {
+  const branch = ref(input.branch);
+  const root = await canonical(cwd);
+  const container = path.join(root, ".worktrees");
+  const target = input.path
+    ? path.resolve(root, input.path)
+    : path.join(container, branch.replace(/[^a-z0-9_.-]+/gi, "-").replace(/^-+|-+$/g, "") || "worktree");
+  if (path.dirname(target) !== container)
+    throw Object.assign(new Error(`工作树必须直接建在项目的 .worktrees 目录下：${target}`), { code: "PERMISSION_DENIED" });
+  if (require("node:fs").existsSync(target))
+    throw Object.assign(new Error(`Worktree 路径已存在：${target}`), { code: "WORKTREE_PATH_EXISTS" });
+  await fs.mkdir(container, { recursive: true });
+  if ((await canonical(container)) !== container)
+    throw Object.assign(new Error(`工作树目录必须位于项目内：${container}`), { code: "PERMISSION_DENIED" });
+  const common = await commonDirectory(cwd);
+  const exclude = path.join(common, "info", "exclude");
+  const existing = await fs.readFile(exclude, "utf8").catch(() => "");
+  if (!existing.split(/\r?\n/).map((line) => line.trim()).some((line) => line === ".worktrees" || line === ".worktrees/")) {
+    await fs.mkdir(path.dirname(exclude), { recursive: true });
+    await fs.writeFile(exclude, (existing && !existing.endsWith("\n") ? existing + "\n" : existing) + ".worktrees/\n");
+  }
+  try {
+    // check-ignore 不支持 git() 统一加的 --literal-pathspecs，单独调用。
+    await execute("git", ["check-ignore", "--quiet", "--", target], { cwd, windowsHide: true, timeout: 30000 });
+  } catch {
+    throw Object.assign(new Error("工作树目录未被 Git 忽略，请检查本机的 info/exclude 与仓库忽略规则"), { code: "PERMISSION_DENIED" });
+  }
+  await git(cwd, [
+    "worktree",
+    "add",
+    "-b",
+    branch,
+    target,
+    ...(input.baseBranch ? [ref(input.baseBranch)] : []),
+  ]);
+  return { path: target, branch, action: "created", mode: "project" };
+}
+
+// 会话 cwd → 主仓库。认 `<项目>/.worktrees/<名字>` 与任意位置的 linked worktree（读 `.git` 文件 → commondir），
+// 读不到时保持原路径。同步、只读小文件，扫描时逐个调用。
+function worktreeOwner(raw) {
+  const marker = raw.search(/[\\/]\.worktrees[\\/][^\\/]+[\\/]?$/);
+  if (marker > 0) return raw.slice(0, marker);
+  const sync = require("node:fs");
+  try {
+    const line = sync.readFileSync(path.join(raw, ".git"), "utf8").split(/\r?\n/)[0];
+    if (!line.startsWith("gitdir:")) return raw;
+    const gitDir = path.resolve(raw, line.slice("gitdir:".length).trim());
+    const pointer = sync.readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    if (!pointer) return raw;
+    let common = path.resolve(gitDir, pointer);
+    try {
+      common = sync.realpathSync(common);
+    } catch {}
+    if (path.basename(common) !== ".git") return raw;
+    const owner = path.dirname(common);
+    return path.resolve(owner) === path.resolve(raw) ? raw : owner;
+  } catch {
+    return raw;
+  }
+}
+
 async function gitRequest(method, p) {
   const cwd = p.projectPath ?? p.input?.projectPath;
   switch (method) {
@@ -518,20 +723,16 @@ async function gitRequest(method, p) {
         });
     }
     case "git.createWorktree": {
-      const input = p.input || p;
-      const branch = ref(input.branch);
-      const target =
-        input.path ||
-        path.join(cwd, ".worktrees", branch.replace(/[^a-z0-9_.-]+/gi, "-"));
-      await git(cwd, [
-        "worktree",
-        "add",
-        "-b",
-        branch,
-        target,
-        ...(input.baseBranch ? [ref(input.baseBranch)] : []),
-      ]);
-      return { path: path.resolve(cwd, target), branch };
+      const input = { ...(p.input || p), projectPath: cwd };
+      const command = typeof input.command === "string" ? input.command.trim() : "";
+      return command ? ensureUnifiedWorktree(input, command) : createProjectWorktree(cwd, input);
+    }
+    case "git.checkWorktreeCommand": {
+      const command = await validateWorktreeCommand(p.command);
+      if (!command) throw worktreeError("尚未填写工作树命令");
+      const root = (await runWorktreeCommand(command, ["repo-root", `--repo=${await canonical(cwd)}`], 30000)).trim();
+      if (!path.isAbsolute(root)) throw worktreeError("工作树命令返回格式无效", root.slice(0, 200));
+      return { repoRoot: root, command };
     }
     case "git.removeWorktree": {
       const input = p.input || p;
@@ -550,4 +751,4 @@ async function gitRequest(method, p) {
   }
   return { ok: true };
 }
-module.exports = { git, inside, gitRequest, fileRequest };
+module.exports = { git, inside, gitRequest, fileRequest, validateWorktreeCommand, worktreeOwner, parseWorktreeReply };

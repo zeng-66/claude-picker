@@ -1943,6 +1943,21 @@ button.danger.solid {
   width: 70px;
   padding: 6px 8px;
 }
+.worktree-command-row input {
+  flex: 1;
+  min-width: 220px;
+  padding: 6px 8px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, monospace);
+}
+.worktree-command-result {
+  display: block;
+  margin-top: 6px;
+  color: #8fbf8f;
+  overflow-wrap: anywhere;
+}
+.worktree-command-result.error {
+  color: #e48a8a;
+}
 .settings-detail button {
   border: 1px solid #3c3d44;
 }

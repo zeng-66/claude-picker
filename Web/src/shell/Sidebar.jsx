@@ -27,14 +27,18 @@ import { engineIcons } from './EngineIcon.jsx';
 const VISIBLE_SESSIONS = 5;
 const VISIBLE_GROUPS = 5;
 
+// macOS 上 /tmp、/var 是 /private 下的符号链接：会话 cwd 与 `git worktree list` 可能分别是两种写法。
+const samePathForm = (path) => path?.replace(/^\/private(?=\/(?:tmp|var)\/)/, '');
+
 function sessionGroups(sessions, worktrees = []) {
   const groups = new Map(worktrees.map((item) => {
     const key = `worktree:${item.path}`;
     return [key, { key, branch: item.branch, worktree: item.path, sessions: [] }];
   }));
   for (const session of sessions) {
-    const worktree = worktrees.find((item) => session.cwd === item.path
-      || session.cwd?.startsWith(item.path + '/'))?.path;
+    const cwd = samePathForm(session.cwd);
+    const worktree = worktrees.find((item) => cwd === samePathForm(item.path)
+      || cwd?.startsWith(samePathForm(item.path) + '/'))?.path;
     const branch = session.branch;
     const key = worktree ? `worktree:${worktree}` : branch ? `branch:${branch}` : 'unbound';
     if (!groups.has(key)) groups.set(key, { key, branch, worktree, sessions: [] });

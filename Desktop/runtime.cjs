@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { randomUUID } = require("node:crypto");
-const { git, gitRequest, fileRequest } = require("./git.cjs");
+const { git, gitRequest, fileRequest, validateWorktreeCommand, worktreeOwner } = require("./git.cjs");
 const engines = require("./engines.cjs");
 
 const defaults = {
@@ -123,9 +123,8 @@ class DesktopRuntime {
   scan() {
     const projects = new Map();
     const add = (raw) => {
-      // `<项目>/.worktrees/<名字>` 里的会话归到 `<项目>` 名下，与 macOS 一致。
-      const marker = raw.search(/[\\/]\.worktrees[\\/]/);
-      const cwd = marker > 0 ? raw.slice(0, marker) : raw;
+      // 工作树（`<项目>/.worktrees/<名字>` 或统一目录的 linked worktree）里的会话归到主仓库名下，与 macOS 一致。
+      const cwd = worktreeOwner(raw);
       if (!projects.has(cwd))
         projects.set(cwd, {
           path: cwd,
@@ -402,6 +401,20 @@ class DesktopRuntime {
         )
       )
         throw new Error("请先添加项目目录");
+      // 删除工作树前：目录里还有终端会话在运行时拒绝，与 macOS 一致。
+      if (method === "git.removeWorktree") {
+        const root = path.resolve(p.input?.path || p.path || "");
+        const live = [...this.sessions.values()].filter((session) => {
+          const cwd = path.resolve(session.cwd || "");
+          return cwd === root || cwd.startsWith(root + path.sep);
+        }).length;
+        if (live) throw new Error(`这个工作树里还有 ${live} 个会话在运行，请先结束会话再移除`);
+      }
+      // 统一工作树命令只认设置里保存的路径，前端传来的同名字段一律覆盖。
+      if (method === "git.createWorktree")
+        p = { ...p, input: { ...(p.input || p), command: this.settings.worktreeCommand || "" } };
+      if (method === "git.checkWorktreeCommand")
+        p = { ...p, command: typeof p.command === "string" ? p.command : this.settings.worktreeCommand || "" };
       return method.startsWith("git.")
         ? gitRequest(method, p)
         : fileRequest(method, p);
@@ -416,10 +429,18 @@ class DesktopRuntime {
       case "app.settings":
         if (p.interactionMode && p.interactionMode !== "terminal")
           throw new Error("Windows 的聊天方式尚未适配，请使用原生终端。");
-        Object.assign(this.settings, p);
+        {
+          const { worktreeCommand, ...patch } = p;
+          Object.assign(this.settings, patch);
+        }
         this.persist();
         this.changed();
         return this.settings;
+      case "app.setWorktreeCommand":
+        this.settings.worktreeCommand = await validateWorktreeCommand(p.path);
+        this.persist();
+        this.changed();
+        return { worktreeCommand: this.settings.worktreeCommand };
       case "app.runtime":
         this.runtime[p.key] = p.value;
         this.changed();
@@ -555,14 +576,25 @@ class DesktopRuntime {
             throw new Error("无效的分支名称");
           await git(p.projectPath, ["switch", "-c", p.branch]);
         }
+        let worktreeAction = null;
         if (p.mode === "worktree") {
           const tree = await gitRequest("git.createWorktree", {
             projectPath: p.projectPath,
-            input: { projectPath: p.projectPath, branch: p.branch },
+            input: {
+              projectPath: p.projectPath,
+              branch: p.branch,
+              baseBranch: p.baseBranch,
+              task: p.task,
+              name: p.name,
+              subtask: p.subtask,
+              command: this.settings.worktreeCommand || "",
+            },
           });
-          p = { ...p, cwd: tree.path };
+          p = { ...p, cwd: tree.path, branch: tree.branch };
+          worktreeAction = tree.action;
         }
-        return this.open(p, true);
+        const opened = await this.open(p, true);
+        return worktreeAction && opened && typeof opened === "object" ? { ...opened, worktreeAction } : opened;
       }
       case "app.prompt": {
         if (!this.active)

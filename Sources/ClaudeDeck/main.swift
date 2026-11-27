@@ -449,6 +449,7 @@ final class Store: ObservableObject {
                 }),
                 "scanAntigravity": settings.scanAntigravity,
                 "providerFilter": settings.providerFilter,
+                "worktreeCommand": settings.worktreeCommand,
             ] as [String: Any],
             "usage": usageInfo(),
             // macOS 原生：桌宠在桌面悬浮窗里显示，主窗口不再画窗口内桌宠。
@@ -556,7 +557,7 @@ final class Store: ObservableObject {
         return projects.firstIndex { $0.path == resolved || resolvedPath($0.path) == resolved }
     }
 
-    /// 会话所属的项目：cwd 就是项目目录，或者是它的 `.worktrees/<名字>`。
+    /// 会话所属的项目：cwd 就是项目目录，或者是它的工作树（`.worktrees/<名字>` 或统一目录里的 linked worktree）。
     func projectIndex(owning cwd: String) -> Int? {
         if let index = projectIndex(path: cwd) { return index }
         let resolved = resolvedPath(cwd)
@@ -735,6 +736,18 @@ final class Store: ObservableObject {
         guard projects.indices.contains(i) else { return }
         let p = projects[i]
         open(cwd: p.path, sid: nil, label: "新建 · \(p.title)", provider: settings.defaultProvider)
+    }
+
+    /// 工作树里还开着的会话数：终端进程、图形聊天与结构化聊天，cwd 在该目录或其子目录内都算。删除工作树前用它拦截。
+    func liveSessionCount(under path: String) -> Int {
+        let root = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        func inside(_ cwd: String) -> Bool {
+            let real = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().standardizedFileURL.path
+            return real == root || real.hasPrefix(root + "/")
+        }
+        let terminals = panes.keys.filter { key in key.split(separator: "|").contains { inside(String($0)) } }.count
+        let chats = [chatTarget?.cwd, structuredTarget?.cwd].compactMap { $0 }.filter(inside).count
+        return terminals + chats
     }
 
     /// 多终端会话 key：Claude 保持 `<realpath>|<sid>` 向后兼容，其它引擎带 `<provider>|<realpath>|<sid>` 防冲突。
@@ -2108,6 +2121,17 @@ final class Store: ObservableObject {
     // MARK: 设置
 
     /// 网页外壳改设置（字号、密度、三栏显隐、终端栏宽度…），落盘并让终端字号即时生效。
+    /// 统一工作树命令单独保存：路径要先校验，不合格时把原因抛给前端，而不是像其它设置那样静默忽略。
+    @discardableResult
+    func setWorktreeCommand(_ raw: String) throws -> String {
+        let path = try WorktreeCommand.validateExecutable(raw)
+        guard path != settings.worktreeCommand else { return path }
+        settings.worktreeCommand = path
+        SettingsStore.save(settings)
+        pushState()
+        return path
+    }
+
     func applySettings(_ patch: [String: Any]) {
         var next = settings
         func number(_ key: String) -> Double? { (patch[key] as? NSNumber)?.doubleValue }
@@ -2947,7 +2971,7 @@ func buildProjects() -> [Project] {
     for (k, v) in rawMap {
         // scan 出的 cwd 可能是 /private/tmp 这类符号链接形式，而 hiddenProjects 存的是
         // 规范化后的路径；两边必须用同一形态比较，否则「从列表移除」重启后会重新出现。
-        // 在 `<项目>/.worktrees/<名字>` 里跑的会话归到 `<项目>` 名下（会话自己的 cwd 不变）。
+        // 在工作树（`.worktrees/<名字>` 或统一目录）里跑的会话归到主仓库名下（会话自己的 cwd 不变）。
         let kstd = WorktreeLayout.owner(of: URL(fileURLWithPath: k).resolvingSymlinksInPath().path)
         guard !hiddenP.contains(kstd) else { continue }
         let kept = v.filter { !hiddenS.contains($0.id) && !foldedIds.contains($0.id) }.map { session -> Session in

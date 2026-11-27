@@ -709,6 +709,145 @@ do {
     print("FAIL 富文件类型预览用例：\(error)")
 }
 
+// MARK: - 12. 统一工作树命令（ai-worktree）与按 common dir 归属
+
+do {
+    let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        .appendingPathComponent("gitreg-unified-\(UUID().uuidString)").path
+    let q = shellQuote
+    let fm = FileManager.default
+    try fm.createDirectory(atPath: base, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(atPath: base) }
+    let work = base + "/work"
+    _ = shell("""
+        git init -q -b main \(q(work)) && cd \(q(work)) && \
+        git config user.email t@t && git config user.name t && \
+        echo a > a.txt && git add . && git commit -qm init && echo dirty >> a.txt
+        """)
+    func script(_ name: String, _ body: String) throws -> String {
+        let path = base + "/bin/" + name
+        try fm.createDirectory(atPath: base + "/bin", withIntermediateDirectories: true)
+        try ("#!/bin/sh\n" + body + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        return path
+    }
+    func expectFailure(_ label: String, _ input: CreateWorktreeInput, contains text: String) async {
+        do {
+            _ = try await git.createWorktree(input)
+            failures += 1; print("FAIL \(label) 应失败")
+        } catch let error as GitError {
+            check(error.message.contains(text), "\(label) 的错误应含「\(text)」，实际 \(error.message)")
+        } catch {
+            failures += 1; print("FAIL \(label) 抛了非 GitError：\(error)")
+        }
+    }
+
+    // 纯函数
+    check(WorktreeCommand.isValidComponent("1030864") && WorktreeCommand.isValidComponent("a.b_c-1"), "合法任务标识")
+    check(!WorktreeCommand.isValidComponent("-a") && !WorktreeCommand.isValidComponent("a.")
+          && !WorktreeCommand.isValidComponent("中文") && !WorktreeCommand.isValidComponent(String(repeating: "a", count: 101)),
+          "非法任务标识应被拒绝")
+    check(WorktreeCommand.failureMessage("ai-worktree: The branch already exists: x\n", command: "/x/ai-worktree")
+          == "The branch already exists: x", "应去掉命令名前缀")
+    check(WorktreeCommand.parseReply("noise\n{\"action\":\"reused\",\"repo_root\":\"/r\",\"path\":\"/p\",\"branch\":null}\n")?.action == "reused",
+          "应解析最后一行 JSON，branch 可为 null")
+    check(WorktreeCommand.parseReply("{\"action\":\"weird\",\"repo_root\":\"/r\",\"path\":\"/p\"}") == nil, "未知 action 视为格式无效")
+    check(WorktreeCommand.parseReply("not json") == nil, "非 JSON 视为格式无效")
+    check((try? WorktreeCommand.validateExecutable("")) == "", "空路径表示不启用")
+    check((try? WorktreeCommand.validateExecutable("bin/ai-worktree")) == nil, "相对路径应被拒绝")
+    check((try? WorktreeCommand.validateExecutable(base + "/missing")) == nil, "不存在的命令应被拒绝")
+    try "x".write(toFile: base + "/plain", atomically: true, encoding: .utf8)
+    check((try? WorktreeCommand.validateExecutable(base + "/plain")) == nil, "没有执行权限的文件应被拒绝")
+
+    // 假命令：失败、格式无效、返回未登记目录、主仓库不符
+    let failing = try script("fake-worktree", "echo 'fake-worktree: The branch already exists: worktree/x' >&2; exit 1")
+    await expectFailure("退出码非 0", CreateWorktreeInput(projectPath: work, branch: "", task: "T1", command: failing),
+                        contains: "The branch already exists")
+    let garbage = try script("garbage", "echo not-json")
+    await expectFailure("JSON 无效", CreateWorktreeInput(projectPath: work, branch: "", task: "T1", command: garbage),
+                        contains: "格式无效")
+    let stray = try script("stray", "echo '{\"action\":\"created\",\"repo_root\":\"\(work)\",\"path\":\"\(base)/nowhere\",\"branch\":\"b\"}'")
+    await expectFailure("未登记目录", CreateWorktreeInput(projectPath: work, branch: "", task: "T1", command: stray),
+                        contains: "不在该仓库的 Git 工作树登记中")
+    let otherRepo = try script("other", "echo '{\"action\":\"created\",\"repo_root\":\"\(base)\",\"path\":\"\(work)\",\"branch\":\"main\"}'")
+    await expectFailure("主仓库不符", CreateWorktreeInput(projectPath: work, branch: "", task: "T1", command: otherRepo),
+                        contains: "主仓库与所选项目不一致")
+    await expectFailure("缺任务标识", CreateWorktreeInput(projectPath: work, branch: "", command: failing), contains: "任务标识")
+    await expectFailure("非法子任务", CreateWorktreeInput(projectPath: work, branch: "", task: "T1", subtask: "坏", command: failing),
+                        contains: "子任务")
+    check(shell("git -C \(q(work)) worktree list --porcelain | grep -c '^worktree '").trimmingCharacters(in: .whitespacesAndNewlines) == "1",
+          "假命令失败后不应留下工作树")
+
+    // 真实 ai-worktree：用包装脚本把统一根固定在临时目录，绝不写真实 ~/project/worktrees。
+    let real = NSHomeDirectory() + "/.local/bin/ai-worktree"
+    if fm.isExecutableFile(atPath: real) {
+        let root = base + "/shared-root"
+        let wrapper = try script("ai-worktree", "AI_WORKTREE_ROOT=\(q(root)) exec \(q(real)) \"$@\"")
+        let input = CreateWorktreeInput(projectPath: work, branch: "", baseBranch: "main",
+                                        task: "1131010001030864", name: "listing", command: wrapper)
+        // 并发两次：命令按仓库加锁，只登记一个工作树，一次 created 一次 reused。
+        async let first = git.createWorktree(input)
+        async let second = git.createWorktree(input)
+        let pair = try await [first, second]
+        check(Set(pair.map(\.action)) == ["created", "reused"], "并发创建应一次 created 一次 reused，实际 \(pair.map(\.action))")
+        check(pair[0].path == pair[1].path && WorktreeCommand.canonical(pair[0].path).hasPrefix(root + "/"), "两次应得到统一根下的同一路径：\(pair.map(\.path))")
+        check(pair.allSatisfy { $0.mode == "unified" && $0.branch == "worktree/1131010001030864-listing" },
+              "统一模式应返回命令生成的分支，实际 \(pair.map { $0.branch ?? "nil" })")
+        check(pair[0].baseCommit == pair[1].baseCommit && pair[0].baseCommit != nil, "复用应回报同一基线")
+        check(shell("git -C \(q(work)) worktree list --porcelain | grep -c '^worktree '").trimmingCharacters(in: .whitespacesAndNewlines) == "2",
+              "并发创建只应多出一条工作树登记")
+        check(WorktreeLayout.owner(of: pair[0].path) == work, "统一目录里的工作树应归到主仓库，实际 \(WorktreeLayout.owner(of: pair[0].path))")
+        check(shell("git -C \(q(work)) status --porcelain").contains("a.txt"), "主工作区的未提交修改应保持")
+
+        // 子任务隔离
+        let subA = try await git.createWorktree(CreateWorktreeInput(projectPath: work, branch: "", baseBranch: "main",
+                                                                    task: "T2", subtask: "a", command: wrapper))
+        let subB = try await git.createWorktree(CreateWorktreeInput(projectPath: work, branch: "", baseBranch: "main",
+                                                                    task: "T2", subtask: "b", command: wrapper))
+        check(subA.path != subB.path && subA.branch != subB.branch, "子任务应得到不同的路径和分支")
+        // 未传基线、仓库也没有远端：从项目当前分支起步，而不是要求 --base
+        let noBase = try await git.createWorktree(CreateWorktreeInput(projectPath: work, branch: "", task: "T4", command: wrapper))
+        check(noBase.action == "created" && noBase.baseRef == "main", "未传基线时应从当前分支 main 起步，实际 \(noBase.baseRef ?? "nil")")
+
+        // 分支冲突：已有同名分支时报错，原分支不动、不多建工作树
+        _ = shell("git -C \(q(work)) branch worktree/T3-taken main")
+        let before = shell("git -C \(q(work)) rev-parse worktree/T3-taken")
+        await expectFailure("分支已存在", CreateWorktreeInput(projectPath: work, branch: "", baseBranch: "main",
+                                                          task: "T3", name: "taken", command: wrapper), contains: "already exists")
+        check(shell("git -C \(q(work)) rev-parse worktree/T3-taken") == before, "冲突后原分支应保持不变")
+
+        // 统一目录以外的历史工作树：按任务 ID 复用原路径，并归到主仓库
+        let legacy = base + "/legacy/feature-1030999"
+        _ = shell("git -C \(q(work)) worktree add -q \(q(legacy)) -b feature/1030999-old main")
+        let reused = try await git.createWorktree(CreateWorktreeInput(projectPath: work, branch: "", task: "1030999",
+                                                                      name: "old", command: wrapper))
+        check(reused.action == "reused" && WorktreeCommand.canonical(reused.path) == legacy, "应复用历史工作树原路径，实际 \(reused.action) \(reused.path)")
+        check(WorktreeLayout.owner(of: legacy) == work, "历史工作树应归到主仓库")
+
+        // 设置页检测
+        let detected = try await git.worktreeCommandRepoRoot(command: wrapper, projectPath: reused.path)
+        check(detected == work, "repo-root 应返回主仓库，实际 \(detected)")
+
+        // 删除后的登记残留：同一任务再 ensure 会报错（命令侧待补 release，见方案 §8）
+        try await git.removeWorktree(RemoveWorktreeInput(projectPath: work, path: subA.path))
+        await expectFailure("删除后再建", CreateWorktreeInput(projectPath: work, branch: "", baseBranch: "main",
+                                                          task: "T2", subtask: "a", command: wrapper), contains: "registration")
+    } else {
+        print("SKIP 未找到 ~/.local/bin/ai-worktree，跳过真实命令用例")
+    }
+
+    // 归属：主仓库、普通目录、已删除路径、子模块式 .git 文件（无 commondir）
+    check(WorktreeLayout.owner(of: work) == work, "主仓库归属是它自己")
+    check(WorktreeLayout.owner(of: base) == base, "普通目录归属是它自己")
+    check(WorktreeLayout.owner(of: base + "/deleted/tree") == base + "/deleted/tree", "已删除路径保持原样")
+    try fm.createDirectory(atPath: base + "/module/.git-dir", withIntermediateDirectories: true)
+    try "gitdir: .git-dir\n".write(toFile: base + "/module/.git", atomically: true, encoding: .utf8)
+    check(WorktreeLayout.owner(of: base + "/module") == base + "/module", "没有 commondir 的 .git 文件不是 linked worktree")
+} catch {
+    failures += 1
+    print("FAIL 统一工作树用例：\(error)")
+}
+
 if failures > 0 {
     print("\(failures) 项失败")
     exit(1)

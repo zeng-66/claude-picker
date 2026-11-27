@@ -262,6 +262,29 @@ MainActor.assumeIsolated {
     expect(store.settings.density == "compact" && store.settings.terminalWidthPercent == 40, "app.settings 应生效")
     _ = ok("app.settings", ["density": "comfortable", "terminalWidth": 30])
 
+    // 统一工作树命令：设置校验、未填任务、假命令返回已登记的工作树 → reused / unified
+    expect(call("app.setWorktreeCommand", ["path": "relative/ai-worktree"]).1?.hasPrefix("COMMAND_FAILED") == true,
+           "相对路径的工作树命令应被拒绝")
+    let unifiedTree = tempRoot.appendingPathComponent("shared/T9-demo").path
+    _ = sh("git -C '\(repo)' worktree add -q '\(unifiedTree)' -b worktree/T9-demo")
+    let fakeCommand = tempRoot.appendingPathComponent("fake-worktree")
+    try? "#!/bin/sh\necho '{\"action\":\"reused\",\"repo_root\":\"\(repo)\",\"task\":\"T9\",\"path\":\"\(unifiedTree)\",\"branch\":\"worktree/T9-demo\"}'\n"
+        .write(to: fakeCommand, atomically: true, encoding: .utf8)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCommand.path)
+    _ = ok("app.setWorktreeCommand", ["path": fakeCommand.path])
+    expect(store.settings.worktreeCommand == fakeCommand.path, "工作树命令应写入设置")
+    let (_, noTask) = call("git.createWorktree", ["input": ["projectPath": repo]])
+    expect(noTask?.hasPrefix("COMMAND_FAILED") == true, "统一模式缺任务标识应回 COMMAND_FAILED，实际 \(noTask ?? "nil")")
+    let unified = ok("git.createWorktree", ["input": ["projectPath": repo, "task": "T9", "name": "demo",
+                                                      "command": "/bin/false"]]) as? [String: Any]
+    expect(unified?["action"] as? String == "reused" && unified?["mode"] as? String == "unified"
+           && (unified?["path"] as? String).map(WorktreeCommand.canonical) == WorktreeCommand.canonical(unifiedTree), "统一模式应返回复核过的复用结果，实际 \(String(describing: unified))")
+    let checked = call("git.checkWorktreeCommand", ["projectPath": repo]).0 as? [String: Any]
+    expect(checked == nil, "假命令不支持 repo-root，检测应报错而不是成功")
+    _ = ok("app.setWorktreeCommand", ["path": ""])
+    expect(store.settings.worktreeCommand.isEmpty, "清空后回到项目模式")
+    _ = sh("git -C '\(repo)' worktree remove '\(unifiedTree)'")
+
     // 新建会话：当前分支
     let created = ok("session.create", ["projectPath": repo, "title": "桥测试会话", "mode": "current"]) as? [String: Any]
     let sid = created?["sessionId"] as? String ?? ""

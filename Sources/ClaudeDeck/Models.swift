@@ -282,18 +282,45 @@ struct TreeOrder: Codable {
     }
 }
 
-/// 会话的工作目录 → 所属项目目录。在 `<项目>/.worktrees/<名字>` 里跑的会话归到 `<项目>` 名下，
+/// 会话的工作目录 → 所属项目目录。在工作树里跑的会话归到主仓库名下，
 /// 否则每个 worktree 都会在侧栏里冒出来一个独立的「项目」。
+/// 两种工作树都认：项目内 `<项目>/.worktrees/<名字>`，以及统一目录等任意位置的 linked worktree
+/// （按其 `.git` 文件指向的 common dir 找主仓库）。只读小文件、不起进程，扫描会话时可以逐个调用。
 enum WorktreeLayout {
     static let directoryName = ".worktrees"
 
     static func owner(of cwd: String) -> String {
         let marker = "/" + directoryName + "/"
-        guard let range = cwd.range(of: marker, options: .backwards) else { return cwd }
-        let rest = cwd[range.upperBound...]
-        // 只认 `.worktrees/<名字>` 这一层，再往下的子目录不是 worktree 根
-        guard !rest.isEmpty, !rest.contains("/") else { return cwd }
-        return String(cwd[..<range.lowerBound])
+        if let range = cwd.range(of: marker, options: .backwards) {
+            let rest = cwd[range.upperBound...]
+            // 只认 `.worktrees/<名字>` 这一层，再往下的子目录不是 worktree 根
+            if !rest.isEmpty, !rest.contains("/") { return String(cwd[..<range.lowerBound]) }
+        }
+        return linkedOwner(of: cwd) ?? cwd
+    }
+
+    /// linked worktree 的 `.git` 是文件：`gitdir: <common>/worktrees/<名字>`，该目录下的 `commondir`
+    /// 指回 common dir。common dir 以 `.git` 结尾时主仓库就是它的父目录。`.git` 是目录（主仓库）、
+    /// 读不到（路径已删除）、没有 `commondir`（子模块）或 bare 仓库时返回 nil，调用方保持原路径。
+    static func linkedOwner(of cwd: String) -> String? {
+        let root = URL(fileURLWithPath: cwd, isDirectory: true)
+        guard let text = try? String(contentsOf: root.appendingPathComponent(".git"), encoding: .utf8),
+              let line = text.split(whereSeparator: \.isNewline).first, line.hasPrefix("gitdir:") else { return nil }
+        let raw = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return nil }
+        let gitDir = raw.hasPrefix("/") ? URL(fileURLWithPath: raw, isDirectory: true)
+                                        : root.appendingPathComponent(raw, isDirectory: true)
+        guard let pointer = try? String(contentsOf: gitDir.appendingPathComponent("commondir"), encoding: .utf8) else {
+            return nil
+        }
+        let relative = pointer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !relative.isEmpty else { return nil }
+        let common = (relative.hasPrefix("/") ? URL(fileURLWithPath: relative, isDirectory: true)
+                                              : gitDir.appendingPathComponent(relative, isDirectory: true))
+            .standardizedFileURL.resolvingSymlinksInPath()
+        guard common.lastPathComponent == ".git" else { return nil }
+        let owner = common.deletingLastPathComponent().standardizedFileURL.path
+        return owner == root.standardizedFileURL.path ? nil : owner
     }
 }
 
@@ -391,6 +418,8 @@ struct AppSettings: Codable, Equatable {
     var scanAntigravity: Bool = true
     /// 侧栏会话筛选（all / claude / antigravity）
     var providerFilter: String = "all"
+    /// 本机统一工作树命令的绝对路径（如 `~/.local/bin/ai-worktree`）；空 = 项目内 `.worktrees` 模式。
+    var worktreeCommand: String = ""
 
     init() {}
 
@@ -427,6 +456,7 @@ struct AppSettings: Codable, Equatable {
         defaultProvider = ((try? c.decodeIfPresent(AgentProvider.self, forKey: .defaultProvider)) ?? nil) ?? d.defaultProvider
         scanAntigravity = try c.decodeIfPresent(Bool.self, forKey: .scanAntigravity) ?? d.scanAntigravity
         providerFilter = try c.decodeIfPresent(String.self, forKey: .providerFilter) ?? d.providerFilter
+        worktreeCommand = (try? c.decodeIfPresent(String.self, forKey: .worktreeCommand)) ?? d.worktreeCommand
     }
 }
 

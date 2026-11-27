@@ -244,7 +244,71 @@ function CliEngines({ settings, providers, onChange, notify }) {
   );
 }
 
-function Appearance({ settings, capacity, onChange, notify }) {
+// 统一工作树命令：填本机 ai-worktree 的绝对路径后，创建工作树改由它创建或复用；留空沿用项目内 .worktrees。
+function WorktreeCommandSetting({ saved, projects, notify, onSaved }) {
+  const [value, setValue] = useState(saved);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  useEffect(() => setValue(saved), [saved]);
+  const project = projects.find((item) => !item.isHome);
+  const dirty = value.trim() !== saved;
+
+  async function save() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const reply = await request('app.setWorktreeCommand', { path: value.trim() });
+      // 外壳的 settings 只在启动时取一次快照，这里同步本地副本，创建工作树表单才会立即切到统一模式。
+      onSaved(reply.worktreeCommand ?? '');
+      notify(reply.worktreeCommand ? '已启用统一工作树命令' : '已改回项目内 .worktrees 模式');
+    } catch (cause) {
+      setResult({ ok: false, text: errorText(cause) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function check() {
+    if (!project) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const reply = await request('git.checkWorktreeCommand', { projectPath: project.path, command: value.trim() });
+      setResult({ ok: true, text: `可用 · ${project.title} 的主仓库：${reply.repoRoot}` });
+    } catch (cause) {
+      setResult({ ok: false, text: errorText(cause) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="field">
+      统一工作树命令
+      <div className="settings-inline worktree-command-row">
+        <input
+          aria-label="统一工作树命令路径"
+          placeholder="留空使用项目内 .worktrees，例如 /Users/me/.local/bin/ai-worktree"
+          spellCheck={false}
+          value={value}
+          onChange={(event) => { setValue(event.target.value); setResult(null); }}
+        />
+        <button type="button" disabled={busy || !value.trim() || !project} title={project ? '' : '先添加一个项目目录'} onClick={check}>
+          检测
+        </button>
+        <button type="button" className="primary" disabled={busy || !dirty} onClick={save}>保存</button>
+      </div>
+      <small>启用后创建工作树需要填写任务标识，同一任务在各工具间复用同一目录。检测只读执行 repo-root，不会创建任何东西。</small>
+      {result && (
+        <small className={result.ok ? 'worktree-command-result' : 'worktree-command-result error'} role={result.ok ? 'status' : 'alert'}>
+          {result.text}
+        </small>
+      )}
+    </div>
+  );
+}
+
+function Appearance({ settings, capacity, projects = [], onChange, notify }) {
   const [slots, setSlots] = useState(capacity.slots);
   useEffect(() => setSlots(capacity.slots), [capacity.slots]);
   return (
@@ -321,6 +385,8 @@ function Appearance({ settings, capacity, onChange, notify }) {
         </div>
         <small>超过这个数量的 Work 会排队。等待回答或审阅的 Work 不占执行槽。</small>
       </div>
+      <WorktreeCommandSetting saved={settings.worktreeCommand ?? ''} projects={projects} notify={notify}
+        onSaved={(worktreeCommand) => onChange({ worktreeCommand }, false)} />
       <label className="follow-session-setting">
         <span>打开会话时，Git 工作台跟随该会话的分支</span>
         <input
@@ -1399,6 +1465,7 @@ export default function SettingsModal({
             <Appearance
               settings={settings}
               capacity={capacity}
+              projects={projects}
               onChange={onChange}
               notify={notify}
             />

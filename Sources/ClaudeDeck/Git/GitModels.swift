@@ -234,10 +234,17 @@ struct CommitResult: Codable, Sendable, Equatable {
 /// 路径须是项目 .worktrees 的直接子目录。省略时按分支名生成目录。
 struct CreateWorktreeInput: Codable, Sendable, Equatable {
     let projectPath: String
+    /// 项目模式必填；统一模式可留空，由统一命令按仓库规则生成。
     let branch: String
     var path: String? = nil
     /// 省略时取当前分支。
     var baseBranch: String? = nil
+    /// 统一模式（`command` 非空）：稳定任务标识（必填）、目录用途名、并行子任务。
+    var task: String? = nil
+    var name: String? = nil
+    var subtask: String? = nil
+    /// 设置里的统一工作树命令绝对路径；空 = 项目内 `.worktrees` 模式。由桥接层从设置填入，前端不传。
+    var command: String? = nil
 }
 
 struct RemoveWorktreeInput: Codable, Sendable, Equatable {
@@ -248,7 +255,16 @@ struct RemoveWorktreeInput: Codable, Sendable, Equatable {
 
 struct WorktreeResult: Codable, Sendable, Equatable {
     let path: String
-    let branch: String
+    /// 统一模式复用分离 HEAD 的工作树时为 nil。
+    let branch: String?
+    /// created | reused
+    var action: String = "created"
+    /// project（`.worktrees`）| unified（统一命令）
+    var mode: String = "project"
+    var task: String? = nil
+    var baseRef: String? = nil
+    var baseCommit: String? = nil
+    var head: String? = nil
 }
 
 // MARK: - 文件 DTO

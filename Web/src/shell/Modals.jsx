@@ -1,6 +1,6 @@
 // 弹窗：模型上下文 / MCP 服务 / 添加目录 / 新建会话 / 重命名会话 / 界面设置。
 import EngineIcon from './EngineIcon.jsx';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowsClockwise,
   CaretRight,
@@ -17,7 +17,7 @@ import { errorText, request } from './bridge.js';
 import { resumeCommand } from './session-info.js';
 import { contextNumbers } from './Composer.jsx';
 import { IconButton, tildePath, useDialogFocus } from './ui.jsx';
-import { untitledWorktreeBranch, worktreeTitleSlug } from './worktree-name.js';
+import { tapdTaskId, unifiedWorktreeName, untitledWorktreeBranch, validWorktreeComponent, worktreeTitleSlug } from './worktree-name.js';
 
 function ModalFrame({ title, wide = false, className = '', onClose, dismissOnBackdrop = true, children }) {
   const focus = useDialogFocus(onClose);
@@ -572,7 +572,42 @@ export function worktreeSlug(branch) {
   );
 }
 
-export function CreateWorktreeModal({ projects, projectPath, settings, providers, onClose, onCreated }) {
+// 统一模式（设置里配置了工作树命令）的任务字段：任务标识必填，子任务可选；TAPD 取完整 ID。
+function useUnifiedTask(title, tapd) {
+  const [task, setTask] = useState(tapd?.id ? String(tapd.id) : '');
+  const [touched, setTouched] = useState(Boolean(tapd?.id));
+  const [subtask, setSubtask] = useState('');
+  const value = touched ? task.trim() : (task.trim() || tapdTaskId(title));
+  return {
+    task: value,
+    subtask: subtask.trim(),
+    setTask: (next) => { setTask(next); setTouched(true); },
+    setSubtask,
+    taskOk: validWorktreeComponent(value),
+    subtaskOk: !subtask.trim() || validWorktreeComponent(subtask.trim()),
+    name: unifiedWorktreeName(title, value, subtask.trim()),
+  };
+}
+
+function UnifiedTaskFields({ unified, disabled }) {
+  return (
+    <div className="cli-worktree-grid">
+      <label className="field">任务标识
+        <input required disabled={disabled} value={unified.task} spellCheck={false} placeholder="TAPD 完整 ID 或稳定的英文标识"
+          aria-invalid={Boolean(unified.task) && !unified.taskOk}
+          onChange={(event) => unified.setTask(event.target.value)} />
+        {unified.task && !unified.taskOk && <small className="field-error">只能用字母、数字、点、横线、下划线，字母或数字开头</small>}
+      </label>
+      <label className="field">子任务（可选）
+        <input disabled={disabled} value={unified.subtask} spellCheck={false} placeholder="并行独立子任务时填写"
+          aria-invalid={!unified.subtaskOk}
+          onChange={(event) => unified.setSubtask(event.target.value)} />
+      </label>
+    </div>
+  );
+}
+
+export function CreateWorktreeModal({ projects, projectPath, settings, providers, tapd, onClose, onCreated }) {
   const [path, setPath] = useState(projectPath);
   const [branches, setBranches] = useState(null);
   const [base, setBase] = useState('');
@@ -582,8 +617,16 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
   const available = providers.filter((item) => item.available && settings.cliPreferences?.[item.id]?.enabled !== false);
   const [agent, setAgent] = useState('');
   const [createdTree, setCreatedTree] = useState(null);
-  const worktreeName = worktreeTitleSlug(name);
-  const branch = branches ? (worktreeName || untitledWorktreeBranch(branches)) : '';
+  const isUnified = Boolean(settings.worktreeCommand);
+  const unified = useUnifiedTask(name || tapd?.title || '', tapd);
+  const [customBranch, setCustomBranch] = useState('');
+  const branchInput = useRef(null);
+  // 命令要求显式分支时把焦点交给分支框；放在重新渲染之后，此时 fieldset 已解除禁用。
+  const [branchFocus, setBranchFocus] = useState(0);
+  useEffect(() => { if (branchFocus) branchInput.current?.focus(); }, [branchFocus]);
+  const worktreeName = isUnified ? (name.trim() ? unified.name : '') : worktreeTitleSlug(name);
+  const branch = isUnified ? customBranch.trim() : branches ? (worktreeName || untitledWorktreeBranch(branches)) : '';
+  const canSubmit = Boolean(base) && (isUnified ? unified.taskOk && unified.subtaskOk : Boolean(branch));
 
   useEffect(() => {
     let current = true;
@@ -610,14 +653,20 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
     <ModalFrame title="创建工作树" dismissOnBackdrop={false} className="cli-worktree-modal" onClose={creating ? undefined : onClose}>
       <form className="cli-worktree-form" onSubmit={async (event) => {
         event.preventDefault();
-        if (!branch || !base || creating) return;
+        if (!canSubmit || creating) return;
         setCreating(true);
         setError(null);
         try {
           const options = { timeoutMs: 150000 };
-          const tree = createdTree ?? await request('git.createWorktree', {
-            input: { projectPath: path, baseBranch: base, branch },
-          }, options);
+          const input = isUnified
+            ? {
+              projectPath: path, baseBranch: base, task: unified.task,
+              ...(unified.name ? { name: unified.name } : {}),
+              ...(unified.subtask ? { subtask: unified.subtask } : {}),
+              ...(branch ? { branch } : {}),
+            }
+            : { projectPath: path, baseBranch: base, branch };
+          const tree = createdTree ?? await request('git.createWorktree', { input }, options);
           if (!createdTree) {
             setCreatedTree(tree);
             onCreated(tree, path, worktreeName);
@@ -631,8 +680,11 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
           }
           onClose();
         } catch (cause) {
-          setError(errorText(cause));
+          const text = errorText(cause);
+          setError(text);
           setCreating(false);
+          // 方果、蓝马等仓库要求显式分支：命令报 --branch 时把焦点交给分支输入框。
+          if (isUnified && !createdTree && text.includes('--branch')) setBranchFocus((value) => value + 1);
         }
       }}>
         <fieldset disabled={creating || Boolean(createdTree)} className="cli-worktree-fields">
@@ -653,9 +705,23 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
             </select>
           </label>
           <label className="field">工作树标题（可选）
-            <input autoFocus value={name} placeholder="留空时采用第一个会话标题" onChange={(event) => setName(event.target.value)} />
+            <input autoFocus value={name} placeholder={isUnified ? '转成英文作为目录名称；含 TAPD 编号时自动填入任务标识' : '留空时采用第一个会话标题'}
+              onChange={(event) => setName(event.target.value)} />
           </label>
-          {branch && (
+          {isUnified && <UnifiedTaskFields unified={unified} />}
+          {isUnified && (
+            <label className="field">分支（可选）
+              <input ref={branchInput} value={customBranch} spellCheck={false} placeholder="留空按仓库规则生成"
+                onChange={(event) => setCustomBranch(event.target.value)} />
+            </label>
+          )}
+          {isUnified ? (
+            <dl className="cli-worktree-target">
+              <div><dt>任务</dt><dd><code>{unified.task ? [unified.task, unified.subtask].filter(Boolean).join('/') : '未填写'}</code></dd></div>
+              <div><dt>分支</dt><dd>{branch ? <code>{branch}</code> : '按仓库规则生成'}</dd></div>
+              <div><dt>本机目录</dt><dd>由工作树命令决定，已登记的任务沿用原路径</dd></div>
+            </dl>
+          ) : branch && (
             <dl className="cli-worktree-target">
               <div><dt>新分支</dt><dd><code>{branch}</code></dd></div>
               <div><dt>本机目录</dt><dd><code>.worktrees/{worktreeSlug(branch)}</code></dd></div>
@@ -671,11 +737,11 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
             </select>
           </span>
         </label>
-        {createdTree && <p className="pane-note">工作树已创建：{createdTree.path}</p>}
+        {createdTree && <p className="pane-note">{createdTree.action === 'reused' ? '已复用工作树' : '工作树已创建'}：{createdTree.path}{createdTree.branch ? `（${createdTree.branch}）` : ''}</p>}
         {error && <p className="pane-note error" role="alert">{error}</p>}
         <div className="modal-footer">
           <button type="button" disabled={creating} onClick={onClose}>取消</button>
-          <button type="submit" className="primary" disabled={!branch || !base || creating}>{creating ? '处理中…' : createdTree ? (agent ? '重试启动代理' : '完成') : '创建工作树'}</button>
+          <button type="submit" className="primary" disabled={!canSubmit || creating}>{creating ? '处理中…' : createdTree ? (agent ? '重试启动代理' : '完成') : '创建工作树'}</button>
         </div>
       </form>
     </ModalFrame>
@@ -693,6 +759,7 @@ export function SessionModal({
   cliPreferences = {},
   defaultProvider = 'claude',
   interactionMode = 'terminal',
+  worktreeCommand = '',
   onClose,
   onCreated,
   notify,
@@ -700,7 +767,9 @@ export function SessionModal({
   const [provider, setProvider] = useState(defaultProvider);
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState(isRepository ? initialMode : 'current');
-  const [target, setTarget] = useState('feature/new-task');
+  const isUnified = Boolean(worktreeCommand);
+  const [target, setTarget] = useState(isUnified ? '' : 'feature/new-task');
+  const unified = useUnifiedTask(title, null);
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
   const worktree = mode === 'worktree';
@@ -714,7 +783,8 @@ export function SessionModal({
   const providerInfo = providers.find((item) => item.id === provider);
   const providerEnabled = cliPreferences[provider]?.enabled !== false;
   const providerAvailable = providerEnabled && Boolean(providerInfo?.available);
-  const ready = (!worktree || Boolean(target.trim())) && providerAvailable && !creating;
+  const worktreeReady = isUnified ? unified.taskOk && unified.subtaskOk : Boolean(target.trim());
+  const ready = (!worktree || worktreeReady) && providerAvailable && !creating;
   const supportedModes = cliPreferences[provider]?.modes ?? ['terminal'];
   const preferredMode = cliPreferences[provider]?.mode && cliPreferences[provider].mode !== 'inherit'
     ? cliPreferences[provider].mode
@@ -737,12 +807,22 @@ export function SessionModal({
           provider,
           openMode: surface,
           ...(workspace ? { workspace } : {}),
-          ...(worktree ? { branch: target.trim() } : {}),
+          ...(worktree && target.trim() ? { branch: target.trim() } : {}),
+          ...(worktree && isUnified ? {
+            // 与表单展示的「基准分支」一致；不传时 ai-worktree 只能在恰好一个远端时自己推断。
+            ...(branch ? { baseBranch: branch } : {}),
+            task: unified.task,
+            ...(unified.name ? { name: unified.name } : {}),
+            ...(unified.subtask ? { subtask: unified.subtask } : {}),
+          } : {}),
         },
-        { timeoutMs: 90000 },
+        { timeoutMs: 150000 },
       );
       const provName = engineLabel;
-      notify(worktree ? `已在工作树 ${target.trim()} 中创建 ${provName} 会话` : `${provName} 会话已创建`);
+      const treeName = result.branch ?? target.trim();
+      notify(!worktree ? `${provName} 会话已创建`
+        : result.worktreeAction === 'reused' ? `已复用工作树 ${treeName}，并创建 ${provName} 会话`
+        : `已在工作树 ${treeName} 中创建 ${provName} 会话`);
       onCreated({ ...result, firstSessionTitle: title.trim() });
       onClose();
     } catch (cause) {
@@ -820,10 +900,12 @@ export function SessionModal({
           </button>
         ))}
       </div>}
+      {worktree && isUnified && <UnifiedTaskFields unified={unified} />}
       {worktree && (
         <label className="field">
-          新分支名称
-          <input value={target} onChange={(event) => setTarget(event.target.value)} />
+          {isUnified ? '分支（可选）' : '新分支名称'}
+          <input value={target} spellCheck={false} placeholder={isUnified ? '留空按仓库规则生成' : ''}
+            onChange={(event) => setTarget(event.target.value)} />
         </label>
       )}
       <dl className="session-summary">
@@ -834,11 +916,13 @@ export function SessionModal({
         <dt>{workspace ? '绑定分支' : '基准分支'}</dt>
         <dd>{workspace?.branch ?? branch ?? (isRepository ? 'detached HEAD' : '不是 Git 仓库')}</dd>
         <dt>工作目录</dt>
-        <dd>{workspace ? tildePath(workspace.worktreePath ?? project.path, home) : worktree ? `.worktrees/${worktreeSlug(target)}` : '项目根目录'}</dd>
+        <dd>{workspace ? tildePath(workspace.worktreePath ?? project.path, home)
+          : worktree ? (isUnified ? '由工作树命令决定，已登记的任务沿用原路径' : `.worktrees/${worktreeSlug(target)}`)
+          : '项目根目录'}</dd>
         {worktree && (
           <>
             <dt>目标分支</dt>
-            <dd>{target}</dd>
+            <dd>{target.trim() || (isUnified ? '按仓库规则生成' : '')}</dd>
           </>
         )}
       </dl>

@@ -1495,6 +1495,7 @@ export default function App() {
       return (
         <WorktreeTab
           worktreeLabels={worktreeLabels}
+          sessions={projects.flatMap((item) => item.sessions ?? [])}
           key={project.path}
           projectPath={project.path}
           home={state.home}
@@ -2196,7 +2197,8 @@ export default function App() {
             if (path !== workbenchPath) selectProject(path);
             if (result.sessionId && !settings.terminal) updateSettings({ terminal: true });
             setEpoch((value) => value + 1);
-            notify(result.sessionId ? '已创建工作树并打开会话' : '已创建工作树');
+            const verb = result.action === 'reused' ? '已复用工作树' : '已创建工作树';
+            notify(result.sessionId ? `${verb}并打开会话` : verb);
           }} />
       )}
       {modal?.kind === 'session' && modalProject && (
@@ -2211,6 +2213,7 @@ export default function App() {
           cliPreferences={settings.cliPreferences}
           interactionMode={settings.interactionMode}
           defaultProvider={settings.defaultProvider ?? 'claude'}
+          worktreeCommand={settings.worktreeCommand ?? ''}
           notify={notify}
           onClose={() => setModal(null)}
           onCreated={(result) => {

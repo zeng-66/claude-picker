@@ -9,7 +9,7 @@ import Foundation
 /// 本文件不重写扫描逻辑，也不碰 `tree.json` 的格式（那是 `Store.persistTree()` 的事）。
 enum AppHandlers: BridgeModule {
     private static let methods: Set<String> = [
-        "app.state", "app.layout", "app.settings", "app.runtime", "app.refreshUsage", "app.copyText",
+        "app.state", "app.layout", "app.settings", "app.setWorktreeCommand", "app.runtime", "app.refreshUsage", "app.copyText",
         "app.toggleProject", "app.toggleShowAll", "app.pin", "app.remove", "app.renameSession", "app.revealInFinder",
         "app.moveProject", "app.moveSession", "app.addDirectory", "app.pickDirectory",
         "app.prompt", "app.command", "app.context", "app.revealBranchSessions", "app.openURL",
@@ -83,6 +83,10 @@ enum AppHandlers: BridgeModule {
         case "app.settings":
             store.applySettings(dict)
             return nil
+
+        // 统一工作树命令：校验后保存，空字符串表示改回项目内 `.worktrees` 模式。
+        case "app.setWorktreeCommand":
+            return ["worktreeCommand": try store.setWorktreeCommand(BridgeSupport.optionalString(dict, "path") ?? "")]
 
         case "app.runtime":
             store.applyRuntime(key: try BridgeSupport.string(dict, "key"), value: dict["value"])
