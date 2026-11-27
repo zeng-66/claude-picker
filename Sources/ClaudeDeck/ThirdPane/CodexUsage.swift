@@ -4,6 +4,7 @@ import Foundation
 enum CodexUsage {
     struct Snapshot: Sendable {
         let windows: [Window]
+        let plan: String?
         let fetchedAt: Date
 
         struct Window: Decodable, Sendable {
@@ -18,6 +19,7 @@ enum CodexUsage {
             struct Limits: Decodable {
                 let primary: Snapshot.Window?
                 let secondary: Snapshot.Window?
+                let planType: String?
             }
             let rateLimits: Limits
         }
@@ -51,7 +53,10 @@ enum CodexUsage {
                     let windows = [limits.primary, limits.secondary].compactMap { $0 }.filter {
                         (0...100).contains($0.usedPercent) && $0.windowDurationMins > 0
                     }
-                    if !windows.isEmpty { payload = Snapshot(windows: windows, fetchedAt: Date()) }
+                    if !windows.isEmpty {
+                        let plan = limits.planType?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        payload = Snapshot(windows: windows, plan: (plan?.isEmpty == false) ? plan : nil, fetchedAt: Date())
+                    }
                 }
                 complete = true
                 done.signal()
@@ -93,7 +98,7 @@ enum CodexUsage {
 
         """
         guard (try? input.fileHandleForWriting.write(contentsOf: Data(requests.utf8))) != nil else { return nil }
-        guard buffer.done.wait(timeout: .now() + 8) == .success else { return nil }
+        guard buffer.done.wait(timeout: .now() + 15) == .success else { return nil }
         return buffer.result()
     }
 }

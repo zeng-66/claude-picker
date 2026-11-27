@@ -1,12 +1,36 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowsClockwise, CaretRight, ChartBar, Swap, X } from '@phosphor-icons/react';
+import { ArrowsClockwise, CaretRight, Swap, X } from '@phosphor-icons/react';
 import { request } from './bridge.js';
 
+function formatAmount(balance) {
+  if (!balance || !Number.isFinite(balance.total)) return null;
+  const symbol = balance.symbol || (balance.currency === 'USD' ? '$' : '¥');
+  return `${symbol}${balance.total.toFixed(2)}`;
+}
+
 function quotaRows(usage) {
+  const balance = usage?.deepseek && Number.isFinite(usage.deepseek.total) ? usage.deepseek : null;
+  const plan = usage?.codexPlan
+    ? String(usage.codexPlan).replace(/^./, (c) => c.toUpperCase())
+    : null;
+  const agyCredits = Number.isFinite(usage?.antigravityCredits)
+    ? `积分 ${usage.antigravityCredits}`
+    : null;
   return [
+    {
+      id: 'claude',
+      label: 'Claude',
+      limits: [
+        ['5 小时', usage?.session?.percent, usage?.session?.reset],
+        ['每周', usage?.weekly?.percent, usage?.weekly?.reset],
+      ].filter((limit) => Number.isFinite(limit[1])),
+    },
     {
       id: 'codex',
       label: 'Codex',
+      plan,
+      updated: usage?.codexUpdated,
+      error: usage?.codexError,
       limits: (usage?.codex ?? []).map(({ minutes, percent, reset }) => [
         minutes === 10080
           ? '每周'
@@ -18,15 +42,39 @@ function quotaRows(usage) {
       ]),
     },
     {
-      id: 'claude',
-      label: 'Claude',
-      limits: [
-        ['5 小时', usage?.session?.percent, usage?.session?.reset],
-        ['每周', usage?.weekly?.percent, usage?.weekly?.reset],
-      ].filter((limit) => Number.isFinite(limit[1])),
+      id: 'dsh',
+      label: 'DeepSeek',
+      kind: 'balance',
+      balance,
+      error: usage?.deepseekError,
+      limits: [],
     },
-    { id: 'antigravity', label: 'Antigravity', limits: [] },
-  ];
+    {
+      id: 'antigravity',
+      label: 'Antigravity',
+      plan: agyCredits,
+      updated: usage?.antigravityUpdated,
+      error: usage?.antigravityError,
+      limits: (usage?.antigravity ?? []).map(({ label, percent, reset }) => [
+        label,
+        percent,
+        reset,
+      ]),
+    },
+  ]
+    .map((row) => ({
+      ...row,
+      limits: row.limits.filter((limit) => Number.isFinite(limit[1])).sort((a, b) => b[1] - a[1]),
+    }))
+    .sort((a, b) => {
+      const rank = (r) => {
+        if (r.limits.length) return 100 + r.limits[0][1];
+        if (r.balance) return 50;
+        if (!r.unsupported) return 10;
+        return 0;
+      };
+      return rank(b) - rank(a);
+    });
 }
 
 function QuotaMeter({ limit, remaining, summary = false, showReset = false }) {
@@ -46,6 +94,62 @@ function QuotaMeter({ limit, remaining, summary = false, showReset = false }) {
       {showReset && <small>{reset} 重置</small>}
     </span>
   );
+}
+
+function BalanceSummary({ balance }) {
+  const amount = formatAmount(balance);
+  if (!amount) return <small>—</small>;
+  return (
+    <span
+      className="cli-quota-meter is-summary is-amount"
+      title={`DeepSeek 余额 ${amount}${balance.available === false ? '（不可用）' : ''}`}
+    >
+      <strong>{amount}</strong>
+    </span>
+  );
+}
+
+function BalanceDetails({ balance }) {
+  if (!balance) return null;
+  const symbol = balance.symbol || (balance.currency === 'USD' ? '$' : '¥');
+  return (
+    <div className="cli-usage-limits">
+      <span className="cli-quota-meter is-amount">
+        <small>总余额</small>
+        <strong>{`${symbol}${balance.total.toFixed(2)}`}</strong>
+      </span>
+      <span className="cli-quota-meter is-amount">
+        <small>充值</small>
+        <strong>{`${symbol}${(balance.toppedUp ?? 0).toFixed(2)}`}</strong>
+      </span>
+      {Number(balance.granted) > 0 && (
+        <span className="cli-quota-meter is-amount">
+          <small>赠送</small>
+          <strong>{`${symbol}${balance.granted.toFixed(2)}`}</strong>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function rowStatusText(row) {
+  if (row.kind === 'balance') {
+    if (row.balance) {
+      const amount = formatAmount(row.balance);
+      return row.balance.available === false ? `${amount} · 不可用` : `${amount} 可用`;
+    }
+    return row.error || '未配置密钥';
+  }
+  if (row.limits.length) {
+    return `${row.limits[0][2]} 重置`;
+  }
+  if (row.error) {
+    return row.error;
+  }
+  if (row.unsupported) {
+    return '暂不支持查询';
+  }
+  return '额度不可用';
 }
 
 function EngineIdentity({ row, icon }) {
@@ -71,7 +175,6 @@ export default function UsagePopover({ usage, engineIcons }) {
   const root = useRef(null);
   const trigger = useRef(null);
   const rows = quotaRows(usage);
-  const mostUsed = (row) => row.limits.reduce((a, b) => (!a || b[1] > a[1] ? b : a), null);
 
   useEffect(() => {
     if (!open) return;
@@ -105,6 +208,8 @@ export default function UsagePopover({ usage, engineIcons }) {
     }
   }
 
+  const panelNote = error || usage?.note || usage?.codexError || usage?.deepseekError;
+
   return (
     <div className="cli-usage" ref={root}>
       <button
@@ -118,16 +223,14 @@ export default function UsagePopover({ usage, engineIcons }) {
           if (!open) setPage('summary');
         }}
       >
-        <ChartBar size={14} />
-        <span>{remaining ? '剩余' : '已用'}</span>
         {rows.map((row) => (
           <span className="cli-quota-badge" key={row.id} title={row.label}>
             <img src={engineIcons[row.id]} alt={row.label} />
-            <QuotaMeter
-              limit={compact ? mostUsed(row) : row.limits[0]}
-              remaining={remaining}
-              summary
-            />
+            {row.kind === 'balance' ? (
+              <BalanceSummary balance={row.balance} />
+            ) : (
+              <QuotaMeter limit={row.limits[0]} remaining={remaining} summary />
+            )}
           </span>
         ))}
       </button>
@@ -155,9 +258,9 @@ export default function UsagePopover({ usage, engineIcons }) {
               </button>
             </div>
           </header>
-          {(error || usage?.note || usage?.codexError) && (
+          {panelNote && (
             <p className="pane-note" role="status">
-              {error || usage?.note || usage?.codexError}
+              {panelNote}
             </p>
           )}
           {page === 'summary' ? (
@@ -179,31 +282,35 @@ export default function UsagePopover({ usage, engineIcons }) {
                       onClick={() => setExpanded(expanded === row.id ? null : row.id)}
                     >
                       <EngineIdentity row={row} icon={engineIcons[row.id]} />
-                      {row.id === 'codex' && usage?.codexUpdated && (
-                        <small>{usage.codexUpdated} 更新</small>
+                      {(row.updated || row.balance?.updated) && (
+                        <small>{row.updated || row.balance.updated} 更新</small>
                       )}
-                      <small>
-                        {row.limits.length
-                          ? `${(compact ? mostUsed(row) : row.limits[0])[2]} 重置`
-                          : '额度不可用'}
-                      </small>
-                      {compact && (
-                        <QuotaMeter limit={mostUsed(row)} remaining={remaining} summary />
-                      )}
+                      <small>{rowStatusText(row)}</small>
+                      {compact &&
+                        (row.kind === 'balance' ? (
+                          <BalanceSummary balance={row.balance} />
+                        ) : (
+                          <QuotaMeter limit={row.limits[0]} remaining={remaining} summary />
+                        ))}
                       <CaretRight size={12} />
                     </button>
-                    {(!compact || expanded === row.id) && (
-                      <div className="cli-usage-limits">
-                        {row.limits.map((limit) => (
-                          <QuotaMeter
-                            key={limit[0]}
-                            limit={limit}
-                            remaining={remaining}
-                            showReset={expanded === row.id}
-                          />
-                        ))}
-                      </div>
-                    )}
+                    {(!compact || expanded === row.id) &&
+                      (row.kind === 'balance' ? (
+                        <BalanceDetails balance={row.balance} />
+                      ) : (
+                        row.limits.length > 0 && (
+                          <div className="cli-usage-limits">
+                            {row.limits.map((limit) => (
+                              <QuotaMeter
+                                key={limit[0]}
+                                limit={limit}
+                                remaining={remaining}
+                                showReset={expanded === row.id}
+                              />
+                            ))}
+                          </div>
+                        )
+                      ))}
                   </div>
                 ))}
               </div>
@@ -225,22 +332,36 @@ export default function UsagePopover({ usage, engineIcons }) {
                   {rows.map((row) => (
                     <div key={row.id}>
                       <EngineIdentity row={row} icon={engineIcons[row.id]} />
-                      <div className="cli-usage-limits">
-                        {row.limits.map((limit) => (
-                          <QuotaMeter
-                            key={limit[0]}
-                            limit={limit}
-                            remaining={remaining}
-                            showReset
-                          />
-                        ))}
-                      </div>
+                      {row.kind === 'balance' ? (
+                        row.balance ? (
+                          <BalanceDetails balance={row.balance} />
+                        ) : (
+                          <div className="cli-usage-limits">
+                            <small>{rowStatusText(row)}</small>
+                          </div>
+                        )
+                      ) : row.limits.length > 0 ? (
+                        <div className="cli-usage-limits">
+                          {row.limits.map((limit) => (
+                            <QuotaMeter
+                              key={limit[0]}
+                              limit={limit}
+                              remaining={remaining}
+                              showReset
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="cli-usage-limits">
+                          <small>{rowStatusText(row)}</small>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </>
               ) : (
                 <>
-                  <p>各引擎的额度跟随其 CLI 登录账户。</p>
+                  <p>各引擎的额度跟随其 CLI 登录账户或已配置的 API 密钥。</p>
                   <button
                     onClick={() => {
                       setOpen(false);
