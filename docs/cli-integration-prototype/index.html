@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudePicker · CLI 接入原型</title>
+<style>
+:root{color-scheme:dark;--bg:#1c1d22;--side:#202126;--panel:#24252b;--line:#34353d;--ink:#ededea;--muted:#a8a7af;--accent:#e2a17f;--green:#9bccaa;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:#15161a;color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+button,input,textarea,select{font:inherit;color:inherit}
+button,select{cursor:pointer}
+button{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:7px 12px}
+button:hover{border-color:#767580}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#271b16;font-weight:650}
+button.ghost{border-color:transparent;background:transparent}
+small,.muted{color:var(--muted)}
+p,h1,h2,h3{margin:0}
+.app{max-width:1440px;margin:24px auto;border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--bg);min-height:calc(100dvh - 48px);display:flex;flex-direction:column}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 18px;border-bottom:1px solid var(--line);background:var(--side);flex-wrap:wrap}
+.brand,.tools,.actions{display:flex;align-items:center;gap:9px}
+.brand strong{font-size:15px}
+.brand small{border-left:1px solid var(--line);padding-left:9px}
+.mark{display:grid;place-items:center;width:27px;height:27px;border-radius:7px;background:#3d2c26;color:var(--accent);font:700 15px var(--mono)}
+.layout{flex:1;display:grid;grid-template-columns:285px minmax(0,1fr)}
+aside{background:var(--side);border-right:1px solid var(--line);padding:17px 13px}
+.project{display:flex;align-items:center;gap:10px;padding:2px 5px;margin-bottom:16px}
+.folder{color:var(--accent);font-size:19px}
+.project strong,.entry strong,.provider strong{display:block}
+.project small{font-family:var(--mono);font-size:10px}
+.wide{width:100%}
+.side-title{display:flex;justify-content:space-between;align-items:center;margin:21px 4px 9px;color:var(--muted)}
+select{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 7px}
+.entry{display:grid;width:100%;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:8px;text-align:left;padding:8px;margin-bottom:4px;border-color:transparent;background:transparent}
+.entry.active{background:#353038;border-color:#534044}
+.entry strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}
+.entry small{font-size:11px}
+.icon{display:grid;place-items:center;width:26px;height:26px;border-radius:7px;font:700 12px var(--mono);background:#40312b;color:#efb799}
+.icon.codex{background:#313241;color:#c6c7f9}
+.icon.dsh{background:#25364c;color:#abcdfd}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#777784}
+.dot.ready{background:var(--green)}
+.dot.warn{background:#e1b477}
+.dot.bad{background:#ef9492}
+main{padding:21px 24px 18px;min-width:0;display:flex;flex-direction:column}
+.heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:15px}
+.heading h1{font-size:22px;letter-spacing:-.3px}
+.heading p{margin-top:4px;color:var(--muted);font-family:var(--mono);font-size:11px;overflow-wrap:anywhere}
+.tabs{display:flex;gap:3px;overflow:auto;border-bottom:1px solid var(--line)}
+.tabs button{border:1px solid transparent;border-radius:7px 7px 0 0;background:transparent;white-space:nowrap;color:var(--muted)}
+.tabs button.active{background:#282931;border-color:var(--line);color:var(--ink);border-bottom-color:var(--accent)}
+.terminal{display:flex;flex-direction:column;flex:1;min-height:325px;margin-top:12px;border:1px solid #34353e;background:#17181d;border-radius:9px;overflow:hidden}
+.term-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;background:#212229;padding:9px 13px;font-size:12px;border-bottom:1px solid var(--line)}
+.term-status{display:flex;gap:6px;align-items:center;color:var(--muted)}
+.screen{flex:1;padding:22px 20px;min-height:215px}
+.screen pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.9 var(--mono)}
+.command{color:#ebae92}
+.reply{color:#d0d0d6}
+.terminal form{display:flex;gap:8px;padding:11px 13px;border-top:1px solid var(--line)}
+input,textarea{background:#1b1c21;border:1px solid var(--line);border-radius:7px;padding:8px 10px;min-width:0}
+.terminal form[hidden]{display:none}
+.terminal input{flex:1}
+.problem{max-width:540px;padding:16px;border:1px solid #60503d;background:#28231e;border-radius:8px}
+.problem p{color:#d3c0ae;margin:6px 0 12px}
+footer{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;padding-top:12px;color:var(--muted);font-size:12px}
+dialog{width:min(515px,calc(100vw - 26px));background:var(--panel);color:var(--ink);padding:20px;border:1px solid #4b4c56;border-radius:13px;box-shadow:0 24px 70px #0008}
+dialog::backdrop{background:#101014b8}
+.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:13px}
+.dialog-head h2{font-size:19px}
+.provider{width:100%;display:grid;grid-template-columns:28px 1fr auto;gap:9px;align-items:center;text-align:left;margin-bottom:7px;padding:10px;background:var(--bg)}
+.provider[aria-pressed=true]{border-color:var(--accent);background:#342a29}
+.dialog-actions{justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+.field{display:grid;gap:5px;margin-top:12px;color:var(--muted)}
+.note-list{display:grid;gap:8px;margin-top:13px;max-height:30vh;overflow:auto}
+.note{padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:7px;overflow-wrap:anywhere;white-space:pre-wrap}
+.note small{display:block}
+.annotation [data-region]:hover{outline:2px dashed var(--accent);outline-offset:-2px;cursor:crosshair}
+.annotation [data-region]{position:relative}
+.annotation [data-region]:hover::after{content:attr(data-region);position:absolute;bottom:4px;right:5px;background:var(--accent);color:#271b16;padding:2px 5px;border-radius:4px;pointer-events:none;font-size:11px;z-index:2}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);padding:8px 14px;background:#3d302a;border:1px solid #735744;border-radius:8px;z-index:10}
+#toast:empty{display:none}
+@media(max-width:1470px){.app{margin:16px;min-height:calc(100dvh - 32px)}}
+@media(max-width:750px){.app{margin:0;border-radius:0;min-height:100dvh}.layout{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}main{padding:14px}.side-title{margin-top:13px}.entry{padding:4px 7px}.project{margin-bottom:8px}.terminal{min-height:295px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand"><span class="mark" aria-hidden="true">›_</span><strong>ClaudePicker</strong><small>CLI 接入原型</small></div>
+    <div class="tools"><button id="diagnostics" data-region="CLI 检查入口">CLI 检查</button><button id="annotate">添加批注</button><button id="notes">批注</button></div>
+  </header>
+  <div class="layout">
+    <aside>
+      <div class="project"><span class="folder" aria-hidden="true">▱</span><div><strong>claude-picker</strong><small>~/project/claude-picker</small></div></div>
+      <button id="new" class="wide primary" data-region="新建会话入口">＋ 新建会话</button>
+      <div class="side-title"><strong>会话</strong><select id="filter" aria-label="按 CLI 筛选"><option value="all">全部 CLI</option><option value="claude">Claude Code</option><option value="codex">Codex CLI</option><option value="dsh">DeepSeek Harness</option></select></div>
+      <nav id="history" data-region="会话树与历史恢复" aria-label="会话"></nav>
+    </aside>
+    <main>
+      <div id="heading" class="heading" data-region="会话标题与工作目录"></div>
+      <nav id="tabs" class="tabs" data-region="终端标签" aria-label="已打开的终端"></nav>
+      <section class="terminal" data-region="终端与依赖提示">
+        <div id="terminalBar" class="term-bar"></div>
+        <div id="screen" class="screen" aria-live="polite"></div>
+        <form id="terminalForm"><input aria-label="终端输入" placeholder="输入消息，体验模拟响应" autocomplete="off" required><button>发送</button></form>
+      </section>
+      <footer><span>模拟数据 · 不运行本机 CLI</span><div class="actions"><select id="scenario" aria-label="演示路径"><option value="">演示路径</option><option value="new">新建 Codex 会话</option><option value="history">恢复 Codex 历史</option><option value="dsh">修复 DeepSeek 依赖后恢复</option></select><button class="ghost" id="reset">重置演示</button></div></footer>
+    </main>
+  </div>
+</div>
+<dialog id="create">
+  <div class="dialog-head"><h2>新建会话</h2><button class="ghost" data-close aria-label="关闭">×</button></div>
+  <p class="muted" style="margin-bottom:12px">选择此工作目录下要启动的 CLI。</p>
+  <div id="providers" data-region="新建会话 · CLI 选择"></div>
+  <label class="field">工作目录<input id="cwd" value="~/project/claude-picker"></label>
+  <div class="actions dialog-actions"><button data-close>取消</button><button class="primary" id="launch">打开终端</button></div>
+</dialog>
+<dialog id="check">
+  <div class="dialog-head"><h2>CLI 检查</h2><button class="ghost" data-close aria-label="关闭">×</button></div>
+  <div id="checks" data-region="CLI 检查 · 依赖状态"></div>
+  <label class="field">模拟 DeepSeek Harness 环境<select id="environment"><option value="missing">缺少 dsh</option><option value="ready">已检测到 dsh</option></select></label>
+  <div class="actions dialog-actions"><button class="primary" id="recheck">重新检测</button></div>
+</dialog>
+<dialog id="comments">
+  <div class="dialog-head"><h2>界面批注</h2><button class="ghost" data-close aria-label="关闭">×</button></div>
+  <label class="field">批注位置<select id="region"></select></label>
+  <label class="field">修改意见<textarea id="comment" rows="3" placeholder="写下希望调整的内容"></textarea></label>
+  <div class="actions dialog-actions"><button id="export">导出 JSON</button><button class="primary" id="save">保存批注</button></div>
+  <div class="note-list" id="noteList"></div>
+</dialog>
+<div id="toast" role="status"></div>
+<script>
+const providers = {
+  claude: {label: 'Claude Code', icon: 'Cl', version: '已配置', start: 'claude', resume: 'claude --resume'},
+  codex: {label: 'Codex CLI', icon: 'Cx', version: '0.170.0', start: 'codex', resume: 'codex resume'},
+  dsh: {label: 'DeepSeek Harness', icon: 'Ds', version: 'dsh-TUI 0.20.1', start: 'dsh-tui --backend dsh', resume: 'dsh-tui --backend dsh --resume'}
+};
+const projectPath = '~/project/claude-picker';
+const storageKey = 'claude-picker-cli-integration-v1-comments';
+const byId = id => document.getElementById(id);
+const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'})[ch]);
+
+function initialState() {
+  return {
+    dshReady: false, active: 'codex-demo', open: ['codex-demo'], filter: 'all', nextId: 1,
+    sessions: [
+      {id:'codex-demo', cli:'codex', title:'接入多 CLI 会话', original:'019b1dc0-604f-701b-b2ac-87d761e39109', cwd:projectPath, mode:'restored', text:'上次进度：已梳理终端启动入口与会话恢复逻辑。'},
+      {id:'dsh-demo', cli:'dsh', title:'梳理项目结构', original:'ses_demo_42', cwd:projectPath, mode:'history', text:'上次进度：已扫描项目目录，整理了前后端入口。'},
+      {id:'claude-demo', cli:'claude', title:'检查终端视图', original:'765cdd5e-4815-4b95-a6a5-b86d94598ac0', cwd:projectPath, mode:'history', text:'上次进度：已定位终端视图和会话列表。'}
+    ]
+  };
+}
+
+function transition(state, action) {
+  const {type, id} = action;
+  if (type === 'reset') return initialState();
+  if (type === 'filter') return {...state, filter: action.value};
+  if (type === 'environment') return {...state, dshReady: action.ready};
+  if (type === 'new') {
+    const session = {id:'new-' + state.nextId, cli:action.cli, cwd:action.cwd, mode:'new', title:'新会话', text:'', original:null};
+    return {...state, nextId:state.nextId+1, sessions:[session,...state.sessions], active:session.id, open:[...state.open,session.id], filter:'all'};
+  }
+  if (type === 'open') {
+    if (state.open.includes(id)) return {...state, active:id};
+    return {...state, active:id, open:[...state.open,id], sessions:state.sessions.map(s => s.id === id ? {...s, mode:s.original ? 'restored' : 'new'} : s)};
+  }
+  if (type === 'close') {
+    const open = state.open.filter(item => item !== id);
+    return {...state, open, active:state.active === id ? open.at(-1) ?? null : state.active};
+  }
+  if (type === 'message') {
+    return {...state, sessions:state.sessions.map(s => {
+      if (s.id !== id || (s.cli === 'dsh' && !state.dshReady)) return s;
+      return {...s, original:s.original ?? 'demo-' + s.id, title:s.title === '新会话' ? action.value.slice(0,22) : s.title,
+        text:s.text + (s.text ? '\n\n' : '') + '› ' + action.value + '\n已收到。当前是用于批注的终端演示。'};
+    })};
+  }
+  return state;
+}
+
+let state = initialState();
+let selectedCli = 'codex';
+let marking = false;
+let notes = [];
+try { notes = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch {}
+let toastTimer;
+const dialogs = [...document.querySelectorAll('dialog')];
+const icon = cli => '<span class="icon '+cli+'" aria-hidden="true">'+providers[cli].icon+'</span>';
+const missing = cli => cli === 'dsh' && !state.dshReady;
+const activeSession = () => state.sessions.find(session => session.id === state.active);
+const command = session => session.mode === 'restored' ? providers[session.cli].resume+' '+session.original : providers[session.cli].start;
+
+function notify(message) {
+  byId('toast').textContent = message;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => byId('toast').textContent = '', 2700);
+}
+
+function render() {
+  const session = activeSession();
+  byId('filter').value = state.filter;
+  byId('history').innerHTML = state.sessions.filter(s => state.filter === 'all' || s.cli === state.filter).map(s =>
+    '<button class="entry '+(s.id===state.active?'active':'')+'" data-open="'+s.id+'">'+icon(s.cli)+'<span><strong>'+escapeHtml(s.title)+'</strong><small>'+providers[s.cli].label+'</small></span>'+
+    (state.open.includes(s.id) ? '<span class="dot '+(missing(s.cli)?'warn':'ready')+'" title="'+(missing(s.cli)?'需要依赖':'终端已打开')+'"></span>' : '')+'</button>'
+  ).join('') || '<p class="muted">这个 CLI 暂无会话</p>';
+  byId('tabs').innerHTML = state.open.map(id => {
+    const s = state.sessions.find(row => row.id === id);
+    return '<button class="'+(id===state.active?'active':'')+'" data-open="'+id+'">'+providers[s.cli].label+' · '+escapeHtml(s.title)+'</button>';
+  }).join('');
+  byId('heading').innerHTML = session
+    ? '<div><h1>'+escapeHtml(session.title)+'</h1><p>'+escapeHtml(session.cwd)+'</p></div><button data-end="'+session.id+'">关闭终端</button>'
+    : '<div><h1>终端工作区</h1><p>'+projectPath+'</p></div>';
+  const status = !session ? '未打开' : missing(session.cli) ? '需要依赖' : session.mode === 'restored' ? '已恢复' : '已打开';
+  byId('terminalBar').innerHTML = '<strong>'+(session ? providers[session.cli].label : '终端')+'</strong><span class="term-status"><span class="dot '+(!session?'':missing(session.cli)?'warn':'ready')+'"></span>'+status+'</span>';
+  byId('terminalForm').hidden = !session || missing(session.cli);
+  if (!session) {
+    byId('screen').innerHTML = '<p class="muted">新建会话，或从左侧打开历史会话。</p>';
+  } else if (missing(session.cli)) {
+    byId('screen').innerHTML = '<div class="problem"><strong>找不到 DeepSeek Harness（dsh）</strong><p>已检测到 dsh-TUI。此工作目录与恢复目标已保留，检测通过后可继续。</p><button data-check>查看 CLI 检查</button></div>';
+  } else {
+    byId('screen').innerHTML = '<pre><span class="command">$ '+escapeHtml(command(session))+'</span>\n\n<span class="reply">'+escapeHtml(session.text || '终端已就绪。')+'</span></pre>';
+  }
+  renderProviders();
+  renderChecks();
+}
+
+function renderProviders() {
+  byId('providers').innerHTML = Object.entries(providers).map(([id,p]) =>
+    '<button class="provider" aria-pressed="'+(id===selectedCli)+'" data-provider="'+id+'">'+icon(id)+'<span><strong>'+p.label+'</strong><small>'+p.version+'</small></span><small>'+(missing(id)?'缺少 dsh':'可启动')+'</small></button>'
+  ).join('');
+}
+
+function renderChecks() {
+  byId('checks').innerHTML = Object.entries(providers).map(([id,p]) =>
+    '<div class="provider">'+icon(id)+'<span><strong>'+p.label+'</strong><small>'+p.version+'</small></span><small>'+ (missing(id)?'找不到 dsh':'已就绪')+'</small></div>'
+  ).join('');
+}
+
+function dispatch(action) {
+  state = transition(state, action);
+  render();
+}
+
+function showNotes(target = '整体体验') {
+  const locations = ['整体体验', ...new Set([...document.querySelectorAll('[data-region]')].map(el => el.dataset.region))];
+  byId('region').replaceChildren(...locations.map(name => new Option(name, name)));
+  byId('region').value = target;
+  const session = activeSession();
+  byId('comments').dataset.context = session ? providers[session.cli].label + ' / ' + byId('terminalBar').innerText.split('\n').at(-1) : '终端工作区';
+  byId('noteList').innerHTML = notes.map(note => '<div class="note"><small>'+escapeHtml(note.region+' · '+note.context)+'</small>'+escapeHtml(note.text)+'</div>').join('');
+  byId('notes').textContent = notes.length ? '批注 '+notes.length : '批注';
+  if (!byId('comments').open) byId('comments').showModal();
+}
+
+function setMarking(enabled) {
+  marking = enabled;
+  document.body.classList.toggle('annotation', marking);
+  byId('annotate').textContent = marking ? '取消批注定位' : '添加批注';
+}
+
+document.addEventListener('click', event => {
+  if (!marking || event.target.closest('#annotate')) return;
+  const region = event.target.closest('[data-region]');
+  if (!region) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  setMarking(false);
+  showNotes(region.dataset.region);
+}, true);
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  if (button.dataset.open) dispatch({type:'open', id:button.dataset.open});
+  if (button.dataset.end) dispatch({type:'close', id:button.dataset.end});
+  if (button.dataset.provider) {
+    selectedCli = button.dataset.provider;
+    renderProviders();
+    byId('providers').querySelector('[aria-pressed=true]').focus();
+  }
+  if ('check' in button.dataset) openCheck();
+  if ('close' in button.dataset) button.closest('dialog').close();
+});
+
+function openCheck() {
+  byId('environment').value = state.dshReady ? 'ready' : 'missing';
+  byId('check').showModal();
+}
+
+byId('new').onclick = () => {
+  selectedCli = 'codex';
+  byId('cwd').value = activeSession()?.cwd || projectPath;
+  renderProviders();
+  byId('create').showModal();
+};
+byId('launch').onclick = () => {
+  const cwd = byId('cwd').value.trim();
+  if (!cwd) { byId('cwd').focus(); return; }
+  dispatch({type:'new', cli:selectedCli, cwd});
+  byId('create').close();
+};
+byId('diagnostics').onclick = openCheck;
+byId('recheck').onclick = () => {
+  const ready = byId('environment').value === 'ready';
+  dispatch({type:'environment', ready});
+  byId('check').close();
+  notify(ready ? '已检测到 dsh' : '仍找不到 dsh');
+};
+byId('filter').onchange = event => dispatch({type:'filter', value:event.target.value});
+byId('terminalForm').onsubmit = event => {
+  event.preventDefault();
+  const input = event.target.querySelector('input');
+  const value = input.value.trim();
+  const session = activeSession();
+  if (!value || !session) return;
+  dispatch({type:'message', id:session.id, value});
+  input.value = '';
+};
+byId('annotate').onclick = () => {
+  setMarking(!marking);
+  if (marking) notify('点击页面区域，添加对应的批注');
+};
+byId('notes').onclick = () => showNotes();
+byId('save').onclick = () => {
+  const field = byId('comment');
+  const text = field.value.trim();
+  if (!text) { field.focus(); return; }
+  notes.push({region:byId('region').value,context:byId('comments').dataset.context,text});
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(notes));
+    notify('批注已保存');
+  } catch { notify('浏览器未保存批注，请导出 JSON'); }
+  field.value = '';
+  showNotes(byId('region').value);
+};
+byId('export').onclick = () => {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(notes,null,2)], {type:'application/json'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'claude-picker-cli-prototype-comments.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+byId('scenario').onchange = event => {
+  const scenario = event.target.value;
+  event.target.value = '';
+  dispatch({type:'reset'});
+  if (scenario === 'new') byId('new').click();
+  if (scenario === 'history') {
+    dispatch({type:'close', id:'codex-demo'});
+    notify('点击左侧「接入多 CLI 会话」恢复 Codex 历史');
+  }
+  if (scenario === 'dsh') {
+    dispatch({type:'open', id:'dsh-demo'});
+    notify('进入 CLI 检查，模拟检测到 dsh 后重新检测');
+  }
+};
+byId('reset').onclick = () => {
+  dialogs.forEach(dialog => { if (dialog.open) dialog.close(); });
+  byId('terminalForm').querySelector('input').value = '';
+  dispatch({type:'reset'});
+};
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && marking) setMarking(false);
+});
+byId('notes').textContent = notes.length ? '批注 '+notes.length : '批注';
+render();
+</script>
+</body>
+</html>

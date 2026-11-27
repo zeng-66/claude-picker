@@ -1,0 +1,3867 @@
+diff --git a/Web/index.html b/Web/index.html
+index cb5e899..fdaa85c 100644
+--- a/Web/index.html
++++ b/Web/index.html
+@@ -3,7 +3,7 @@
+   <head>
+     <meta charset="UTF-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-    <title>Claude Code</title>
++    <title>ClaudePicker · test CLI 接入原型</title>
+   </head>
+   <body>
+     <div id="root"></div>
+diff --git a/Web/src/cli-review.css b/Web/src/cli-review.css
+new file mode 100644
+index 0000000..d9ec023
+--- /dev/null
++++ b/Web/src/cli-review.css
+@@ -0,0 +1,229 @@
++.cli-review-tools{position:fixed;bottom:12px;right:12px;z-index:2147483000;display:flex;align-items:center;gap:5px;max-width:calc(100vw - 24px);padding:5px 6px 5px 10px;background:#252429;border:1px solid #55515a;border-radius:8px;color:#ddd9d5;font:12px system-ui;box-shadow:0 5px 20px #0006}
++.cli-review-tools button,.cli-review-dialog button{padding:5px 9px;border:1px solid #58545c;border-radius:6px;background:#343238;color:#eee;cursor:pointer;font:inherit}
++.cli-review-tools button:last-child,.cli-review-actions button:last-child{background:#dfa184;border-color:#dfa184;color:#271b16;font-weight:650}
++.cli-review-dialog{position:fixed;inset:0;margin:auto;width:min(420px,calc(100vw - 24px));max-height:85vh;overflow:auto;padding:18px;background:#252429;color:#eee;border:1px solid #5b575f;border-radius:10px;font:13px/1.5 system-ui}
++.cli-review-dialog::backdrop{background:#0009}
++.cli-review-dialog h2{margin:0 0 10px;font-size:18px}
++.cli-review-dialog p{margin:6px 0;color:#c6c2ca}
++.cli-review-dialog dl{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:12px 0}
++.cli-review-dialog dd{margin:0}
++.cli-review-dialog label{display:grid;gap:4px;margin:12px 0}
++.cli-review-dialog select,.cli-review-dialog textarea{width:100%;background:#1b1b20;color:#eee;border:1px solid #55515a;border-radius:5px;padding:7px;font:inherit}
++.cli-review-actions{display:flex;justify-content:flex-end;gap:6px}
++.cli-review-marking [data-review]:hover{outline:2px dashed #dfa184;outline-offset:1px;cursor:crosshair}
++#review-list p{padding:6px;border-bottom:1px solid #494650;overflow-wrap:anywhere;white-space:pre-wrap}
++
++.cli-settings-page{--cli-border:#494044;--cli-card:#282529;--cli-accent:#dfa78b;display:grid;gap:18px;color:#eee8e5}
++.cli-settings-page h3,.cli-settings-page h4,.cli-settings-page p{margin:0}
++.cli-settings-page h3{font-size:18px}
++.cli-settings-page h4{color:#eee8e5}
++.cli-settings-page p{color:#aaa1a3;font-size:11px;line-height:1.55}
++.cli-settings-section{display:grid;gap:8px;scroll-margin:12px}
++.cli-mode-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
++.cli-settings-page .cli-mode-card{display:grid;gap:7px;text-align:left;background:var(--cli-card);border:1px solid var(--cli-border);border-radius:8px;padding:9px;color:inherit;min-width:0}
++.cli-mode-card[aria-pressed=true]{outline:1px solid var(--cli-accent);background:#352a29}
++.cli-mode-card small,.cli-engine-label code{color:#b9afb2;font-size:10px}
++.cli-mode-preview{background:#1c1b21;border:1px solid #39343c;border-radius:6px;overflow:hidden;font-size:10px;min-height:106px}
++.cli-mode-preview>div{display:flex;gap:5px;align-items:center;padding:5px 8px;background:#302b31;color:#d4c5c7}
++.cli-mode-preview section{padding:6px 8px}
++.cli-mode-preview p{margin:3px 0;color:#d7ccca;overflow-wrap:anywhere}
++.cli-mode-preview.chat b{display:block;color:#e4af92}
++.cli-mode-preview.terminal code{color:#b9c5a1}
++.cli-settings-link{justify-self:end;color:var(--cli-accent)}
++.cli-permission{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--cli-border);border-radius:7px;background:var(--cli-card)}
++.cli-settings-page select{color:#efebe9;background:#211e23;border:1px solid var(--cli-border);border-radius:5px;padding:4px;font:inherit}
++.cli-section-title{display:flex;justify-content:space-between;align-items:center;gap:8px}
++.cli-section-title h4 small,.cli-default{margin-left:4px;padding:2px 5px;background:#3b3034;border-radius:4px;color:#dcb598;font-size:9px;font-weight:500}
++.cli-section-title button,.cli-engine-warning{display:flex;align-items:center;gap:4px}
++.cli-engine-list{border:1px solid var(--cli-border);border-radius:8px;background:var(--cli-card)}
++.cli-engine-row{display:flex;justify-content:space-between;align-items:center;gap:7px;flex-wrap:wrap;padding:9px 10px;min-height:49px}
++.cli-engine-row+.cli-engine-row{border-top:1px solid var(--cli-border)}
++.cli-engine-label,.cli-engine-actions{display:flex;align-items:center;gap:7px}
++.cli-engine-label code{display:block;overflow-wrap:anywhere}
++.cli-engine-actions{margin-left:auto}
++.cli-engine-label strong{font-size:12px}
++.cli-engine-warning,.cli-settings-page a{color:var(--cli-accent)}
++.cli-engine-menu{position:relative}
++.cli-menu-items{position:absolute;z-index:4;right:0;top:100%;min-width:max-content;display:grid;padding:4px;background:#252229;border:1px solid var(--cli-border);border-radius:6px;box-shadow:0 4px 18px #0007}
++.cli-menu-items button{text-align:left;padding:5px 8px}
++.cli-settings-page .cli-engine-switch{width:32px;height:17px;padding:1px;border-radius:9px;background:#534a50;border:1px solid #685962;display:flex;align-items:center}
++.cli-engine-switch::after{content:"";height:11px;width:11px;border-radius:50%;background:#eee6e6}
++.cli-settings-page .cli-engine-switch[aria-checked=true]{justify-content:flex-end;background:#a36e58;border-color:#ba8a72}
++.cli-install-guide{padding:8px;border:1px solid var(--cli-border);border-radius:6px}
++.cli-install-guide button{margin-left:6px}
++.cli-scan{font-size:11px;color:#c9c0c4}
++.cli-menu-items label{display:grid;gap:4px;padding:5px 8px;color:#c9c0c4}
++
++.cli-cache-setting-description{display:block;color:#aaa1a3;font-size:11px}
++.cli-cache-countdown{display:inline-flex;align-items:center;gap:3px;margin-left:7px;color:#d5b38b;font-variant-numeric:tabular-nums;white-space:nowrap}
++.session-branch-group{margin:2px 0 5px}
++.session-branch-group .session-row{padding-left:13px}
++.session-branch-row{width:100%;min-height:28px;padding:3px 7px 3px 24px;display:flex;align-items:center;gap:5px;text-align:left;color:#b9a9a1;border-radius:5px}
++.session-branch-row:hover{background:#373337}
++.session-branch-row strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
++.session-branch-row small{color:#af9483;font-size:9px;white-space:nowrap}
++.session-branch-row span{margin-left:auto;color:#a29b9c;font-size:10px}
++.session-engine-icon{display:inline-block;width:14px;height:14px;object-fit:contain;margin-right:5px;border-radius:3px;vertical-align:-2px}
++.cli-chat{display:flex;flex:1;flex-direction:column;min-height:0;position:relative;background:#211f24;color:#efe8e4}
++.cli-chat-header{display:flex;gap:8px;align-items:center;padding:10px 72px 9px 12px;border-bottom:1px solid #3a333a;min-height:47px}
++.cli-chat-header>div{display:grid;min-width:0}
++.cli-chat-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.cli-chat-header small,.cli-chat-composer small{color:#a99da3;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.cli-chat-header button,.cli-chat-latest{margin-left:auto;display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:10px;color:#dab5a4}
++.cli-chat-header button{padding:4px}
++.cli-chat-transcript{flex:1;min-height:0;overflow:auto;padding:12px}
++.cli-chat-column{max-width:660px;margin:auto}
++.cli-chat-empty,.cli-chat-progress{color:#ad9ca2;font-size:12px}
++.cli-chat-turn{display:grid;gap:8px;margin:0 0 15px}
++.cli-chat-turn p{margin:0}
++.cli-chat-user{justify-self:end;max-width:90%;white-space:pre-wrap;overflow-wrap:anywhere;background:#3b3034;border:1px solid #544148;border-radius:8px;padding:7px 9px}
++.cli-chat-tool{color:#bcb0b5;border:1px solid #443941;border-radius:7px}
++.cli-chat-tool summary{display:flex;align-items:center;gap:5px;cursor:pointer;padding:6px 8px}
++.cli-chat-tool p{padding:0 8px 6px;font-size:11px}
++.cli-chat-reply{line-height:1.55;overflow-wrap:anywhere}
++.cli-chat-reply p+p{margin-top:7px}
++.cli-chat-reply code{color:#e3b69f}
++.cli-chat-latest{align-self:center;margin:0 0 5px;padding:5px;background:#372e34;border-radius:6px}
++.cli-chat-approval,.cli-chat-composer{margin:0 10px 8px;padding:8px;border:1px solid #5a4549;border-radius:8px;background:#302831}
++.cli-chat-approval{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
++.cli-chat-approval button,.cli-chat-composer button{background:#b07964;color:#191519;padding:4px 6px;border-radius:5px}
++.cli-chat-approval button:first-of-type{background:#4a3d43;color:#eee8e4}
++.cli-chat-composer{display:grid;gap:4px}
++.cli-chat-composer textarea{resize:vertical;min-height:32px;max-height:96px;color:inherit;background:transparent;border:0}
++.cli-chat-composer>div{display:flex;justify-content:space-between;align-items:center;gap:4px}
++.cli-chat-composer button:disabled{opacity:.45}
++body:has(.modal-backdrop) .desktop-pet-layer *{pointer-events:none!important}
++@media(max-width:850px){
++  body:has(.modal-backdrop) .cli-review-tools{top:5px;bottom:auto}
++}
++
++.cli-worktree-form{display:grid;gap:10px}
++.cli-worktree-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
++.cli-worktree-form .field{margin:0}
++.cli-worktree-form select{min-width:0;width:100%;padding:7px 9px;border:1px solid #51464b;border-radius:6px;background:#262327;color:#ebe5e1;font:inherit}
++.cli-worktree-source{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#baa9a3}
++.cli-worktree-source select{width:auto;max-width:66%;font-family:monospace}
++.cli-worktree-target,.cli-worktree-empty{color:#ada0a0;font-size:10px}
++.cli-worktree-empty{margin:2px 0 6px 43px}
++
++.tapd-mcp-intro,.tapd-mcp-form{margin:10px 0;padding:10px;border:1px solid #494044;border-radius:8px;background:#27242a}
++.tapd-mcp-intro strong small{margin-left:6px;color:#d8ac93;font-size:10px}
++.tapd-mcp-intro ol{margin:8px 0 0;padding-left:20px;display:grid;gap:7px}
++.tapd-mcp-intro li span{display:block;color:#b8adb1;font-size:11px}
++.tapd-mcp-form .field{margin:0 0 8px}
++.tapd-mcp-form .tapd-mcp-hint{margin:6px 0 0;color:#b8adb1;font-size:11px}
++
++/* Same surfaces as the sidebar actions and workspace menu. */
++.cli-usage{
++  --quota-surface:#2b2929;--quota-line:#4a4442;--quota-text:#eee8e1;
++  --quota-muted:#aaa29d;--quota-hover:#ffffff0f;--quota-fill:#b99d89;--quota-radius:8px;
++  position:relative;margin:3px 8px 8px;container-type:inline-size;color:var(--quota-text)
++}
++.cli-usage-trigger{
++  display:flex;width:100%;align-items:center;justify-content:space-between;gap:4px;padding:6px;
++  background:var(--quota-hover);border-radius:var(--quota-radius);font-size:10px;color:var(--quota-text)
++}
++.cli-usage-trigger:hover,.cli-usage-trigger[aria-expanded=true]{background:#ffffff19}
++.cli-quota-badge,.cli-quota-engine{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
++.cli-quota-engine{gap:7px;min-width:0}
++.cli-quota-badge img,.cli-quota-engine img{width:14px;height:14px;object-fit:contain;border-radius:3px;flex:none}
++.cli-usage-panel{
++  position:absolute;bottom:calc(100% + 6px);left:0;z-index:2000;width:min(345px,calc(100vw - 20px));
++  max-height:min(430px,75vh);overflow:auto;border:1px solid var(--quota-line);border-radius:var(--quota-radius);
++  background:var(--quota-surface);color:var(--quota-text);box-shadow:0 12px 32px #0009;font-size:12px
++}
++.cli-usage-panel header{display:flex;align-items:center;gap:6px;padding:9px 10px}
++.cli-usage-panel small{color:var(--quota-muted);font-size:10px}
++.cli-usage-panel header button,.cli-usage-header-actions,.cli-usage-links button{display:flex;align-items:center;gap:4px}
++.cli-usage-header-actions{margin-left:auto}
++.cli-usage-mode{display:grid;grid-template-columns:1fr 1fr;gap:3px;padding:3px;margin:0 9px 6px;border:1px solid var(--quota-line);border-radius:6px}
++.cli-usage-mode button{padding:3px;border-radius:4px}
++.cli-usage-mode button[aria-pressed=true],.cli-usage-row:hover,.cli-usage-links button:hover{background:var(--quota-hover)}
++.cli-usage-rows{padding:0 9px}
++.cli-usage-rows>div,.cli-usage-links{border-top:1px solid var(--quota-line)}
++.cli-usage-row{display:flex;width:100%;align-items:center;gap:7px;padding:7px 3px;text-align:left;border-radius:5px}
++.cli-usage-row .cli-quota-engine{flex:1}
++.cli-usage-limits{display:flex;gap:6px;flex-wrap:wrap;padding:0 0 7px 24px}
++.cli-quota-meter{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
++.cli-quota-meter strong{min-width:25px;text-align:right;font-size:10px;font-variant-numeric:tabular-nums;font-weight:600}
++.cli-quota-track{width:22px;height:4px;background:var(--quota-line);border-radius:3px;overflow:hidden;flex:none}
++.cli-quota-track i{display:block;height:100%;background:var(--quota-fill)}
++.cli-usage-trigger .cli-quota-track{width:10px}
++.cli-usage-links,.cli-usage-subpage{padding:6px 10px}
++.cli-usage-links button{width:100%;justify-content:space-between;padding:6px 3px;border-radius:5px}
++.cli-usage-subpage>div{margin:7px 0}
++.cli-usage-subpage p{color:var(--quota-muted)}
++@container (max-width:220px){
++  .cli-usage-trigger .cli-quota-track{display:none}
++}
++
++.review-diff{--diff-gutter:24px;min-width:0;color:#eee8e1;background:#242326;font-size:11px}
++.review-diff-controls,.paired-diff-head{position:sticky;z-index:2;display:flex;gap:5px;align-items:center;border-bottom:1px solid #4a4442;background:#2b2929}
++.review-diff-controls{top:0;min-height:33px;padding:3px 8px}
++.review-diff-controls button{display:inline-flex;align-items:center;gap:4px;padding:3px 5px;border-radius:4px}
++.review-diff-controls button:disabled{opacity:.4}
++.review-diff-controls button:hover:not(:disabled){background:#ffffff13}
++.review-diff-controls [role=status]{margin-left:3px;color:#c7bab3;font-variant-numeric:tabular-nums}
++.review-diff-action{margin-left:auto;white-space:nowrap}
++.paired-diff-head,.paired-diff-row{display:grid;gap:0;grid-template-columns:minmax(0,1fr) var(--diff-gutter) minmax(0,1fr)}
++.paired-diff-head{top:33px;min-height:26px;color:#c2b5ae;font-size:10px}
++.paired-diff-head span{padding:4px 10px}
++.paired-diff-head i,.paired-diff-gutter{height:100%;background:#242126;border-inline:1px solid #413940}
++.review-diff .hunk{min-width:0;padding:4px 8px;background:#302a2d;border-bottom:1px solid #40373c;color:#b8a7ad}
++.review-diff .hunk code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.review-diff .code-diff{padding:0}
++.review-diff .code-line{height:auto;min-height:23px;line-height:23px}
++.review-diff-block[data-change]{scroll-margin-top:65px}
++.review-diff-block.current{box-shadow:inset 2px 0 #ba8a72;position:relative}
++.review-diff-block.current::after{content:"";position:absolute;inset:0;border:1px solid #b88a6e70;pointer-events:none}
++.review-diff-paired .code-line{min-width:0;padding-right:5px;align-items:start}
++.review-diff-paired .code-line code{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
++.review-diff-paired .code-line.blank{background:repeating-linear-gradient(-45deg,#29262b,#29262b 4px,#302c31 4px,#302c31 5px)}
++.paired-diff-block{position:relative}
++.paired-diff-ribbon{position:absolute;inset:0 auto 0 calc(50% - var(--diff-gutter)/2);width:var(--diff-gutter);height:100%;pointer-events:none}
++.paired-diff-ribbon path{fill:#b8907866;stroke:#bc917b8c;stroke-width:1px;vector-effect:non-scaling-stroke}
++.paired-diff-ribbon.added path{fill:#68977a66;stroke:#75a9869c}
++.paired-diff-ribbon.removed path{fill:#ae747666;stroke:#c684849c}
++.review-diff .code-line mark{color:inherit;background:#56785c;border-radius:2px}
++.review-diff .code-line.del mark{background:#825355}
++@media(max-width:1000px){.review-diff{--diff-gutter:18px}.review-diff-paired .code-line>span{width:25px}}
++
++.cli-branch-picker{display:flex;align-items:center;gap:6px}
++.cli-project-picker{display:flex;align-items:center;gap:5px;padding:0 6px;border:1px solid #49403e;border-radius:6px;background:#292627;color:#c6b7ad;min-width:0}
++.cli-project-picker select{min-width:0;max-width:122px;height:28px;border:0;color:#e7dcd3;background:#292627;padding-right:3px;font:inherit;text-overflow:ellipsis}
++.cli-branch-picker .cli-branch-menu{width:min(300px,calc(100vw - 16px));max-height:min(300px,45vh);overflow:auto}
++.cli-branch-picker .branch-options{min-width:0;padding:7px}
++.cli-branch-picker .branch-options .search{position:sticky;top:0;background:#292627;z-index:1;margin:0 0 5px}
++.cli-branch-picker .branch-options .search input{width:100%;min-width:0}
++.cli-branch-picker .branch-options button:focus-visible{background:#43342d;outline:1px solid #b1876c}
++.module-branch-controls .cli-branch-picker{display:grid;gap:6px}
++.module-branch-controls .cli-project-picker select,.module-branch-controls .cli-branch-menu{width:100%;max-width:none}
++.module-branch-controls .cli-branch-menu{margin-top:0}
++.tree-context{max-height:calc(100vh - 16px);overflow:auto}
++
++.wecom-isolation-preview{border:1px solid #494044;border-radius:8px;background:#27242a;padding:10px;margin:10px 0;display:grid;gap:7px}
++.wecom-isolation-preview h4,.wecom-isolation-preview p,.wecom-isolation-preview .field{margin:0}
++.wecom-preview-fields{display:grid;grid-template-columns:1fr 1fr;gap:7px}
++.wecom-preview-message{display:flex;gap:6px}
++.wecom-preview-message input{flex:1;min-width:0;padding:5px 7px;background:#232126;border:1px solid #494044;border-radius:6px;color:inherit}
++.wecom-conversation-preview{display:grid;gap:4px;overflow-wrap:anywhere;font-size:11px}
++.wecom-conversation-preview ol{margin:0;padding-left:17px;max-height:135px;overflow:auto}
++.wecom-conversation-preview li small{display:block;color:#bcaeaf}
++
++.wecom-bot-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin-bottom:12px}
++.wecom-bot-picker .field,.wecom-routing .field{margin:0 0 5px}
++.wecom-bot-picker>button{margin-bottom:5px}
++.wecom-routing{display:grid;gap:5px;margin:10px 0;padding:9px;border:1px solid #4a4144;border-radius:7px}
++.wecom-routing h4,.wecom-routing p{margin:0}
++.wecom-routing p{color:#b8adb1;font-size:11px}
++.wecom-preview-card,.wecom-card-body{display:grid;gap:6px}
++.wecom-card-body{padding:8px;border:1px solid #635052;border-radius:7px;background:#322a2e}
++.wecom-card-body [role="status"]{color:#b0c7a9}
++
++.wecom-scope-picker{min-width:0;margin:0;padding:5px 7px 7px;border:1px solid #50464a;border-radius:6px}
++.wecom-scope-picker legend{padding:0 4px;color:#d9c8c3}
++.wecom-scope-all,.wecom-scope-option{display:inline-flex;align-items:center;gap:5px;font-size:11px}
++.wecom-scope-all{padding:3px 0;color:#c9b5b0}
++.wecom-scope-options{display:flex;flex-wrap:wrap;gap:4px}
++.wecom-scope-option{padding:3px 5px;border:1px solid #50464a;border-radius:5px;background:#2d282c}
++.wecom-scope-picker input{margin:0;accent-color:#c18b73}
+diff --git a/Web/src/cli-review.js b/Web/src/cli-review.js
+new file mode 100644
+index 0000000..31b20cb
+--- /dev/null
++++ b/Web/src/cli-review.js
+@@ -0,0 +1,89 @@
++import './cli-review.css';
++
++export function mountCliReview() {
++  const storageKey = 'claude-picker-test-cli-review-63a3bbc';
++  const tools = document.createElement('div');
++  tools.className = 'cli-review-tools';
++  tools.innerHTML = '<span>test · CLI 原型</span><button id="review-check">CLI 配置</button><button id="review-mark">标注区域</button><button id="review-notes">批注</button>';
++  const comments = document.createElement('dialog');
++  comments.className = 'cli-review-dialog';
++  comments.innerHTML = `
++    <h2>界面批注</h2>
++    <label>位置<select id="review-region"></select></label>
++    <label>修改意见<textarea id="review-text" rows="3" required></textarea></label>
++    <p id="review-feedback" role="status"></p>
++    <div class="cli-review-actions"><button data-close>关闭</button><button id="review-export">导出 JSON</button><button id="review-save">保存</button></div>
++    <div id="review-list"></div>`;
++  document.body.append(tools, comments);
++
++  const element = id => document.getElementById(id);
++  const knownRegions = ['整体体验', '新建会话 · 执行 CLI 引擎', '新建会话 · 当前分支与独立工作树',
++    '新建会话 · DeepSeek 依赖提示', '项目侧栏 · 分支与工作树', '项目侧栏 · 会话引擎标识',
++    '终端 · CLI 启动与恢复', '终端 · DeepSeek 依赖提示', 'CLI 配置 · 全局打开方式', 'CLI 配置 · 新会话默认权限',
++    'CLI 配置 · 已安装', 'CLI 配置 · 可安装', 'CLI 配置 · DeepSeek 依赖', 'CLI 配置 · 提示缓存定时器',
++    '企业微信 · 多机器人', '企业微信 · 人员场景与项目范围', '企业微信 · 决策卡片', '企业微信 · 对话默认 CLI', '企业微信 · 人员与会话隔离', 'TAPD MCP · 配置步骤', 'TAPD MCP · 一键配置', 'TAPD MCP · 连接状态', '创建工作树 · 表单', '创建工作树 · 起始分支', '创建工作树 · 可选代理',
++    'Diff · 对比视图', 'Diff · 差异导航', '项目侧栏 · 额度入口', '项目侧栏 · 额度面板', '项目侧栏 · 分支与会话菜单', '会话右键 · 会话信息', '变更 · 项目与分支选择', '项目侧栏 · Claude 缓存倒计时', '原生聊天 · 会话界面', '原生聊天 · 消息与工具', '原生聊天 · 工具审批', '原生聊天 · 输入区'];
++  let marking = false;
++  let notes = [];
++  try {
++    const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
++    if (Array.isArray(saved)) notes = saved;
++  } catch {}
++
++  function showNotes(region = '整体体验') {
++    element('review-region').replaceChildren(...knownRegions.map(name => new Option(name, name)));
++    element('review-region').value = region;
++    element('review-list').replaceChildren(...notes.map(note => {
++      const row = document.createElement('p');
++      row.textContent = note.region + ' · ' + note.text;
++      return row;
++    }));
++    element('review-notes').textContent = notes.length ? '批注 (' + notes.length + ')' : '批注';
++    if (!comments.open) comments.showModal();
++  }
++
++  function toggleMark(value) {
++    marking = value;
++    document.body.classList.toggle('cli-review-marking', marking);
++    element('review-mark').textContent = marking ? '取消标注' : '标注区域';
++  }
++
++  document.addEventListener('click', event => {
++    const region = event.target.closest('[data-review]');
++    if (!marking || !region) return;
++    event.preventDefault();
++    event.stopImmediatePropagation();
++    toggleMark(false);
++    showNotes(region.dataset.review);
++  }, true);
++  document.addEventListener('keydown', event => {
++    if (event.key === 'Escape' && marking) toggleMark(false);
++  });
++  comments.querySelector('[data-close]').onclick = () => comments.close();
++  element('review-check').onclick = () => window.dispatchEvent(new Event('cli-review-check'));
++  element('review-mark').onclick = () => toggleMark(!marking);
++  element('review-notes').onclick = () => showNotes();
++  element('review-save').onclick = () => {
++    const input = element('review-text');
++    const text = input.value.trim();
++    if (!text) { input.focus(); return; }
++    const region = element('review-region').value;
++    notes.push({region, text});
++    const feedback = element('review-feedback');
++    try {
++      localStorage.setItem(storageKey, JSON.stringify(notes));
++      feedback.textContent = '批注已保存';
++    } catch { feedback.textContent = '浏览器未保存批注，请导出 JSON'; }
++    input.value = '';
++    showNotes(region);
++  };
++  element('review-export').onclick = () => {
++    const url = URL.createObjectURL(new Blob([JSON.stringify(notes, null, 2)], {type:'application/json'}));
++    const link = document.createElement('a');
++    link.href = url;
++    link.download = 'claude-picker-test-cli-comments.json';
++    link.click();
++    setTimeout(() => URL.revokeObjectURL(url), 1000);
++  };
++  element('review-notes').textContent = notes.length ? '批注 (' + notes.length + ')' : '批注';
++}
+diff --git a/Web/src/main.jsx b/Web/src/main.jsx
+index 6eac027..8f1c98b 100644
+--- a/Web/src/main.jsx
++++ b/Web/src/main.jsx
+@@ -1,10 +1,12 @@
+ import React from 'react';
+ import { createRoot } from 'react-dom/client';
++import { mountCliReview } from './cli-review.js';
+ 
+ // 桌面桌宠悬浮窗（原生 PetController 以 ?pet=desktop 加载）只渲染桌宠，不加载整个外壳。
+ const root = createRoot(document.getElementById('root'));
+ if (new URLSearchParams(location.search).get('pet') === 'desktop') {
+   import('./shell/pet/PetWindow.jsx').then(({ default: PetWindow }) => root.render(<PetWindow />));
+ } else {
++  mountCliReview();
+   import('./shell/App.jsx').then(({ default: App }) => root.render(<App />));
+ }
+diff --git a/Web/src/shell/App.jsx b/Web/src/shell/App.jsx
+index 9a5b11f..6eb19fe 100644
+--- a/Web/src/shell/App.jsx
++++ b/Web/src/shell/App.jsx
+@@ -32,6 +32,7 @@ import './style.css';
+ import appIcon from './clawd-mark.png';
+ import { errorText, isNative, on, request } from './bridge.js';
+ import { IconButton, tildePath, useStored } from './ui.jsx';
++import { resumeCommand } from './session-info.js';
+ import Sidebar from './Sidebar.jsx';
+ import {
+   GIT_SECTIONS,
+@@ -52,7 +53,7 @@ import DesktopPet from './pet/DesktopPet.jsx';
+ import { petEvent, usePetSignals } from './pet/usePetSignals.js';
+ import WorkspaceTab from './WorkspaceTab.jsx';
+ import { BranchesTab, HistoryTab, MoreTab, WorktreeTab } from './GitPages.jsx';
+-import { ContextModal, DirectoryModal, McpModal, RenameSessionModal, SessionModal } from './Modals.jsx';
++import { ContextModal, CreateWorktreeModal, DirectoryModal, SessionInfoModal, McpModal, RenameSessionModal, SessionModal } from './Modals.jsx';
+ import './work/work.css';
+ import { needsAttention, useWorks } from './work/useWorks.js';
+ import WorkChat from './work/WorkChat.jsx';
+@@ -61,6 +62,7 @@ import BoardPage from './work/BoardPage.jsx';
+ import TapdModule from './work/TapdModule.jsx';
+ import ReviewTab from './work/ReviewTab.jsx';
+ import FloatingWork from './work/FloatingWork.jsx';
++import CliChatPreview from './CliChatPreview.jsx';
+ import SettingsModal from './work/SettingsModal.jsx';
+ import { ConfirmHost } from './work/confirm.jsx';
+ import { DeliveryModal, ExportModal, NewWorkModal, SearchModal, SourceModal } from './work/WorkModals.jsx';
+@@ -119,12 +121,18 @@ export default function App() {
+ 
+   const [menu, setMenu] = useState(null);
+   const [branchFilter, setBranchFilter] = useState('');
+-  const [pickedBranch, setPickedBranch] = useState('');
+   const [branchContext, setBranchContext] = useState(null);
+   const [treeContext, setTreeContext] = useState(null);
++  const [diffWorkspace, setDiffWorkspace] = useState(null);
+   const [treeCursor, setTreeCursor] = useState(null);
+   const [runtimeMenu, setRuntimeMenu] = useState(null);
+   const [modal, setModal] = useState(null);
++  const [cliSettingsOpen, setCliSettingsOpen] = useState(() => new URLSearchParams(location.search).get('settings') === 'cli');
++  useEffect(() => {
++    const open = () => setCliSettingsOpen(true);
++    window.addEventListener('cli-review-check', open);
++    return () => window.removeEventListener('cli-review-check', open);
++  }, []);
+   const [toast, setToast] = useState(null);
+   const [log, setLog] = useState([]);
+   const [followBanner, setFollowBanner] = useState(null);
+@@ -253,8 +261,9 @@ export default function App() {
+   const projects = state?.projects ?? [];
+   const active = state?.active ?? null;
+   const project = projects.find((item) => item.path === workbenchPath) ?? null;
+-  const pathRef = useRef(workbenchPath);
+-  pathRef.current = workbenchPath;
++  const gitPath = diffWorkspace?.projectPath === workbenchPath ? diffWorkspace.worktree : workbenchPath;
++  const pathRef = useRef(gitPath);
++  pathRef.current = gitPath;
+ 
+   // 工作台项目：记住上次的；不在列表里了就跟当前会话走，再不行取第一个普通项目。
+   useEffect(() => {
+@@ -313,13 +322,13 @@ export default function App() {
+     setBranches(null);
+     setBranchesError(null);
+     setFollowBanner((banner) => (banner && banner.projectPath !== workbenchPath ? null : banner));
+-  }, [workbenchPath]);
++  }, [gitPath]);
+ 
+   useEffect(() => {
+-    if (!workbenchPath) return;
++    if (!gitPath) return;
+     loadStatus();
+     loadBranches();
+-  }, [workbenchPath, epoch]);
++  }, [gitPath, epoch]);
+ 
+   const workbenchVisible = Boolean(settings?.workbench);
+   useEffect(() => {
+@@ -405,11 +414,11 @@ export default function App() {
+   const notRepository = statusError?.code === 'NOT_A_REPOSITORY';
+ 
+   function selectProject(path) {
++    setDiffWorkspace(null);
+     if (path !== workbenchPath) setWorkbenchPath(path);
+     setMenu(null);
+     setBranchContext(null);
+     setBranchFilter('');
+-    setPickedBranch('');
+     setMorePage(null);
+   }
+ 
+@@ -464,15 +473,16 @@ export default function App() {
+       runGit('git.merge', { branch: name }, `已将 ${name} 合并到 ${currentBranch ?? '当前分支'}`);
+   }
+ 
+-  function openTreeContext(event, target, session = null) {
++  function openTreeContext(event, target, session = null, group = null) {
+     event.preventDefault();
+     setMenu(null);
+     setBranchContext(null);
+     setTreeContext({
+       project: target,
+       session,
++      group,
+       x: Math.min(event.clientX, window.innerWidth - 218),
+-      y: Math.min(event.clientY, window.innerHeight - 240),
++      y: Math.max(8, Math.min(event.clientY, window.innerHeight - (session ? 330 : 200))),
+     });
+   }
+ 
+@@ -496,13 +506,65 @@ export default function App() {
+     }
+   }
+ 
++  async function openBranchDiff(target, group) {
++    if (!group?.branch && !group?.worktree) return;
++    try {
++      const cwd = group.worktree ?? target.path;
++      const status = await request('git.status', { projectPath: cwd });
++      if (!group.worktree && status.branch !== group.branch) {
++        await request('git.switchBranch', { projectPath: cwd, branch: group.branch });
++      }
++      selectProject(target.path);
++      setDiffWorkspace(group.worktree ? { projectPath: target.path, worktree: cwd } : null);
++      setSelectedWorkId(null);
++      revealPage('workspace');
++      setPage('workspace');
++      setTab('工作区');
++      setConsoleOpen(false);
++      updateSettings({ terminal: false, workbench: true });
++      setEpoch((value) => value + 1);
++    } catch (error) {
++      notify(errorText(error), true);
++    }
++  }
++
++  async function copyTreeValue(value, label, sessionInfo = null) {
++    if (!value) return;
++    try {
++      await navigator.clipboard.writeText(value);
++      notify(`已复制${label}`);
++    } catch {
++      if (sessionInfo) setModal({ kind: 'session-info', ...sessionInfo });
++      notify('无法写入剪贴板，请手动复制', true);
++    }
++  }
++
+   function treeAction(action) {
+-    const { project: target, session } = treeContext;
++    const { project: target, session, group } = treeContext;
+     setTreeContext(null);
++    if (action === '复制分支名') { copyTreeValue(group?.branch, '分支名'); return; }
++    if (action === '复制工作目录') { copyTreeValue(group?.worktree ?? target.path, '工作目录'); return; }
++    if (session && ['查看会话信息', '复制会话 ID', '复制恢复命令'].includes(action)) {
++      const info = { session, projectPath: target.path };
++      if (action === '查看会话信息') setModal({ kind: 'session-info', ...info });
++      if (action === '复制会话 ID') copyTreeValue(session.originalSessionId, '会话 ID', info);
++      if (action === '复制恢复命令') copyTreeValue(resumeCommand(session.provider ?? 'claude', session.originalSessionId), '恢复命令', info);
++      return;
++    }
++    if (action === '在工作区查看 Diff') {
++      openBranchDiff(target, group);
++      return;
++    }
++    if (action === '创建工作树') {
++      setModal({ kind: 'create-worktree', projectPath: target.path });
++      return;
++    }
+     if (action === '新建对话') {
+-      selectProject(target.path);
++      if (!group) selectProject(target.path);
+       if (!target.expanded) request('app.toggleProject', { path: target.path });
+-      setModal({ kind: 'session', mode: 'current', projectPath: target.path });
++      setModal({ kind: 'session', mode: 'current', projectPath: target.path,
++        workspace: group ? { branch: group.branch, worktreePath: group.worktree } : null });
++      return;
+     }
+     if (action === '重命名' && session) setModal({ kind: 'rename', session });
+     if (action === '转到 Antigravity 继续' && session) {
+@@ -551,6 +613,12 @@ export default function App() {
+   }
+ 
+   function openSession(target, session) {
++    const provider = session.provider ?? 'claude';
++    if (settings.cliPreferences?.[provider]?.enabled === false) {
++      const engine = state.providers?.find((item) => item.id === provider)?.label ?? provider;
++      notify(`${engine} 已停用，请在 CLI 引擎设置中启用。`, true);
++      return;
++    }
+     setSelectedWorkId(null);
+     revealPage('workspace');
+     setPage('workspace');
+@@ -560,7 +628,7 @@ export default function App() {
+       projectPath: target.path,
+       cwd: session.cwd,
+       sessionId: session.id,
+-      provider: session.provider ?? 'claude',
++      provider,
+     }).catch((error) => notify(errorText(error), true));
+   }
+ 
+@@ -841,11 +909,22 @@ export default function App() {
+     (item) => item.enabled !== false,
+   );
+   // 图形聊天模式：第二栏里是 Swttch 自己的输入区（仅 Claude 会话走图形聊天，Antigravity 自动回退原生终端）。
+-  const chatMode =
+-    settings.interactionMode === 'chat' &&
+-    (active?.provider ?? state.runtime?.provider ?? 'claude') === 'claude';
++  const currentEngine = active?.provider ?? state.runtime?.provider ?? 'claude';
++  const modeOverride = settings.cliPreferences?.[currentEngine]?.mode;
++  const defaultMode = modeOverride && modeOverride !== 'inherit' ? modeOverride : settings.interactionMode;
++  const openMode = active && !native && !window.claudeDesktop ? (active.surface ?? 'terminal') : defaultMode;
++  const chatPreview = Boolean(active && !native && !window.claudeDesktop && openMode === 'chat' && currentEngine !== 'dsh');
++  const switchSurface = (surface) => request('prototype.session.surface', { sessionId: active.sessionId, surface })
++    .catch((error) => notify(errorText(error), true));
++  const chatMode = chatPreview || (openMode === 'chat' && currentEngine === 'claude');
++  const permissionOverride = settings.cliPreferences?.[currentEngine]?.permission;
++  const chatPermission = permissionOverride && permissionOverride !== 'default' ? permissionOverride : settings.cliPermission;
+   const terminalWidth = settings.terminalWidth ?? DEFAULT_TERMINAL_WIDTH;
+   const runtime = state.runtime;
++  const addedProvider = active?.provider === 'codex' || active?.provider === 'dsh';
++  const activeEngine = (state.providers ?? []).find((p) => p.id === active?.provider);
++  const engineCommand = (active?.restored ? resumeCommand(active.provider, active.originalSessionId) : null)
++    ?? (active?.provider === 'codex' ? 'codex' : 'dsh-tui --backend dsh');
+   const modelLabel =
+     runtime.models.find((item) => item.id === runtime.model)?.label ?? runtime.model;
+   const sessionProject = projects.find((item) => item.path === active?.projectPath) ?? project;
+@@ -885,140 +964,92 @@ export default function App() {
+     items: (branches ?? []).filter(
+       (item) =>
+         item.isRemote === (group === '远程分支') &&
+-        item.name.toLowerCase().includes(branchFilter.toLowerCase()),
++        item.name.toLowerCase().includes(branchFilter.trim().toLowerCase()),
+     ),
+   }));
+ 
++  function chooseBranch(item) {
++    if (!item) return;
++    if (item.isCurrent) { setMenu(null); return; }
++    checkoutBranch(item.name);
++  }
++
++  function branchPickerKeys(event) {
++    if (event.key === 'Escape') {
++      event.stopPropagation();
++      setMenu(null);
++      event.currentTarget.parentElement.querySelector('.branch-picker')?.focus();
++      return;
++    }
++    const buttons = [...event.currentTarget.querySelectorAll('[data-branch-option]:not(:disabled)')];
++    if (event.key === 'Enter' && event.target.tagName === 'INPUT') {
++      event.preventDefault();
++      buttons[0]?.click();
++    }
++    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
++      event.preventDefault();
++      const index = buttons.indexOf(event.target);
++      if (event.key === 'ArrowUp' && index === 0) {
++        event.currentTarget.querySelector('input')?.focus();
++        return;
++      }
++      const next = index + (event.key === 'ArrowDown' ? 1 : -1);
++      buttons[Math.max(0, Math.min(buttons.length - 1, next))]?.focus();
++    }
++  }
++
+   const branchPicker = (
+-    <div className="project-menu-wrap">
+-      {page === 'git' && (
+-        <label className="search sidebar-branch-search">
+-          <MagnifyingGlass size={13} />
+-          <input
+-            aria-label="搜索分支"
+-            placeholder="搜索分支…"
+-            value={branchFilter}
+-            onFocus={() => {
+-              setMenu('branch');
+-              loadBranches();
+-            }}
+-            onChange={(event) => {
+-              setBranchFilter(event.target.value);
+-              setMenu('branch');
+-            }}
+-            onKeyDown={(event) => {
+-              if (event.key === 'Escape') {
+-                setMenu(null);
+-                event.stopPropagation();
+-              }
+-            }}
+-          />
+-        </label>
+-      )}
++    <div className="project-menu-wrap cli-branch-picker" data-review="变更 · 项目与分支选择">
++      <label className="cli-project-picker">
++        <Folder size={14} />
++        <select aria-label="选择项目" value={workbenchPath}
++          onChange={(event) => selectProject(event.target.value)}>
++          {projects.map((item) => <option key={item.path} value={item.path}>{item.title}</option>)}
++        </select>
++      </label>
+       <button
+         className="branch-picker"
+         aria-label="选择分支"
+-        title={project ? `${project.title} · ${tildePath(project.path, state.home)}` : ''}
++        aria-expanded={menu === 'branch'}
++        title={gitPath}
+         onClick={() => {
+-          setMenu(menu === 'branch' ? null : 'branch');
+-          setPickedBranch(currentBranch ?? '');
+-          if (menu !== 'branch') loadBranches();
++          if (menu === 'branch') { setMenu(null); return; }
++          setBranchFilter('');
++          setMenu('branch');
++          loadBranches();
+         }}
+         onContextMenu={(event) => openBranchContext(event, currentBranch)}
+       >
+-        <GitBranch size={15} />
+-        <b>{branchLabel}</b>
+-        <CaretDown size={12} />
++        <GitBranch size={15} /><b>{branchLabel}</b><CaretDown size={12} />
+       </button>
+       {menu === 'branch' && (
+-        <div
+-          className="dropdown project-branch-dropdown"
+-          role="dialog"
+-          aria-label="项目与分支"
+-          data-blocking
+-        >
+-          <div className="branch-project-list">
+-            <div className="menu-title">项目</div>
+-            {projects.map((item) => (
+-              <button
+-                key={item.path}
+-                className={workbenchPath === item.path ? 'selected' : ''}
+-                title={tildePath(item.path, state.home)}
+-                onClick={() => {
+-                  selectProject(item.path);
+-                  setMenu('branch');
+-                }}
+-              >
+-                {item.isHome ? (
+-                  <House
+-                    size={14}
+-                    weight={workbenchPath === item.path ? 'fill' : 'regular'}
+-                  />
+-                ) : (
+-                  <Folder
+-                    size={14}
+-                    weight={workbenchPath === item.path ? 'fill' : 'regular'}
+-                  />
+-                )}
+-                <span>{item.title}</span>
+-              </button>
+-            ))}
+-          </div>
++        <div className="dropdown project-branch-dropdown cli-branch-menu" role="dialog"
++          aria-label="切换分支" data-blocking onKeyDown={branchPickerKeys}>
+           <div className="branch-options">
+-            {page !== 'git' && (
+-              <label className="search">
+-                <MagnifyingGlass size={13} />
+-                <input
+-                  aria-label="筛选分支"
+-                  placeholder="筛选分支…"
+-                  value={branchFilter}
+-                  onChange={(event) => setBranchFilter(event.target.value)}
+-                />
+-              </label>
+-            )}
++            <label className="search">
++              <MagnifyingGlass size={13} />
++              <input autoFocus aria-label="搜索分支" placeholder="搜索本地或远程分支…"
++                value={branchFilter} onChange={(event) => setBranchFilter(event.target.value)} />
++            </label>
+             {notRepository && <div className="pane-note">这个目录不是 Git 仓库</div>}
+-            {branchesError && !notRepository && (
+-              <div className="pane-note error">{branchesError}</div>
+-            )}
+-            {!branches && !branchesError && !notRepository && (
+-              <div className="pane-note">正在读取分支…</div>
+-            )}
++            {branchesError && !notRepository && <div className="pane-note error">{branchesError}</div>}
++            {!branches && !branchesError && !notRepository && <div className="pane-note">正在读取分支…</div>}
+             {branches && !branchesError && !notRepository && branchGroups.every(({ items }) => !items.length) && (
+               <div className="pane-note">没有匹配的分支</div>
+             )}
+-            {branches &&
+-              branchGroups.map(({ group, items }) => (
+-                <div key={group}>
+-                  <div className="menu-title">{group}</div>
+-                  {items.map((item) => (
+-                    <button
+-                      key={item.name}
+-                      className={`${pickedBranch === item.name ? 'picked' : ''} ${item.isCurrent ? 'current' : ''}`}
+-                      disabled={gitBusy}
+-                      onClick={() => {
+-                        setPickedBranch(item.name);
+-                        if (settings.followSessionBranch) revealBranch(item.name);
+-                      }}
+-                      onDoubleClick={() => checkoutBranch(item.name)}
+-                      onKeyDown={(event) => {
+-                        if (event.key === 'Enter') {
+-                          event.preventDefault();
+-                          checkoutBranch(item.name);
+-                        }
+-                      }}
+-                      onContextMenu={(event) => {
+-                        setPickedBranch(item.name);
+-                        openBranchContext(event, item.name);
+-                      }}
+-                    >
+-                      <GitBranch size={14} />
+-                      <span>{item.name}</span>
+-                      {item.isCurrent && <Check size={13} />}
+-                    </button>
+-                  ))}
+-                </div>
+-              ))}
+-            <div className="branch-picker-hint">双击签出 · 右键更多操作</div>
++            {branches && branchGroups.filter(({ items }) => items.length).map(({ group, items }) => (
++              <div key={group}>
++                <div className="menu-title">{group}</div>
++                {items.map((item) => (
++                  <button key={item.name} data-branch-option disabled={gitBusy}
++                    className={item.isCurrent ? 'current' : ''} title={item.name}
++                    onClick={() => chooseBranch(item)}
++                    onContextMenu={(event) => openBranchContext(event, item.name)}>
++                    <GitBranch size={14} /><span>{item.name}</span>{item.isCurrent && <Check size={13} />}
++                  </button>
++                ))}
++              </div>
++            ))}
+           </div>
+         </div>
+       )}
+@@ -1045,8 +1076,8 @@ export default function App() {
+     if (tab === '工作区')
+       return (
+         <WorkspaceTab
+-          key={project.path}
+-          projectPath={project.path}
++          key={gitPath}
++          projectPath={gitPath}
+           status={status}
+           statusError={statusError?.text ?? null}
+           stamp={stamp}
+@@ -1083,7 +1114,7 @@ export default function App() {
+           home={state.home}
+           epoch={epoch}
+           runGit={runGit}
+-          onNewSession={(mode) => setModal({ kind: 'session', mode, projectPath: project.path })}
++          onCreateWorktree={() => setModal({ kind: 'create-worktree', projectPath: project.path })}
+         />
+       );
+     return (
+@@ -1394,6 +1425,7 @@ export default function App() {
+             onSelectProject={selectProject}
+             onOpenSession={openSession}
+             onTreeContext={openTreeContext}
++            onBranchTreeContext={(event, target, group) => openTreeContext(event, target, null, group)}
+             onAddDirectory={() => setModal({ kind: 'directory' })}
+             onSettings={() => setModal({ kind: 'settings' })}
+             onNewSession={() =>
+@@ -1405,8 +1437,7 @@ export default function App() {
+             selectedWorkId={page === 'workspace' || page === 'git' ? selectedWorkId : null}
+             onOpenWork={openWork}
+             onSearch={() => setWorkModal({ kind: 'search' })}
+-            providerFilter={settings.providerFilter ?? 'all'}
+-            onProviderFilter={(value) => updateSettings({ providerFilter: value })}
++            cacheSettings={settings.promptCacheTimer}
+           />
+         ) : (
+           <ModuleSidebar
+@@ -1463,6 +1494,10 @@ export default function App() {
+             style={{ flexBasis: workbench ? `${terminalWidth}%` : '100%' }}
+           >
+             <div className="terminal-actions" data-terminal-overlay>
++              {active && !chatPreview && !native && !window.claudeDesktop && currentEngine !== 'dsh' && (
++                <IconButton icon={ChatsCircle} label="打开聊天"
++                  onClick={() => switchSurface('chat')} />
++              )}
+               {active && (
+                 <IconButton
+                   icon={X}
+@@ -1476,7 +1511,12 @@ export default function App() {
+                 onClick={() => updateSettings({ terminal: false })}
+               />
+             </div>
+-            {active && window.claudeDesktop ? (
++            {chatPreview ? (
++              <CliChatPreview key={active.sessionId} active={active} engine={activeEngine?.label ?? currentEngine}
++                chat={state.chats?.[active.sessionId]} permission={chatPermission}
++                onError={(message) => notify(message, true)}
++                onUseTerminal={() => switchSurface('terminal')} />
++            ) : active && window.claudeDesktop ? (
+               <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
+             ) : active && native ? (
+               <div className="terminal-hole" data-terminal-hole />
+@@ -1485,14 +1525,27 @@ export default function App() {
+                 <div className="terminal-intro">
+                   <img src={appIcon} alt="CLI" />
+                   <div>
+-                    <strong>{runtime?.provider === 'antigravity' ? 'Antigravity' : 'Claude Code'}</strong>
++                    <strong>{addedProvider ? activeEngine?.label : runtime?.provider === 'antigravity' ? 'Antigravity' : 'Claude Code'}</strong>
+                     <span>
+-                      {modelLabel}
++                      {addedProvider ? '原生终端' : modelLabel}
+                       {sessionProject ? ` · ${sessionProject.title}` : ''}
+                     </span>
+                   </div>
+                 </div>
+-                {active ? (
++                {addedProvider ? (
++                  <div className="terminal-user cli-review-terminal" data-review="终端 · CLI 启动与恢复">
++                    <strong>{active.label}</strong>
++                    <small>{active.cwd}</small>
++                    {activeEngine?.available === false ? (
++                      <div className="pane-note error" role="alert" data-review="终端 · DeepSeek 依赖提示">
++                        找不到 dsh。会话与工作目录已保留。
++                        <button type="button" onClick={() => window.dispatchEvent(new Event('cli-review-check'))}>检查 CLI</button>
++                      </div>
++                    ) : (
++                      <><code>$ {engineCommand}</code><small>{active.restored ? '已恢复会话（模拟）' : '已打开终端（模拟）'}</small></>
++                    )}
++                  </div>
++                ) : active ? (
+                   <p className="terminal-user">
+                     {active.label} · 终端由 ClaudePicker 原生窗口承载，浏览器预览不显示终端内容。
+                   </p>
+@@ -1504,8 +1557,8 @@ export default function App() {
+                 )}
+               </div>
+             )}
+-            {!chatMode && !native && !window.claudeDesktop && <div className="terminal-dock">{composer}</div>}
+-            {!chatMode && (native || window.claudeDesktop) && runtimeBar}
++            {!addedProvider && !chatMode && !native && !window.claudeDesktop && <div className="terminal-dock">{composer}</div>}
++            {!addedProvider && !chatMode && (native || window.claudeDesktop) && runtimeBar}
+           </section>
+         ) : null}
+ 
+@@ -1593,18 +1646,28 @@ export default function App() {
+           className="branch-context tree-context"
+           role="menu"
+           aria-label="项目与会话操作"
++          data-review="项目侧栏 · 分支与会话菜单"
+           data-blocking
+           style={{ left: treeContext.x, top: treeContext.y }}
+         >
+           <div className="menu-title">
+-            {treeContext.session?.title ?? treeContext.project.title}
++            {treeContext.group?.branch ?? treeContext.session?.title ?? treeContext.project.title}
+           </div>
+-          {[
++          {(treeContext.group ? [
++            ['新建对话', !treeContext.group.branch && !treeContext.group.worktree],
++            ['在工作区查看 Diff', !treeContext.group.branch && !treeContext.group.worktree],
++            ['复制分支名', !treeContext.group.branch],
++            ['复制工作目录', false],
++          ] : [
+             ['新建对话', false],
++            ...(!treeContext.session && state.worktreesByProject?.[treeContext.project.path] ? [['创建工作树', false]] : []),
+             ...(treeContext.session
+               ? [
+                   ['重命名', false],
+-                  [
++                  ['查看会话信息', false],
++                  ['复制会话 ID', !treeContext.session.originalSessionId],
++                  ['复制恢复命令', !resumeCommand(treeContext.session.provider ?? 'claude', treeContext.session.originalSessionId)],
++                  ...(['codex', 'dsh'].includes(treeContext.session.provider) ? [] : [[
+                     (treeContext.session.provider ?? 'claude') === 'antigravity'
+                       ? '转到 Claude Code 继续'
+                       : '转到 Antigravity 继续',
+@@ -1616,8 +1679,7 @@ export default function App() {
+                               ? 'claude'
+                               : 'antigravity') && p.available,
+                       ),
+-                  ],
+-                  ['作为 Work 继续', false],
++                    ], ['作为 Work 继续', false]]),
+                 ]
+               : []),
+             [
+@@ -1633,7 +1695,7 @@ export default function App() {
+                 ]
+               : []),
+             ['从列表移除', !treeContext.session && treeContext.project.isHome],
+-          ].map(([action, disabled]) => (
++          ]).map(([action, disabled]) => (
+             <button
+               role="menuitem"
+               key={action}
+@@ -1701,29 +1763,56 @@ export default function App() {
+           onAdded={(path) => selectProject(path)}
+         />
+       )}
++      {modal?.kind === 'create-worktree' && modalProject && (
++        <CreateWorktreeModal projectPath={modalProject.path}
++          projects={projects.filter((item) => state.worktreesByProject?.[item.path])}
++          settings={settings} providers={state.providers ?? []}
++          onClose={() => setModal(null)}
++          onCreated={(result, path) => {
++            if (path !== workbenchPath) selectProject(path);
++            if (result.sessionId && !settings.terminal) updateSettings({ terminal: true });
++            setEpoch((value) => value + 1);
++            notify(result.sessionId ? '已创建工作树并打开会话' : '已创建工作树');
++          }} />
++      )}
+       {modal?.kind === 'session' && modalProject && (
+         <SessionModal
+           project={modalProject}
+           home={state.home}
+           branch={modalProject.path === workbenchPath ? currentBranch : null}
++          workspace={modal.workspace}
+           isRepository={modalProject.path === workbenchPath ? isRepository : true}
+           initialMode={modal.mode}
+           providers={state.providers ?? []}
++          cliPreferences={settings.cliPreferences}
+           defaultProvider={settings.defaultProvider ?? 'claude'}
+           notify={notify}
+           onClose={() => setModal(null)}
+           onCreated={() => {
++            if (modal.workspace) {
++              selectProject(modalProject.path);
++              setSelectedWorkId(null);
++              revealPage('workspace');
++              setPage('workspace');
++              if (modal.workspace.worktreePath) setDiffWorkspace({ projectPath: modalProject.path, worktree: modal.workspace.worktreePath });
++            }
+             if (!settings.terminal) updateSettings({ terminal: true });
+             setEpoch((value) => value + 1);
+           }}
+         />
+       )}
++      {modal?.kind === 'session-info' && (
++        <SessionInfoModal session={modal.session} projectPath={modal.projectPath}
++          providerLabel={(state.providers ?? []).find((p) => p.id === (modal.session.provider ?? 'claude'))?.label}
++          onCopy={copyTreeValue} onClose={() => setModal(null)} />
++      )}
+       {modal?.kind === 'rename' && (
+         <RenameSessionModal session={modal.session} notify={notify} onClose={() => setModal(null)} />
+       )}
+-      {modal?.kind === 'settings' && (
++      {(modal?.kind === 'settings' || cliSettingsOpen) && (
+         <SettingsModal
+-          initialPage={modal.page}
++          key={cliSettingsOpen ? 'cli' : 'settings'}
++          initialPage={cliSettingsOpen ? 'cli' : modal?.page}
+           settings={settings}
+           providers={state.providers ?? []}
+           capacity={workSnap.capacity}
+@@ -1738,6 +1827,7 @@ export default function App() {
+             setWorkModal({ kind: 'source' });
+           }}
+           onClose={() => {
++            if (cliSettingsOpen) { setCliSettingsOpen(false); return; }
+             setModal(null);
+             loadTapdConfig();
+           }}
+@@ -1747,7 +1837,7 @@ export default function App() {
+         <NewWorkModal
+           projects={projects}
+           defaultProject={workModal.adopt ? undefined : workbenchPath}
+-          defaultProvider={settings.defaultProvider ?? 'claude'}
++          defaultProvider={settings.defaultProvider === 'antigravity' ? 'antigravity' : 'claude'}
+           adopt={workModal.adopt}
+           runtime={state.runtime}
+           home={state.home}
+diff --git a/Web/src/shell/CliChatPreview.jsx b/Web/src/shell/CliChatPreview.jsx
+new file mode 100644
+index 0000000..c579183
+--- /dev/null
++++ b/Web/src/shell/CliChatPreview.jsx
+@@ -0,0 +1,98 @@
++import React, { useEffect, useRef, useState } from 'react';
++import { ArrowDown, ArrowUp, ChatCircleText, Square, Terminal, Wrench } from '@phosphor-icons/react';
++import MarkdownRenderer from '../MarkdownRenderer.jsx';
++import { request } from './bridge.js';
++
++const EMPTY = { turns: [], status: 'idle' };
++
++export default function CliChatPreview({ active, engine, chat, permission, onUseTerminal, onError }) {
++  const [draft, setDraft] = useState('');
++  const [following, setFollowing] = useState(true);
++  const [submitting, setSubmitting] = useState(false);
++  const viewport = useRef(null);
++  const transcript = chat ?? EMPTY;
++  const busy = transcript.status !== 'idle';
++
++  function jumpToLatest() {
++    if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
++    setFollowing(true);
++  }
++
++  useEffect(() => {
++    if (following && viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
++  }, [transcript, following]);
++
++  async function act(method, extra = {}) {
++    try {
++      await request(method, { sessionId: active.sessionId, ...extra });
++      return true;
++    } catch (error) {
++      onError(error.message);
++      return false;
++    }
++  }
++
++  async function send() {
++    if (!draft.trim() || busy || submitting) return;
++    setSubmitting(true);
++    try {
++      jumpToLatest();
++      if (await act('prototype.chat.send', { text: draft.trim(), permission })) setDraft('');
++    } finally {
++      setSubmitting(false);
++    }
++  }
++
++  return (
++    <div className="cli-chat" data-review="原生聊天 · 会话界面">
++      <header className="cli-chat-header">
++        <ChatCircleText size={17} />
++        <div><strong>{active.label}</strong><small>{engine} · 聊天预览</small></div>
++        <button onClick={onUseTerminal} disabled={busy} title={busy ? "请先结束当前回合" : "切换当前会话的打开方式"}><Terminal size={15} /> 打开终端</button>
++      </header>
++      <div className="cli-chat-transcript" ref={viewport} data-review="原生聊天 · 消息与工具"
++        onScroll={(event) => {
++          const el = event.currentTarget;
++          setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight < 42);
++        }}>
++        <div className="cli-chat-column">
++          {!transcript.turns.length && <p className="cli-chat-empty">在当前工作目录发送一条消息，体验结构化聊天。</p>}
++          {transcript.turns.map((turn) => (
++            <article className="cli-chat-turn" key={turn.id}>
++              <p className="cli-chat-user">{turn.prompt}</p>
++              <details className="cli-chat-tool">
++                <summary><Wrench size={13} /> {turn.tool}</summary>
++                <p>{turn.toolDetail}</p>
++              </details>
++              {turn.permission && <small className="cli-chat-progress">工具审批 · {turn.permission}</small>}
++              {turn.reply && <div className="cli-chat-reply"><MarkdownRenderer content={turn.reply} /></div>}
++            </article>
++          ))}
++          {transcript.status === 'running' && <p className="cli-chat-progress" role="status">正在生成…</p>}
++        </div>
++      </div>
++      {!following && <button className="cli-chat-latest" onClick={jumpToLatest}><ArrowDown size={14} /> 跳到最新</button>}
++      {transcript.status === 'approval' && (
++        <div className="cli-chat-approval" data-review="原生聊天 · 工具审批">
++          <strong>允许读取项目入口？</strong><code>Web/src/main.jsx</code>
++          <button onClick={() => act('prototype.chat.approve', { allow: false })}>拒绝</button>
++          <button onClick={() => act('prototype.chat.approve', { allow: true })}>允许一次</button>
++        </div>
++      )}
++      <form className="cli-chat-composer" data-review="原生聊天 · 输入区" onSubmit={(event) => { event.preventDefault(); send(); }}>
++        <textarea aria-label="聊天输入" placeholder="输入消息 · Shift+Enter 换行" value={draft}
++          onChange={(event) => setDraft(event.target.value)}
++          onKeyDown={(event) => {
++            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
++              event.preventDefault();
++              send();
++            }
++          }} />
++        <div><small>{active.cwd}</small>
++          {busy ? <button type="button" aria-label="停止生成" onClick={() => act('prototype.chat.stop')}><Square size={16} /></button>
++            : <button type="submit" aria-label="发送消息" disabled={!draft.trim() || submitting}><ArrowUp size={17} /></button>}
++        </div>
++      </form>
++    </div>
++  );
++}
+diff --git a/Web/src/shell/DiffView.jsx b/Web/src/shell/DiffView.jsx
+index 81da6da..f7ef4f4 100644
+--- a/Web/src/shell/DiffView.jsx
++++ b/Web/src/shell/DiffView.jsx
+@@ -1,58 +1,121 @@
+-// 差异渲染：统一 / 并排两种视图，标记与配色沿用原型的 .code-diff。
+-import React from 'react';
+-import { splitRows } from './diff.js';
+-
+-const MARK = { add: '+', del: '−', context: ' ' };
+-
+-function UnifiedLines({ lines }) {
+-  return lines.map((line, index) => (
+-    <div className={`code-line ${line[0]}`} key={index}>
+-      <span>{line[1]}</span>
+-      <span>{line[2]}</span>
+-      <em>{MARK[line[0]]}</em>
+-      <code>{line[3]}</code>
+-    </div>
+-  ));
++import React, { useMemo, useRef, useState } from 'react';
++import { CaretDown, CaretUp } from '@phosphor-icons/react';
++
++const marks = { add: '+', del: '−', context: ' ' };
++
++function groupHunks(hunks) {
++  let changeCount = 0;
++  return hunks.map(({ header, lines }) => {
++    const blocks = [];
++    for (const line of lines) {
++      const changed = line[0] !== 'context';
++      if (blocks.at(-1)?.changed !== changed) {
++        blocks.push({ changed, number: changed ? ++changeCount : null, lines: [] });
++      }
++      blocks.at(-1).lines.push(line);
++    }
++    return { header, blocks };
++  });
++}
++
++function ChangedText({ line, other }) {
++  const value = line[3];
++  if (!other || line[0] === 'context') return value;
++  const comparison = other[3];
++  let start = 0;
++  let end = 0;
++  const length = Math.min(value.length, comparison.length);
++  while (start < length && value[start] === comparison[start]) start++;
++  while (end < length - start && value[value.length - end - 1] === comparison[comparison.length - end - 1]) end++;
++  const stop = value.length - end;
++  return <>{value.slice(0, start)}{start < stop && <mark>{value.slice(start, stop)}</mark>}{value.slice(stop)}</>;
+ }
+ 
+-function SplitSide({ rows, side }) {
++function DiffLine({ line, other, side }) {
++  if (!line) return <div className="code-line blank" aria-hidden="true" />;
++  const [kind, left, right] = line;
+   return (
+-    <div>
+-      {rows.map((row, index) => {
+-        const line = row[side];
+-        if (!line) return <div className="code-line blank" key={index} />;
+-        return (
+-          <div className={`code-line ${line[0]}`} key={index}>
+-            <span>{side === 0 ? line[1] : line[2]}</span>
+-            <code>{line[3]}</code>
+-          </div>
+-        );
+-      })}
++    <div className={`code-line ${kind}`}>
++      {side !== 'right' && <span>{left}</span>}
++      {side !== 'left' && <span>{right}</span>}
++      {side === 'unified' && <em>{marks[kind]}</em>}
++      <code><ChangedText line={line} other={other} /></code>
+     </div>
+   );
+ }
+ 
+-/// hunks: parsePatch 的结果；action 只出现在第一个 hunk 条上（暂存 / 取消暂存）。
+-export default function DiffView({ hunks, mode, action }) {
+-  return hunks.map((hunk, index) => {
+-    const rows = mode === '并排' ? splitRows(hunk.lines) : null;
+-    return (
+-      <React.Fragment key={index}>
+-        <div className="hunk">
+-          <code>{hunk.header}</code>
+-          {index === 0 && action}
++function PairedBlock({ block }) {
++  const removed = block.changed ? block.lines.filter((line) => line[0] === 'del') : block.lines;
++  const added = block.changed ? block.lines.filter((line) => line[0] === 'add') : block.lines;
++  const count = Math.max(removed.length, added.length);
++  const leftHeight = 100 * removed.length / count;
++  const rightHeight = 100 * added.length / count;
++  const tone = !removed.length ? 'added' : !added.length ? 'removed' : 'paired';
++  return (
++    <div className="paired-diff-block">
++      {Array.from({ length: count }, (_, index) => (
++        <div className="paired-diff-row" key={index}>
++          <DiffLine line={removed[index]} other={added[index]} side="left" />
++          <span className="paired-diff-gutter" aria-hidden="true" />
++          <DiffLine line={added[index]} other={removed[index]} side="right" />
+         </div>
+-        <div className={`code-diff ${rows ? 'split-diff' : ''}`}>
+-          {rows ? (
+-            <>
+-              <SplitSide rows={rows} side={0} />
+-              <SplitSide rows={rows} side={1} />
+-            </>
+-          ) : (
+-            <UnifiedLines lines={hunk.lines} />
+-          )}
++      ))}
++      {block.changed && count > 0 && (
++        <svg className={`paired-diff-ribbon ${tone}`} viewBox="0 0 24 100" preserveAspectRatio="none" aria-hidden="true">
++          <path d={`M0 0 H24 V${rightHeight} C14 ${rightHeight} 10 ${leftHeight} 0 ${leftHeight} Z`} />
++        </svg>
++      )}
++    </div>
++  );
++}
++
++export default function DiffView({ hunks, mode, action, sides = ['原版本', '当前版本'] }) {
++  const groups = useMemo(() => groupHunks(hunks), [hunks]);
++  const total = groups.reduce((count, section) => count + section.blocks.filter((block) => block.changed).length, 0);
++  const [current, setCurrent] = useState(1);
++  const active = Math.min(current, total);
++  const changeNodes = useRef(new Map());
++  const split = mode === '并排';
++
++  function jump(number) {
++    if (number < 1 || number > total) return;
++    setCurrent(number);
++    changeNodes.current.get(number)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
++  }
++
++  function navigate(event) {
++    if (event.key !== 'F7') return;
++    event.preventDefault();
++    jump(active + (event.shiftKey ? -1 : 1));
++  }
++
++  return (
++    <section className="review-diff" aria-label="代码差异" tabIndex={0} onKeyDown={navigate} data-review="Diff · 对比视图">
++      <div className="review-diff-controls" data-review="Diff · 差异导航">
++        <button type="button" aria-label="上一处差异" title="上一处差异 · Shift+F7" disabled={active <= 1} onClick={() => jump(active - 1)}><CaretUp size={14} /></button>
++        <button type="button" aria-label="下一处差异" title="下一处差异 · F7" disabled={active >= total} onClick={() => jump(active + 1)}><CaretDown size={14} /></button>
++        <span role="status" aria-label="差异位置">{active} / {total} 处差异</span>
++        {action && <div className="review-diff-action">{action}</div>}
++      </div>
++      {split && <div className="paired-diff-head"><span>{sides[0]}</span><i /><span>{sides[1]}</span></div>}
++      {groups.map(({ header, blocks }, index) => (
++        <div className="review-diff-section" key={index}>
++          <div className="hunk"><code>{header}</code></div>
++          <div className={`code-diff ${split ? 'review-diff-paired' : 'review-diff-unified'}`}>
++            {blocks.map((block, blockIndex) => (
++              <div className={`review-diff-block${block.number === active ? ' current' : ''}`}
++                key={blockIndex} data-change={block.number || undefined}
++                ref={(element) => {
++                  if (!block.number) return;
++                  if (element) changeNodes.current.set(block.number, element);
++                  else changeNodes.current.delete(block.number);
++                }}>
++                {split ? <PairedBlock block={block} /> : block.lines.map((line, row) => <DiffLine key={row} line={line} side="unified" />)}
++              </div>
++            ))}
++          </div>
+         </div>
+-      </React.Fragment>
+-    );
+-  });
++      ))}
++    </section>
++  );
+ }
+diff --git a/Web/src/shell/GitPages.jsx b/Web/src/shell/GitPages.jsx
+index 27d636b..b8a610b 100644
+--- a/Web/src/shell/GitPages.jsx
++++ b/Web/src/shell/GitPages.jsx
+@@ -64,7 +64,7 @@ const PAGE = 50;
+ 
+ function CommitDetail({ projectPath, commit, onBack, notify }) {
+   const { data, error, loading } = useGitData('git.show', projectPath, 0, { hash: commit.hash });
+-  const [mode, setMode] = useStored('diffMode', '统一');
++  const [mode, setMode] = useStored('diffMode', '并排');
+   const patches = data ? splitFiles(data.patch) : [];
+   return (
+     <div className="history-page commit-detail">
+@@ -261,16 +261,16 @@ export function BranchesTab({
+ 
+ // ---------- 工作树 ----------
+ 
+-export function WorktreeTab({ projectPath, home, epoch, onNewSession, runGit }) {
++export function WorktreeTab({ projectPath, home, epoch, onCreateWorktree, runGit }) {
+   const { data, error, loading } = useGitData('git.worktrees', projectPath, epoch);
+   const [confirming, setConfirming] = useState(null);
+   return (
+     <div className="history-page">
+       <div className="page-heading">
+         <h2>工作树</h2>
+-        <button onClick={() => onNewSession('worktree')}>
++        <button onClick={onCreateWorktree}>
+           <Plus size={14} />
+-          新建工作树会话
++          创建工作树
+         </button>
+       </div>
+       {error && <PageError text={error} />}
+diff --git a/Web/src/shell/Modals.jsx b/Web/src/shell/Modals.jsx
+index e9f2d31..f248f9d 100644
+--- a/Web/src/shell/Modals.jsx
++++ b/Web/src/shell/Modals.jsx
+@@ -13,6 +13,7 @@ import {
+ } from '@phosphor-icons/react';
+ import { errorText, request } from './bridge.js';
+ import { contextNumbers } from './Composer.jsx';
++import { resumeCommand } from './session-info.js';
+ import { IconButton, tildePath } from './ui.jsx';
+ 
+ function ModalFrame({ title, wide = false, onClose, children }) {
+@@ -566,13 +567,95 @@ export function worktreeSlug(branch) {
+   );
+ }
+ 
++export function CreateWorktreeModal({ projects, projectPath, settings, providers, onClose, onCreated }) {
++  const [path, setPath] = useState(projectPath);
++  const [branches, setBranches] = useState(null);
++  const [base, setBase] = useState('');
++  const [name, setName] = useState('');
++  const [error, setError] = useState(null);
++  const [creating, setCreating] = useState(false);
++  const available = providers.filter((item) => item.available && settings.cliPreferences?.[item.id]?.enabled !== false);
++  const [agent, setAgent] = useState(() => available.find((item) => item.id === settings.defaultProvider)?.id ?? '');
++  const branch = name.trim() ? worktreeSlug(name) : '';
++
++  useEffect(() => {
++    let current = true;
++    setBranches(null);
++    setBase('');
++    setError(null);
++    request('git.branches', { projectPath: path }).then((list) => {
++      if (!current) return;
++      setBranches(list);
++      setBase(list.find((item) => item.name === 'origin/main')?.name ?? list.find((item) => item.isCurrent)?.name ?? '');
++    }).catch((cause) => { if (current) setError(errorText(cause)); });
++    return () => { current = false; };
++  }, [path]);
++
++  function surface(provider) {
++    const override = settings.cliPreferences?.[provider]?.mode;
++    const mode = override && override !== 'inherit' ? override : settings.interactionMode;
++    return provider !== 'dsh' && mode === 'chat' ? '聊天' : '终端';
++  }
++
++  return (
++    <ModalFrame title="创建工作树" onClose={onClose}>
++      <form className="cli-worktree-form" data-review="创建工作树 · 表单" onSubmit={async (event) => {
++        event.preventDefault();
++        if (!branch || !base || creating) return;
++        setCreating(true);
++        setError(null);
++        try {
++          const result = await request('prototype.worktree.create', { projectPath: path, base, name: name.trim(), branch, provider: agent || null });
++          onCreated(result, path);
++          onClose();
++        } catch (cause) {
++          setError(errorText(cause));
++          setCreating(false);
++        }
++      }}>
++        <div className="cli-worktree-grid">
++          <label className="field">项目<select aria-label="项目" value={path} onChange={(event) => { setBase(''); setPath(event.target.value); }}>
++            {projects.map((item) => <option value={item.path} key={item.path}>{item.title}</option>)}
++          </select></label>
++          <label className="field">运行于<select aria-label="运行于" defaultValue="local">
++            <option value="local">本地 Mac</option>
++          </select></label>
++        </div>
++        <div className="cli-worktree-source" data-review="创建工作树 · 起始分支">
++          <span>创建来源</span>
++          <select aria-label="起始分支" disabled={!branches} value={base} onChange={(event) => setBase(event.target.value)}>
++            <option value="" disabled>{branches ? '选择起始分支' : '读取分支…'}</option>
++            {branches?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
++          </select>
++        </div>
++        <label className="field">工作区名称<input autoFocus value={name} placeholder="例如 cli-integration"
++          onChange={(event) => setName(event.target.value)} /></label>
++        {branch && <small className="cli-worktree-target">新分支与目录 · <code>{branch}</code> · <code>.worktrees/{branch}</code></small>}
++        <label className="field" data-review="创建工作树 · 可选代理">代理（可选）
++          <select aria-label="代理（可选）" value={agent} onChange={(event) => setAgent(event.target.value)}>
++            <option value="">仅创建工作树</option>
++            {available.map((item) => <option key={item.id} value={item.id}>{item.label}（{surface(item.id)}）</option>)}
++          </select>
++        </label>
++        {error && <p className="pane-note error" role="alert">{error}</p>}
++        <div className="modal-footer">
++          <button type="button" onClick={onClose}>取消</button>
++          <button type="submit" className="primary" disabled={!branch || !base || creating}>{creating ? '正在创建…' : '创建工作树'}</button>
++        </div>
++      </form>
++    </ModalFrame>
++  );
++}
++
+ export function SessionModal({
+   project,
+   home,
+   branch,
+   isRepository,
++  workspace,
+   initialMode,
+   providers = [],
++  cliPreferences = {},
+   defaultProvider = 'claude',
+   onClose,
+   onCreated,
+@@ -585,8 +668,16 @@ export function SessionModal({
+   const [error, setError] = useState(null);
+   const [creating, setCreating] = useState(false);
+   const worktree = mode === 'worktree';
++  const engineOptions = [
++    ['claude', 'Claude Code', 'C', 'claude · 支持终端与图形聊天'],
++    ['antigravity', 'Antigravity', 'A', 'agy · Google Antigravity CLI'],
++    ['codex', 'Codex CLI', 'Cx', 'codex · 原生终端'],
++    ['dsh', 'DeepSeek Harness', 'Ds', 'dsh-TUI · 原生终端'],
++  ];
++  const [, engineLabel] = engineOptions.find(([id]) => id === provider) ?? engineOptions[0];
+   const providerInfo = providers.find((item) => item.id === provider);
+-  const providerAvailable = !providerInfo || providerInfo.available !== false;
++  const providerEnabled = cliPreferences[provider]?.enabled !== false;
++  const providerAvailable = providerEnabled && (!providerInfo || providerInfo.available !== false);
+   const ready = (!worktree || Boolean(target.trim())) && providerAvailable && !creating;
+ 
+   async function create() {
+@@ -601,11 +692,12 @@ export function SessionModal({
+           ...(title.trim() ? { title: title.trim() } : {}),
+           mode,
+           provider,
++          ...(workspace ? { workspace } : {}),
+           ...(worktree ? { branch: target.trim() } : {}),
+         },
+         { timeoutMs: 90000 },
+       );
+-      const provName = provider === 'antigravity' ? 'Antigravity' : 'Claude';
++      const provName = engineLabel;
+       notify(worktree ? `已在工作树 ${target.trim()} 中创建 ${provName} 会话` : `${provName} 会话已创建`);
+       onCreated(result);
+       onClose();
+@@ -620,12 +712,10 @@ export function SessionModal({
+       <p className="modal-description">在 {project.title} 中开始新的工作。</p>
+       <div className="field">
+         执行 CLI 引擎
+-        <div className="mode-choice" style={{ marginTop: 6 }}>
+-          {[
+-            ['claude', 'Claude Code', 'claude · 支持终端与图形聊天'],
+-            ['antigravity', 'Antigravity', 'agy · Google Antigravity CLI'],
+-          ].map(([value, label, desc]) => {
++        <div className="mode-choice" style={{ marginTop: 6 }} data-review="新建会话 · 执行 CLI 引擎">
++          {engineOptions.map(([value, label, badge, desc]) => {
+             const info = providers.find((item) => item.id === value);
++            const enabled = cliPreferences[value]?.enabled !== false;
+             const ok = !info || info.available !== false;
+             return (
+               <button
+@@ -635,9 +725,9 @@ export function SessionModal({
+                 onClick={() => setProvider(value)}
+               >
+                 <strong>
+-                  <em className={`provider-badge ${value}`}>{value === 'antigravity' ? 'A' : 'C'}</em>
++                  <em className={`provider-badge ${value}`}>{badge}</em>
+                   {label}
+-                  {!ok ? '（未安装）' : ''}
++                  {!enabled ? '（已停用）' : !ok ? (value === 'dsh' ? '（缺少 dsh）' : '（未安装）') : ''}
+                 </strong>
+                 <small>{desc}</small>
+               </button>
+@@ -657,7 +747,7 @@ export function SessionModal({
+           }}
+         />
+       </label>
+-      <div className="mode-choice">
++      {!workspace && <div className="mode-choice" data-review="新建会话 · 当前分支与独立工作树">
+         {[
+           ['current', '当前分支', GitBranch],
+           ['worktree', '独立工作树', TreeStructure],
+@@ -675,7 +765,7 @@ export function SessionModal({
+             <small>{value === 'current' ? '继续在项目目录中工作' : '在独立目录中并行任务'}</small>
+           </button>
+         ))}
+-      </div>
++      </div>}
+       {worktree && (
+         <label className="field">
+           新分支名称
+@@ -686,11 +776,11 @@ export function SessionModal({
+         <dt>项目</dt>
+         <dd>{tildePath(project.path, home)}</dd>
+         <dt>执行引擎</dt>
+-        <dd>{provider === 'antigravity' ? 'Antigravity (agy)' : 'Claude Code (claude)'}</dd>
+-        <dt>基准分支</dt>
+-        <dd>{branch ?? (isRepository ? 'detached HEAD' : '不是 Git 仓库')}</dd>
++        <dd>{engineLabel} ({providerInfo?.command ?? provider})</dd>
++        <dt>{workspace ? '绑定分支' : '基准分支'}</dt>
++        <dd>{workspace?.branch ?? branch ?? (isRepository ? 'detached HEAD' : '不是 Git 仓库')}</dd>
+         <dt>工作目录</dt>
+-        <dd>{worktree ? `.worktrees/${worktreeSlug(target)}` : '项目根目录'}</dd>
++        <dd>{workspace ? tildePath(workspace.worktreePath ?? project.path, home) : worktree ? `.worktrees/${worktreeSlug(target)}` : '项目根目录'}</dd>
+         {worktree && (
+           <>
+             <dt>目标分支</dt>
+@@ -701,7 +791,11 @@ export function SessionModal({
+       {!providerAvailable && (
+         <div className="pane-note error" role="alert">
+           <Warning size={14} />
+-          本机未检测到 {provider === 'antigravity' ? 'Antigravity CLI (agy)' : 'Claude CLI (claude)'}，请先安装并登录。
++          {!providerEnabled ? `已停用 ${engineLabel}，请在 CLI 引擎设置中启用。` : provider === 'dsh' ? (
++            <span data-review="新建会话 · DeepSeek 依赖提示">
++              找到 dsh-TUI，但未检测到 DeepSeek Harness (dsh)。<button type="button" onClick={() => window.dispatchEvent(new Event('cli-review-check'))}>打开 CLI 配置</button>
++            </span>
++          ) : `未检测到 ${engineLabel}，请先安装并登录。`}
+         </div>
+       )}
+       {error && (
+@@ -723,6 +817,37 @@ export function SessionModal({
+ 
+ // ---------- 重命名会话 ----------
+ 
++export function SessionInfoModal({ session, projectPath, providerLabel, onCopy, onClose }) {
++  const engine = providerLabel ?? 'Claude Code';
++  const id = session.originalSessionId;
++  const command = resumeCommand(session.provider ?? 'claude', id);
++  const details = [
++    session.title, `引擎 ${engine}`, `会话 ID ${id ?? '尚未获取'}`,
++    `分支 ${session.branch ?? '未绑定'}`, `工作目录 ${session.cwd ?? projectPath}`, command,
++  ].filter(Boolean).join('\n');
++
++  return (
++    <ModalFrame title="会话信息" onClose={onClose}>
++      <div data-review="会话右键 · 会话信息">
++        <dl className="session-summary">
++          <dt>名称</dt><dd>{session.title}</dd>
++          <dt>执行引擎</dt><dd>{engine}</dd>
++          <dt>绑定分支</dt><dd>{session.branch ?? '未绑定'}</dd>
++          <dt>工作目录</dt><dd>{session.cwd ?? projectPath}</dd>
++        </dl>
++        <label className="field">会话 ID<input readOnly value={id ?? ''} placeholder="尚未获取引擎会话 ID" onFocus={(event) => event.target.select()} /></label>
++        {command && <label className="field">恢复命令<input readOnly value={command} onFocus={(event) => event.target.select()} /></label>}
++        <p className="modal-description">在原环境的工作目录运行恢复命令。另一台设备需有该引擎的会话历史。</p>
++      </div>
++      <div className="modal-footer">
++        <button disabled={!id} onClick={() => onCopy(id, '会话 ID')}>复制会话 ID</button>
++        <button disabled={!command} onClick={() => onCopy(command, '恢复命令')}>复制恢复命令</button>
++        <button className="primary" onClick={() => onCopy(details, '会话信息')}>复制会话信息</button>
++      </div>
++    </ModalFrame>
++  );
++}
++
+ export function RenameSessionModal({ session, onClose, notify }) {
+   const [title, setTitle] = useState(session.named ? session.title : '');
+   const [saving, setSaving] = useState(false);
+diff --git a/Web/src/shell/PromptCacheTimer.jsx b/Web/src/shell/PromptCacheTimer.jsx
+new file mode 100644
+index 0000000..e7d3002
+--- /dev/null
++++ b/Web/src/shell/PromptCacheTimer.jsx
+@@ -0,0 +1,26 @@
++import React, { useEffect, useState } from 'react';
++import { Timer } from '@phosphor-icons/react';
++
++export default function PromptCacheTimer({ startedAt, minutes, running }) {
++  const [now, setNow] = useState(() => Date.now());
++  const expiresAt = startedAt + minutes * 60_000;
++
++  useEffect(() => {
++    if (!startedAt || running || expiresAt <= Date.now()) return;
++    setNow(Date.now());
++    const timer = setInterval(() => {
++      const time = Date.now();
++      setNow(time);
++      if (time >= expiresAt) clearInterval(timer);
++    }, 1000);
++    return () => clearInterval(timer);
++  }, [startedAt, running, expiresAt]);
++
++  if (!startedAt || running) return null;
++  const seconds = Math.max(0, Math.ceil((expiresAt - now) / 1000));
++  if (!seconds) return null;
++  const text = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
++  return <span className="cli-cache-countdown" title="Claude 提示缓存预计剩余时间" data-review="项目侧栏 · Claude 缓存倒计时">
++    <Timer size={12} /> {text}
++  </span>;
++}
+diff --git a/Web/src/shell/Sidebar.jsx b/Web/src/shell/Sidebar.jsx
+index 213cb74..16e68cb 100644
+--- a/Web/src/shell/Sidebar.jsx
++++ b/Web/src/shell/Sidebar.jsx
+@@ -1,25 +1,50 @@
+ // 第一栏：项目与会话树。数据来自原生 Store 的快照，所有操作回写原生。
++import UsagePopover from './UsagePopover.jsx';
++import PromptCacheTimer from './PromptCacheTimer.jsx';
+ import React, { useState } from 'react';
+ import {
+   CaretDown,
+   CaretRight,
+-  CaretUp,
+   ChatCircleDots,
+   CircleNotch,
+   Folder,
+   MagnifyingGlass,
+   Gear,
++  GitBranch,
+   House,
+   Plus,
+   SidebarSimple,
+   Terminal,
++  TreeStructure,
+ } from '@phosphor-icons/react';
+ import appIcon from './clawd-mark.png';
++import claudeIcon from './engine-icons/claude.ico';
++import codexIcon from './engine-icons/codex.png';
++import antigravityIcon from './engine-icons/antigravity.ico';
++import deepseekIcon from './engine-icons/deepseek.png';
+ import { IconButton } from './ui.jsx';
+ import { request } from './bridge.js';
+ import { statusOf } from './work/useWorks.js';
+ 
+-const VISIBLE_SESSIONS = 5;
++const engineIcons = { claude: claudeIcon, codex: codexIcon, antigravity: antigravityIcon, dsh: deepseekIcon };
++
++function sessionGroups(sessions, worktrees = []) {
++  const groups = new Map(worktrees.map((item) => {
++    const key = `worktree:${item.path}`;
++    return [key, { key, branch: item.branch, worktree: item.path, sessions: [] }];
++  }));
++  for (const session of sessions) {
++    const worktree = session.worktreePath;
++    const branch = session.branch;
++    const key = worktree ? `worktree:${worktree}` : branch ? `branch:${branch}` : 'unbound';
++    if (!groups.has(key)) groups.set(key, { key, branch, worktree, sessions: [] });
++    groups.get(key).sessions.push(session);
++  }
++  return [...groups.values()].sort((a, b) => {
++    const rank = (item) => item.worktree ? 1 : item.branch ? 0 : 2;
++    return rank(a) - rank(b);
++  });
++}
+ 
+ export default function Sidebar({
+   state,
+@@ -33,6 +58,7 @@ export default function Sidebar({
+   onSelectProject,
+   onOpenSession,
+   onTreeContext,
++  onBranchTreeContext,
+   onAddDirectory,
+   onSettings,
+   onNewSession,
+@@ -42,43 +68,30 @@ export default function Sidebar({
+   selectedWorkId,
+   onOpenWork,
+   onSearch,
+-  providerFilter = 'all',
+-  onProviderFilter,
++  cacheSettings,
+ }) {
+   const [dragging, setDragging] = useState(null);
++  const [collapsed, setCollapsed] = useState({});
+   const projects = state.projects;
+   const active = state.active;
+   const providers = state.providers ?? [];
+-  const hasAgy =
+-    providers.some((p) => p.id === 'antigravity' && p.available) ||
+-    projects.some((p) => p.sessions.some((s) => s.provider === 'antigravity')) ||
+-    works.some((w) => w.executor === 'antigravity');
+-  const matchFilter = (prov) => providerFilter === 'all' || (prov ?? 'claude') === providerFilter;
+   // 属于 Work 的会话以 Work 的形式出现，不再作为普通会话重复列出。
+   const hiddenSessions = new Set(workSessionIds);
+   const worksByProject = new Map();
+   for (const work of works) {
+     if (work.archived || work.status === 'cancelled') continue;
+-    if (!matchFilter(work.executor)) continue;
+     const path = work.project?.path;
+     if (!path) continue;
+     if (!worksByProject.has(path)) worksByProject.set(path, []);
+     worksByProject.get(path).push(work);
+   }
+ 
+-  const rowCount = projects.reduce((count, project) => {
+-    if (!project.expanded) return count + 1;
+-    const filtered = project.sessions.filter(
+-      (s) => !hiddenSessions.has(s.id) && matchFilter(s.provider),
+-    );
+-    const total = filtered.length;
+-    const shown = project.showAll ? total : Math.min(VISIBLE_SESSIONS, total);
+-    return count + 1 + shown + (total > VISIBLE_SESSIONS ? 1 : 0);
+-  }, 0);
++  const visibleSessions = (project) => project.sessions.filter((session) => !hiddenSessions.has(session.id));
++  const rowCount = projects.reduce((count, project) => count + 1 + (project.expanded ? visibleSessions(project).length : 0), 0);
+ 
+   function navigateTree(event) {
+     const rows = [
+-      ...event.currentTarget.querySelectorAll('.project-row, .session-row, .more-sessions'),
++      ...event.currentTarget.querySelectorAll('.project-row, .session-branch-row, .session-row'),
+     ];
+     const current = rows.indexOf(event.target.closest('button'));
+     if (current < 0) return;
+@@ -90,16 +103,18 @@ export default function Sidebar({
+     }
+     const group = event.target.closest('.project-group');
+     const projectRow = group?.querySelector('.project-row');
+-    if (event.key === 'ArrowRight' && event.target === projectRow) {
++    const item = event.target.closest('.session-branch-group');
++    const branchRow = item?.querySelector('.session-branch-row');
++    const expansion = event.target === projectRow ? projectRow : event.target === branchRow ? branchRow : null;
++    if (event.key === 'ArrowRight' && expansion) {
+       event.preventDefault();
+-      if (projectRow.getAttribute('aria-expanded') === 'false') projectRow.click();
+-      else group.querySelector('.session-row, .more-sessions')?.focus();
++      if (expansion.getAttribute('aria-expanded') === 'false') expansion.click();
++      else (item ?? group)?.querySelector(expansion === branchRow ? '.session-row' : '.session-branch-row')?.focus();
+     }
+     if (event.key === 'ArrowLeft') {
+       event.preventDefault();
+-      if (event.target === projectRow && projectRow.getAttribute('aria-expanded') === 'true')
+-        projectRow.click();
+-      else projectRow?.focus();
++      if (expansion?.getAttribute('aria-expanded') === 'true') expansion.click();
++      else (item && expansion !== branchRow ? branchRow : projectRow)?.focus();
+     }
+     // Tab：把键盘交回终端（与原先「树 ⇄ 终端」的切换一致）
+     if (event.key === 'Tab' && !event.shiftKey && active) {
+@@ -108,14 +123,14 @@ export default function Sidebar({
+     }
+   }
+ 
+-  function drop(event, project, session = null) {
++  function drop(event, project, session = null, groupKey = null) {
+     event.preventDefault();
+     const from = dragging;
+     setDragging(null);
+     if (!from) return;
+     if (!from.sessionId && !session && from.path !== project.path)
+       request('app.moveProject', { from: from.path, to: project.path });
+-    if (from.sessionId && session && from.path === project.path && from.sessionId !== session.id)
++    if (from.sessionId && session && from.path === project.path && from.groupKey === groupKey && from.sessionId !== session.id)
+       request('app.moveSession', {
+         projectPath: project.path,
+         from: from.sessionId,
+@@ -123,25 +138,6 @@ export default function Sidebar({
+       });
+   }
+ 
+-  const usage = state.usage ?? {};
+-  const usageRow = (window, weekly) => {
+-    const percent = Math.round(window?.percent ?? 0);
+-    const reset = window?.reset ?? (weekly ? '--/--' : '--:--');
+-    const title = window
+-      ? `Claude 额度 · ${weekly ? '本周' : '本 5 小时窗口'} ${percent}%，${reset} 重置`
+-      : (usage.note ?? 'Claude 用量读取中');
+-    return (
+-      <div className={`usage-row ${weekly ? 'weekly' : ''}`} title={usage.note ?? title}>
+-        <div className="usage-track">
+-          <i style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
+-        </div>
+-        <span>
+-          {reset}&nbsp; {percent}%
+-        </span>
+-      </div>
+-    );
+-  };
+-
+   if (!open) {
+     return (
+       <aside className="sidebar collapsed">
+@@ -176,6 +172,7 @@ export default function Sidebar({
+           </small>
+         </div>
+         <div className="sidebar-header-actions">
++          <IconButton icon={Gear} label="界面设置" onClick={onSettings} />
+           <IconButton icon={SidebarSimple} label="收起侧边栏 ⌘B" onClick={onToggleSidebar} />
+           {!terminalOpen && (
+             <IconButton icon={Terminal} label="展开终端 ⌘J" onClick={onExpandTerminal} />
+@@ -189,31 +186,10 @@ export default function Sidebar({
+           <small>⌘K</small>
+         </button>
+       </div>
+-      {(hasAgy || providerFilter !== 'all') && onProviderFilter && (
+-        <div className="provider-filter" role="tablist" aria-label="按引擎筛选会话">
+-          {[
+-            ['all', '全部'],
+-            ['claude', 'Claude'],
+-            ['antigravity', 'Antigravity'],
+-          ].map(([id, label]) => (
+-            <button
+-              key={id}
+-              type="button"
+-              role="tab"
+-              aria-selected={providerFilter === id}
+-              className={providerFilter === id ? 'active' : ''}
+-              onClick={() => onProviderFilter(id)}
+-            >
+-              {label}
+-            </button>
+-          ))}
+-        </div>
+-      )}
+       <div className="project-list" onKeyDown={navigateTree}>
+         {projects.map((project) => {
+-          const sessions = project.sessions.filter(
+-            (session) => !hiddenSessions.has(session.id) && matchFilter(session.provider),
+-          );
++          const sessions = visibleSessions(project);
++          const groups = sessionGroups(sessions, state.worktreesByProject?.[project.path]);
+           const projectWorks = (worksByProject.get(project.path) ?? []).filter(
+             (work) => work.status !== 'completed' || work.id === selectedWorkId || work.unread,
+           );
+@@ -268,70 +244,77 @@ export default function Sidebar({
+                       </button>
+                     );
+                   })}
+-                  {sessions
+-                    .slice(0, project.showAll ? undefined : VISIBLE_SESSIONS)
+-                    .map((session) => {
+-                      const prov = session.provider ?? 'claude';
+-                      const provLabel = prov === 'antigravity' ? 'Antigravity' : 'Claude Code';
+-                      const tip = session.handoffFrom
+-                        ? `${provLabel} · ${session.title}（接力自 ${session.handoffFrom}）`
+-                        : `${provLabel} · ${session.title}`;
+-                      return (
+-                        <button
+-                          className={`session-row ${!selectedWorkId && active?.sessionId === session.id ? 'selected' : ''} ${dragging?.sessionId === session.id ? 'dragging' : ''}`}
+-                          key={`${prov}-${session.id}`}
+-                          data-session={session.id}
+-                          title={tip}
+-                          draggable
+-                          onDragStart={() =>
+-                            setDragging({ path: project.path, sessionId: session.id })
+-                          }
+-                          onDragEnd={() => setDragging(null)}
+-                          onDragOver={(event) => event.preventDefault()}
+-                          onDrop={(event) => drop(event, project, session)}
+-                          onContextMenu={(event) => onTreeContext(event, project, session)}
+-                          onClick={() => {
+-                            onCursor(`session-${session.id}`);
+-                            onOpenSession(project, session);
+-                          }}
+-                        >
+-                          <span
+-                            className={`session-marker ${session.running ? 'running' : session.unread ? 'unread' : ''}`}
+-                          >
+-                            {session.running ? (
+-                              <CircleNotch size={12} />
+-                            ) : session.unread ? (
+-                              <i />
+-                            ) : null}
+-                          </span>
+-                          <span>
+-                            <b>
+-                              <em className={`provider-badge ${prov}`}>
+-                                {prov === 'antigravity' ? 'A' : 'C'}
+-                              </em>
+-                              {session.title}
+-                            </b>
+-                            <small>
+-                              {session.handoffFrom ? `接力 · ${session.time}` : session.time}
+-                            </small>
+-                          </span>
++                  {groups.map((group) => {
++                    const groupKey = `${project.path}:${group.key}`;
++                    const expanded = !collapsed[groupKey];
++                    const label = group.branch || (group.worktree ? group.worktree.split('/').at(-1) : '未绑定分支');
++                    return (
++                      <div className="session-branch-group" key={group.key} data-review="项目侧栏 · 分支与工作树">
++                        <button className="session-branch-row" type="button" aria-expanded={expanded}
++                          title={group.worktree ?? label}
++                          onContextMenu={(event) => onBranchTreeContext(event, project, group)}
++                          onClick={() => setCollapsed((current) => ({ ...current, [groupKey]: expanded }))}>
++                          {expanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
++                          {group.worktree ? <TreeStructure size={13} /> : <GitBranch size={13} />}
++                          <strong>{label}</strong>
++                          {group.worktree && <small>工作树</small>}
++                          <span>{group.sessions.length}</span>
+                         </button>
+-                      );
+-                    })}
+-                  {sessions.length > VISIBLE_SESSIONS && (
+-                    <button
+-                      className={`more-sessions ${treeCursor === `more-${project.path}` ? 'cursor' : ''}`}
+-                      onClick={() => {
+-                        onCursor(`more-${project.path}`);
+-                        request('app.toggleShowAll', { path: project.path });
+-                      }}
+-                    >
+-                      {project.showAll
+-                        ? '收起'
+-                        : `展开其余 ${sessions.length - VISIBLE_SESSIONS} 条`}
+-                      {project.showAll ? <CaretUp size={9} /> : <CaretDown size={9} />}
+-                    </button>
+-                  )}
++                        {expanded && group.sessions.length === 0 && <p className="cli-worktree-empty">还没有会话</p>}
++                        {expanded && group.sessions.map((session) => {
++                            const prov = session.provider ?? 'claude';
++                            const provLabel = providers.find((item) => item.id === prov)?.label ?? 'Claude Code';
++                            const tip = session.handoffFrom
++                              ? `${provLabel} · ${session.title}（接力自 ${session.handoffFrom}）`
++                              : `${provLabel} · ${session.title}`;
++                            return (
++                              <button
++                                className={`session-row ${!selectedWorkId && active?.sessionId === session.id ? 'selected' : ''} ${dragging?.sessionId === session.id ? 'dragging' : ''}`}
++                                key={`${prov}-${session.id}`}
++                                data-session={session.id}
++                                title={tip}
++                                draggable
++                                onDragStart={() =>
++                                  setDragging({ path: project.path, sessionId: session.id, groupKey })
++                                }
++                                onDragEnd={() => setDragging(null)}
++                                onDragOver={(event) => event.preventDefault()}
++                                onDrop={(event) => drop(event, project, session, groupKey)}
++                                onContextMenu={(event) => onTreeContext(event, project, session)}
++                                onClick={() => {
++                                  onCursor(`session-${session.id}`);
++                                  onOpenSession(project, session);
++                                }}
++                              >
++                                <span
++                                  className={`session-marker ${session.running ? 'running' : session.unread ? 'unread' : ''}`}
++                                >
++                                  {session.running ? (
++                                    <CircleNotch size={12} />
++                                  ) : session.unread ? (
++                                    <i />
++                                  ) : null}
++                                </span>
++                                <span>
++                                  <b>
++                                    <img className="session-engine-icon" src={engineIcons[prov] ?? engineIcons.claude}
++                                      alt={provLabel} title={provLabel} data-review="项目侧栏 · 会话引擎标识" />
++                                    {session.title}
++                                  </b>
++                                  <small>
++                                    {session.handoffFrom ? `接力 · ${session.time}` : session.time}
++                                    {prov === 'claude' && cacheSettings?.enabled !== false && (
++                                      <PromptCacheTimer startedAt={state.cacheTouched?.[session.id]}
++                                        running={session.running} minutes={cacheSettings?.minutes ?? 5} />
++                                    )}
++                                  </small>
++                                </span>
++                              </button>
++                            );
++                          })}
++                      </div>
++                    );
++                  })}
+                 </div>
+               )}
+             </section>
+@@ -342,13 +325,7 @@ export default function Sidebar({
+         <Plus size={12} />
+         添加目录
+       </button>
+-      <div className="sidebar-bottom">
+-        <IconButton icon={Gear} label="界面设置" onClick={onSettings} />
+-        <div className="usage-bars">
+-          {usageRow(usage.session, false)}
+-          {usageRow(usage.weekly, true)}
+-        </div>
+-      </div>
++      <UsagePopover usage={state.usage} engineIcons={engineIcons} />
+     </aside>
+   );
+ }
+diff --git a/Web/src/shell/UsagePopover.jsx b/Web/src/shell/UsagePopover.jsx
+new file mode 100644
+index 0000000..f744814
+--- /dev/null
++++ b/Web/src/shell/UsagePopover.jsx
+@@ -0,0 +1,134 @@
++import React, { useEffect, useRef, useState } from 'react';
++import { ArrowsClockwise, CaretRight, ChartBar, Swap, X } from '@phosphor-icons/react';
++import { request } from './bridge.js';
++
++function quotaRows(usage) {
++  return [
++    { id: 'codex', label: 'Codex', plan: 'Plus', limits: [['5 小时', 34, '2 小时 47 分钟'], ['每周', 81, '1 天 1 小时']] },
++    { id: 'claude', label: 'Claude', plan: 'Pro', limits: [['5 小时', usage?.session?.percent ?? 40, usage?.session?.reset ?? '23:50'], ['每周', usage?.weekly?.percent ?? 26, usage?.weekly?.reset ?? '11-18']] },
++    { id: 'antigravity', label: 'Antigravity', plan: '', limits: [['Gemini 周', 3, '6 天 22 小时'], ['Claude / GPT 周', 0, '6 天 22 小时']] },
++  ];
++}
++
++function QuotaMeter({ limit, remaining, summary = false, showReset = false }) {
++  const [label, used, reset] = limit;
++  const percent = remaining ? 100 - used : used;
++  return (
++    <span className={`cli-quota-meter${summary ? ' is-summary' : ''}`} title={`${label} · ${reset} 重置`}>
++      {!summary && <small>{label}</small>}
++      <span className="cli-quota-track" aria-hidden="true"><i style={{ width: `${percent}%` }} /></span>
++      <strong>{percent}%</strong>
++      {showReset && <small>{reset} 重置</small>}
++    </span>
++  );
++}
++
++function EngineIdentity({ row, icon }) {
++  return (
++    <span className="cli-quota-engine">
++      <img src={icon} alt="" />
++      <span>{row.label}{row.plan && <small> · {row.plan}</small>}</span>
++    </span>
++  );
++}
++
++export default function UsagePopover({ usage, engineIcons }) {
++  const [open, setOpen] = useState(false);
++  const [remaining, setRemaining] = useState(false);
++  const [compact, setCompact] = useState(false);
++  const [expanded, setExpanded] = useState(null);
++  const [page, setPage] = useState('summary');
++  const [refreshing, setRefreshing] = useState(false);
++  const [updated, setUpdated] = useState('');
++  const [refreshedUsage, setRefreshedUsage] = useState(null);
++  const root = useRef(null);
++  const trigger = useRef(null);
++  const rows = quotaRows(refreshedUsage ?? usage);
++  const mostUsed = (row) => row.limits.reduce((a, b) => b[1] > a[1] ? b : a);
++
++  useEffect(() => {
++    if (!open) return;
++    const outside = (event) => { if (!root.current?.contains(event.target)) setOpen(false); };
++    const escape = (event) => {
++      if (event.key === 'Escape') { setOpen(false); trigger.current?.focus(); }
++    };
++    document.addEventListener('pointerdown', outside);
++    document.addEventListener('keydown', escape);
++    return () => {
++      document.removeEventListener('pointerdown', outside);
++      document.removeEventListener('keydown', escape);
++    };
++  }, [open]);
++
++  async function refresh() {
++    setRefreshing(true);
++    try {
++      const snapshot = await request('app.state');
++      setRefreshedUsage(snapshot.usage);
++      setUpdated(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
++    } catch {
++      setUpdated('刷新失败');
++    } finally {
++      setRefreshing(false);
++    }
++  }
++
++  return (
++    <div className="cli-usage" ref={root} data-review="项目侧栏 · 额度入口">
++      <button className="cli-usage-trigger" type="button" ref={trigger} aria-expanded={open} aria-label="使用额度"
++        onClick={() => { setOpen(!open); if (!open) setPage('summary'); }}>
++        <ChartBar size={14} /><span>{remaining ? '剩余' : '已用'}</span>
++        {rows.map((row) => <span className="cli-quota-badge" key={row.id} title={row.label}>
++          <img src={engineIcons[row.id]} alt={row.label} />
++          <QuotaMeter limit={compact ? mostUsed(row) : row.limits[0]} remaining={remaining} summary />
++        </span>)}
++      </button>
++      {open && (
++        <section className="cli-usage-panel" role="region" aria-label="使用量" data-review="项目侧栏 · 额度面板">
++          <header>
++            <strong>{page === 'accounts' ? '管理账户' : page === 'history' ? '使用详情与历史' : '使用量'}</strong>
++            {page === 'summary' && <small>所有引擎{updated && ` · ${updated}`}</small>}
++            <button aria-label="刷新额度" disabled={refreshing} onClick={refresh}><ArrowsClockwise size={14} /></button>
++            <div className="cli-usage-header-actions">
++              {page === 'summary' && <button aria-label={remaining ? '显示已用额度' : '显示剩余额度'} onClick={() => setRemaining(!remaining)}>{remaining ? '剩余' : '已用'} <Swap size={12} /></button>}
++              <button aria-label="关闭额度面板" onClick={() => setOpen(false)}><X size={14} /></button>
++            </div>
++          </header>
++          {page === 'summary' ? (
++            <>
++              <div className="cli-usage-mode" role="group" aria-label="额度显示密度">
++                <button aria-pressed={!compact} onClick={() => setCompact(false)}>详细</button>
++                <button aria-pressed={compact} onClick={() => setCompact(true)}>精简</button>
++              </div>
++              <div className="cli-usage-rows">
++                {rows.map((row) => <div key={row.id}>
++                  <button className="cli-usage-row" aria-expanded={expanded === row.id} onClick={() => setExpanded(expanded === row.id ? null : row.id)}>
++                    <EngineIdentity row={row} icon={engineIcons[row.id]} />
++                    <small>{(compact ? mostUsed(row) : row.limits[0])[2]} 重置</small>
++                    {compact && <QuotaMeter limit={mostUsed(row)} remaining={remaining} summary />}
++                    <CaretRight size={12} />
++                  </button>
++                  {(!compact || expanded === row.id) && <div className="cli-usage-limits">{row.limits.map((limit) => <QuotaMeter key={limit[0]} limit={limit} remaining={remaining} showReset={expanded === row.id} />)}</div>}
++                </div>)}
++              </div>
++              <div className="cli-usage-links">
++                <button onClick={() => setPage('history')}>使用详情与历史 <CaretRight size={12} /></button>
++                <button onClick={() => setPage('accounts')}>管理账户 <CaretRight size={12} /></button>
++              </div>
++            </>
++          ) : (
++            <div className="cli-usage-subpage">
++              <button onClick={() => setPage('summary')}>← 返回用量</button>
++              {page === 'history' ? <><p>当前额度快照（演示）</p>{rows.map((row) => <div key={row.id}><EngineIdentity row={row} icon={engineIcons[row.id]} />
++                <div className="cli-usage-limits">{row.limits.map((limit) => <QuotaMeter key={limit[0]} limit={limit} remaining={remaining} showReset />)}</div></div>)}</> :
++                <><p>各引擎的额度跟随其 CLI 登录账户。</p><button onClick={() => {
++                  setOpen(false);
++                  window.dispatchEvent(new Event('cli-review-check'));
++                }}>打开 CLI 配置</button></>}
++            </div>
++          )}
++        </section>
++      )}
++    </div>
++  );
++}
+diff --git a/Web/src/shell/WorkspaceTab.jsx b/Web/src/shell/WorkspaceTab.jsx
+index 7bf8d66..0de2313 100644
+--- a/Web/src/shell/WorkspaceTab.jsx
++++ b/Web/src/shell/WorkspaceTab.jsx
+@@ -69,7 +69,7 @@ export default function WorkspaceTab({ projectPath, status, statusError, stamp,
+   const [committing, setCommitting] = useState(false);
+   const [picked, setPicked] = useState(null);
+   const [fileView, setFileView] = useState('差异');
+-  const [diffMode, setDiffMode] = useStored('diffMode', '统一');
++  const [diffMode, setDiffMode] = useStored('diffMode', '并排');
+   const [collapsed, setCollapsed] = useStored('changesCollapsed', false);
+   const [changesWidth, setChangesWidth] = useStored('changesWidth', DEFAULT_WIDTH);
+   const [changeRows, setChangeRows] = useStored('changeRows', DEFAULT_ROWS);
+@@ -371,6 +371,7 @@ export default function WorkspaceTab({ projectPath, status, statusError, stamp,
+             {['并排', '统一'].map((mode) => (
+               <button
+                 className={diffMode === mode ? 'chosen' : ''}
++                aria-pressed={diffMode === mode}
+                 onClick={() => setDiffMode(mode)}
+                 key={mode}
+               >
+@@ -409,7 +410,9 @@ export default function WorkspaceTab({ projectPath, status, statusError, stamp,
+         ) : (
+           <>
+             <DiffView
++              key={selectedKey}
+               hunks={diff.hunks}
++              sides={selected.group ? ['HEAD', '暂存区'] : ['暂存区', '工作区']}
+               mode={diffMode}
+               action={
+                 <button onClick={() => toggleStage(selected)}>
+diff --git a/Web/src/shell/engine-icons/antigravity.ico b/Web/src/shell/engine-icons/antigravity.ico
+new file mode 100644
+index 0000000000000000000000000000000000000000..4c7341919d9b93432ccb3a6e8c6a9eb7eca99fba
+GIT binary patch
+literal 15086
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/Web/src/shell/engine-icons/claude.ico b/Web/src/shell/engine-icons/claude.ico
+new file mode 100644
+index 0000000000000000000000000000000000000000..d0b0c9071fa7a95b008aa925f3d9579ecc3fe49a
+GIT binary patch
+literal 2445
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/Web/src/shell/engine-icons/codex.png b/Web/src/shell/engine-icons/codex.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..5df83e40f019e7eccaa09cace48b1d2c0bc475ae
+GIT binary patch
+literal 2331
+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
+BVd4M)
+
+literal 0
+HcmV?d00001
+
+diff --git a/Web/src/shell/engine-icons/deepseek.png b/Web/src/shell/engine-icons/deepseek.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..0011bf905cdd74dd25824100cac6f2ca433badc7
+GIT binary patch
+literal 1872
+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
+KMNUMnLSTZau8&9n
+
+literal 0
+HcmV?d00001
+
+diff --git a/Web/src/shell/mock.js b/Web/src/shell/mock.js
+index 46c49ee..274b2f8 100644
+--- a/Web/src/shell/mock.js
++++ b/Web/src/shell/mock.js
+@@ -9,7 +9,7 @@ const projectSeed = [
+   [
+     'claude-picker',
+     'codex/git-features',
+-    ['Git 工作台界面整理', '终端交互与会话状态', '项目侧栏优化'],
++    ['Git 工作台界面整理', '终端交互与会话状态', '项目侧栏优化', 'Codex · 接入多 CLI 会话', 'DeepSeek · 梳理依赖与启动流程'],
+   ],
+   [
+     'lm-global-java',
+@@ -78,7 +78,7 @@ let seq = 0;
+ const db = {
+   projects: [
+     { path: HOME, title: '~', isHome: true, expanded: false, showAll: false, sessions: [] },
+-    ...projectSeed.map(([name, , sessions], index) => ({
++    ...projectSeed.map(([name, branch, sessions], index) => ({
+       path: P(name),
+       title: name,
+       isHome: false,
+@@ -86,8 +86,13 @@ const db = {
+       showAll: false,
+       sessions: sessions.map((title, i) => ({
+         id: `demo-${name}-${i}`,
++        originalSessionId: `00000000-0000-4000-8000-${String(index * 100 + i + 1).padStart(12, '0')}`,
+         title,
+-        cwd: P(name),
++        surface: 'terminal',
++        provider: name === 'claude-picker' ? ['claude', 'antigravity', 'claude', 'codex', 'dsh'][i] : 'claude',
++        branch: name === 'claude-picker' && i >= 3 ? 'feature/cli-integration' : branch,
++        ...(name === 'claude-picker' && i >= 3 ? { worktreePath: `${P(name)}/.worktrees/feature-cli-integration` } : {}),
++        cwd: name === 'claude-picker' && i >= 3 ? `${P(name)}/.worktrees/feature-cli-integration` : P(name),
+         time: i === 0 ? '刚刚' : `${i + 1} 小时前`,
+         running: false,
+         unread: false,
+@@ -95,6 +100,9 @@ const db = {
+     })),
+   ],
+   active: null,
++  dshAvailable: false,
++  chats: {},
++  cacheTouched: { 'demo-claude-picker-0': Date.now() },
+   runtime: { provider: 'claude', mode: 'auto', model: 'opus', effort: 'medium', fast: false, supportsFast: true },
+   settings: {
+     appFontSize: 12,
+@@ -144,10 +152,22 @@ db.active = {
+ function repo(projectPath) {
+   if (!db.repos[projectPath]) {
+     const seed = projectSeed.find(([name]) => P(name) === projectPath);
+-    if (!seed) return null;
++    if (!seed) {
++      const root = projectPath.split('/.worktrees/')[0];
++      const parent = root !== projectPath ? repo(root) : null;
++      const worktree = parent?.worktrees.find((item) => item.path === projectPath);
++      if (!worktree) return null;
++      db.repos[projectPath] = {
++        ...parent,
++        branch: worktree.branch,
++        files: parent.files.slice(2, 4).map((item) => ({ ...item, staged: false })),
++        contents: {},
++      };
++      return db.repos[projectPath];
++    }
+     db.repos[projectPath] = {
+       branch: seed[1],
+-      branches: [...new Set([seed[1], 'main', 'feature/session-layout'])],
++      branches: [...new Set([seed[1], 'main', 'feature/session-layout', ...(seed[0] === 'claude-picker' ? ['feature/cli-integration'] : [])])],
+       remotes: ['origin/main'],
+       files: baseFiles.map(([path, label, staged]) => ({ path, label, staged })),
+       contents: {},
+@@ -166,7 +186,10 @@ function repo(projectPath) {
+         parents: [],
+       })),
+       stashes: [],
+-      worktrees: [{ path: projectPath, head: 'a84c2e1', branch: seed[1] }],
++      worktrees: [
++        { path: projectPath, head: 'a84c2e1', branch: seed[1] },
++        ...(seed[0] === 'claude-picker' ? [{ path: `${projectPath}/.worktrees/feature-cli-integration`, head: 'a84c2e1', branch: 'feature/cli-integration' }] : []),
++      ],
+     };
+   }
+   return db.repos[projectPath];
+@@ -211,9 +234,17 @@ function snapshot() {
+       home: HOME,
+       projects: db.projects,
+       active: db.active,
++      chats: db.chats,
++      cacheTouched: db.cacheTouched,
++      worktreesByProject: Object.fromEntries(db.projects.flatMap((project) => {
++        const repository = repo(project.path);
++        return repository ? [[project.path, repository.worktrees.slice(1)]] : [];
++      })),
+       providers: [
+         { id: 'claude', label: 'Claude Code', command: 'claude', available: true, path: '/usr/local/bin/claude' },
+         { id: 'antigravity', label: 'Antigravity', command: 'agy', available: true, path: '/Users/demo/.local/bin/agy' },
++        { id: 'codex', label: 'Codex CLI', command: 'codex', available: true },
++        { id: 'dsh', label: 'DeepSeek Harness', command: 'dsh-tui', available: db.dshAvailable },
+       ],
+       runtime: {
+         ...db.runtime,
+@@ -246,6 +277,43 @@ function snapshot() {
+   );
+ }
+ 
++function setChatStatus(sessionId, status) {
++  db.chats[sessionId].status = status;
++  for (const project of db.projects) {
++    const session = project.sessions.find((item) => item.id === sessionId);
++    if (session) session.running = status !== 'idle';
++  }
++  if (db.active?.sessionId === sessionId) db.active.busy = status !== 'idle';
++}
++
++function runChatTurn(sessionId) {
++  const turn = db.chats[sessionId].turns.at(-1);
++  const chunks = [
++    '项目 Web 界面的入口是 `Web/src/main.jsx`。',
++    '它会根据启动方式载入主工作区或桌宠窗口。\n\n',
++    '可以从 **shell/App.jsx** 继续看项目树、会话和终端布局。',
++  ];
++  setChatStatus(sessionId, 'running');
++  push();
++  let index = 0;
++  const timer = setInterval(() => {
++    const chat = db.chats[sessionId];
++    if (chat.status !== 'running' || chat.turns.at(-1) !== turn) {
++      clearInterval(timer);
++      return;
++    }
++    turn.tool = '读取文件 · Web/src/main.jsx';
++    turn.toolDetail = '模拟读取入口文件，工作目录未发生变更。';
++    turn.reply = (turn.reply ?? '') + chunks[index++];
++    if (index === chunks.length) {
++      clearInterval(timer);
++      if (chat.provider === 'claude') db.cacheTouched[sessionId] = Date.now();
++      setChatStatus(sessionId, 'idle');
++    }
++    push();
++  }, 300);
++}
++
+ function push() {
+   window.dispatchEvent(new CustomEvent('claude-picker:state', { detail: snapshot() }));
+ }
+@@ -296,10 +364,91 @@ function patchFor(r, path) {
+   ].join('\n');
+ }
+ 
++function createMockWorktree(projectPath, branch, base, title) {
++  const repository = requireRepo(projectPath);
++  const path = `${projectPath}/.worktrees/${branch.replace(/[^\w.-]+/g, '-')}`;
++  if (repository.branches.includes(branch) || repository.worktrees.some((item) => item.path === path)) {
++    throw fail('BRANCH_EXISTS', `分支或工作树已存在：${branch}`);
++  }
++  if (base && ![...repository.branches, ...repository.remotes].includes(base)) {
++    throw fail('COMMAND_FAILED', `找不到起始分支：${base}`);
++  }
++  const head = base && repository.remotes.includes(base) ? '618de32' : 'a84c2e1';
++  const worktree = { path, branch, head, base, title };
++  repository.branches.push(branch);
++  repository.worktrees.push(worktree);
++  return worktree;
++}
++
++function createMockSession({ projectPath, title, provider, worktreePath, branch }) {
++  const p = project(projectPath);
++  const cwd = worktreePath ?? projectPath;
++  const id = `demo-new-${++seq}`;
++  const originalSessionId = crypto.randomUUID();
++  const label = title || '新建会话';
++  const override = db.settings.cliPreferences?.[provider]?.mode;
++  const defaultSurface = override && override !== 'inherit' ? override : db.settings.interactionMode;
++  const surface = provider !== 'dsh' && defaultSurface === 'chat' ? 'chat' : 'terminal';
++  p.sessions.unshift({
++    id, originalSessionId, title: label, named: Boolean(title), cwd, provider, surface, time: '刚刚', running: false, unread: false,
++    branch, worktreePath,
++  });
++  p.expanded = true;
++  db.active = { sessionId: id, originalSessionId, cwd, projectPath, label, provider, surface, busy: false };
++  db.runtime.provider = provider;
++  push();
++  return { sessionId: id, cwd, provider };
++}
++
+ const handlers = {
+   'update.status': () => ({ version: '演示版本', platform: '浏览器', state: 'idle', preview: true }),
+   'update.check': () => ({ version: '演示版本', platform: '浏览器', state: 'unpublished', preview: true }),
+   'app.state': () => snapshot(),
++  'prototype.session.surface': ({ sessionId, surface }) => {
++    if (db.active?.sessionId !== sessionId) throw fail('COMMAND_FAILED', '请先打开会话');
++    const session = db.projects.flatMap((item) => item.sessions).find((item) => item.id === sessionId);
++    if (!session || session.running || db.active.busy) {
++      throw fail('COMMAND_FAILED', '请先停止当前回合，再切换打开方式');
++    }
++    session.surface = surface;
++    db.active.surface = surface;
++    push();
++  },
++  'prototype.chat.send': ({ sessionId, text, permission }) => {
++    if (db.active?.sessionId !== sessionId) throw fail('COMMAND_FAILED', '请先打开会话');
++    const chat = db.chats[sessionId] ??= { provider: db.active.provider ?? 'claude', status: 'idle', turns: [] };
++    if (chat.status !== 'idle') throw fail('COMMAND_FAILED', '当前轮仍在进行');
++    delete db.cacheTouched[sessionId];
++    chat.turns.push({ id: ++seq, prompt: text, tool: '准备读取项目入口', toolDetail: '项目文件 · Web/src/main.jsx' });
++    if (permission === 'approval') {
++      setChatStatus(sessionId, 'approval');
++      push();
++    } else {
++      runChatTurn(sessionId);
++    }
++  },
++  'prototype.chat.approve': ({ sessionId, allow }) => {
++    const chat = db.chats[sessionId];
++    if (chat?.status !== 'approval') return;
++    chat.turns.at(-1).permission = allow ? '已允许一次' : '已拒绝';
++    if (allow) runChatTurn(sessionId);
++    else {
++      Object.assign(chat.turns.at(-1), { tool: '工具调用已拒绝', toolDetail: '本轮未读取文件。' });
++      setChatStatus(sessionId, 'idle');
++      push();
++    }
++  },
++  'prototype.chat.stop': ({ sessionId }) => {
++    const chat = db.chats[sessionId];
++    if (!chat || chat.status === 'idle') return;
++    Object.assign(chat.turns.at(-1), { tool: '本轮已停止', toolDetail: '已取消待处理的模拟请求。' });
++    setChatStatus(sessionId, 'idle');
++    push();
++  },
++  'prototype.dsh': ({ available }) => {
++    db.dshAvailable = available;
++    push();
++  },
+   'app.layout': () => null,
+   'pet.hit': () => null,
+   'pet.move': () => null,
+@@ -410,12 +559,17 @@ const handlers = {
+     const target = db.projects
+       .flatMap((item) => item.sessions)
+       .find((item) => item.id === db.active.sessionId);
++    const activeId = db.active.sessionId;
++    delete db.cacheTouched[activeId];
+     db.active.busy = true;
+     if (target) target.running = true;
+     push();
+     setTimeout(() => {
+-      if (db.active) db.active.busy = false;
+-      if (target) target.running = false;
++      if (db.active?.sessionId === activeId) db.active.busy = false;
++      if (target) {
++        target.running = false;
++        if ((target.provider ?? 'claude') === 'claude') db.cacheTouched[activeId] = Date.now();
++      }
+       push();
+     }, 900);
+     return { ok: true };
+@@ -450,29 +604,43 @@ const handlers = {
+       cwd,
+       projectPath: p?.path ?? projectPath,
+       label: s?.title ?? '会话',
+-      busy: false,
++      originalSessionId: s?.originalSessionId,
++      provider: s?.provider ?? 'claude',
++      surface: s?.surface ?? 'terminal',
++      restored: true,
++      busy: db.chats[sessionId]?.status === 'running' || db.chats[sessionId]?.status === 'approval',
+     };
++    db.runtime.provider = db.active.provider;
+     push();
+     return null;
+   },
+-  'session.create': ({ projectPath, title, mode, branch, provider = 'claude' }) => {
++  'session.create': ({ projectPath, title, mode, branch, workspace, provider = 'claude' }) => {
++    if (workspace) {
++      const repository = requireRepo(projectPath);
++      if (workspace.worktreePath) {
++        const worktree = repository.worktrees.find(({ path }) => path === workspace.worktreePath);
++        if (!worktree || worktree.branch !== workspace.branch) throw fail('COMMAND_FAILED', '工作树或分支已变更，请重新选择');
++        return createMockSession({ projectPath, title, provider, worktreePath: worktree.path, branch: worktree.branch });
++      }
++      if (!repository.branches.includes(workspace.branch)) throw fail('COMMAND_FAILED', '分支已不存在，请重新选择');
++      repository.branch = workspace.branch;
++      return createMockSession({ projectPath, title, provider, branch: workspace.branch });
++    }
++    const worktree = mode === 'worktree' ? createMockWorktree(projectPath, branch) : null;
++    return createMockSession({ projectPath, title, provider, worktreePath: worktree?.path, branch: worktree?.branch ?? repo(projectPath)?.branch });
++  },
++  'prototype.worktree.create': ({ projectPath, branch, base, name, provider }) => {
+     const p = project(projectPath);
+-    let cwd = projectPath;
+-    if (mode === 'worktree') {
+-      const r = requireRepo(projectPath);
+-      if (r.branches.includes(branch)) throw fail('BRANCH_EXISTS', `分支已存在：${branch}`);
+-      cwd = `${projectPath}/.worktrees/${branch.replace(/[^\w.-]+/g, '-')}`;
+-      r.branches.push(branch);
+-      r.worktrees.push({ path: cwd, head: 'a84c2e1', branch });
++    if (provider && (db.settings.cliPreferences?.[provider]?.enabled === false || (provider === 'dsh' && !db.dshAvailable))) {
++      throw fail('COMMAND_FAILED', '该代理当前不可用');
+     }
+-    const id = `demo-new-${++seq}`;
+-    const label = title || '新建会话';
+-    p.sessions.unshift({ id, title: label, named: Boolean(title), cwd, provider, time: '刚刚', running: false, unread: false });
++    const worktree = createMockWorktree(projectPath, branch, base, name);
+     p.expanded = true;
+-    db.active = { sessionId: id, cwd, projectPath, label, provider, busy: false };
+-    db.runtime.provider = provider;
++    if (provider) {
++      return { ...worktree, ...createMockSession({ projectPath, title: name, provider, worktreePath: worktree.path, branch }) };
++    }
+     push();
+-    return { sessionId: id, cwd, provider };
++    return worktree;
+   },
+   'session.handoff': ({ sessionId, sourceProvider = 'claude', targetProvider = 'antigravity', projectPath }) => {
+     const p = project(projectPath);
+@@ -481,7 +649,7 @@ const handlers = {
+     const label = src?.title ?? '接力会话';
+     const cwd = src?.cwd ?? projectPath;
+     const fromName = sourceProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
+-    p.sessions.unshift({ id, title: label, cwd, provider: targetProvider, handoffFrom: fromName, time: '刚刚', running: false, unread: false });
++    p.sessions.unshift({ id, title: label, cwd, branch: src?.branch ?? repo(projectPath)?.branch, worktreePath: src?.worktreePath, provider: targetProvider, handoffFrom: fromName, time: '刚刚', running: false, unread: false });
+     db.active = { sessionId: id, cwd, projectPath, label, provider: targetProvider, busy: false };
+     db.runtime.provider = targetProvider;
+     push();
+@@ -735,8 +903,23 @@ const demoWorks = demoMode
+       updatedAt: new Date(Date.now() - index * 3600_000).toISOString(),
+     }))
+   : [];
+-const demoTapd = demoMode
+-  ? [
++let tapdSettings = {
++  transport: 'mcp', enabled: demoMode, syncOnLaunch: true,
++  mcp: demoMode ? { endpoint: 'https://tapd-mcp.example.com/mcp', auth: 'oauth' } : null,
++  workspaces: demoMode ? [
++    { id: '67103358', name: 'lm-global', enabled: true, projects: [demoProject.path] },
++    { id: '33349361', name: '蓝马', enabled: true, projects: [] },
++  ] : [],
++};
++
++function tapdState() {
++  return {
++    settings: tapdSettings,
++    prerequisites: { transport: 'mcp', connected: Boolean(tapdSettings.mcp) },
++  };
++}
++
++const demoTapd = [
+       ['67103358', 'story', '1167103358001001001', '订单解码接口联调', 'C2-实现中', 'developing', 'Middle', 'V1.0 订单', '演示用户'],
+       ['67103358', 'story', '1167103358001001002', '设计模板绑定校验', 'A0-待评估', 'status_11', 'High', 'V1.0 设计', '王同学'],
+       ['33349361', 'bug', '1133349361001001003', '订单列表统计条件不一致', '未解决', 'new', 'high', null, '演示用户'],
+@@ -754,10 +937,25 @@ const demoTapd = demoMode
+       created: '2026-11-16 14:55:00',
+       creator,
+       workspaceName: workspaceId === '67103358' ? 'lm-global' : '蓝马',
+-    }))
+-  : [];
++    }));
+ const demoComments = {};
+ const drafts = new Map();
++const defaultWecomSettings = { name: '开发协作助手', enabled: false, mode: 'claude', conversationProvider: 'claude', actors: null, scopes: null, projectPaths: null, autoStart: false, remoteAnswers: false };
++const wecomBots = new Map([['bot-demo', { ...defaultWecomSettings }]]);
++const wecomPreview = new Map();
++
++function getWecomBot(id = 'bot-demo') {
++  const bot = wecomBots.get(id);
++  if (!bot) throw fail('COMMAND_FAILED', '找不到机器人配置');
++  return bot;
++}
++
++function getWecomRecords(id) {
++  getWecomBot(id);
++  if (!wecomPreview.has(id)) wecomPreview.set(id, {});
++  return wecomPreview.get(id);
++}
++
+ Object.assign(handlers, {
+   'work.snapshot': () => ({
+     available: true,
+@@ -772,21 +970,45 @@ Object.assign(handlers, {
+     drafts.set(`${scope}:${key}`, value);
+     return { ok: true };
+   },
+-  'tapd.settings': () => ({
+-    settings: demoMode
+-      ? {
+-          enabled: true,
+-          cliPath: '',
+-          syncOnLaunch: true,
+-          workspaces: [
+-            { id: '67103358', name: 'lm-global', enabled: true, projects: [demoProject.path] },
+-            { id: '33349361', name: '蓝马', enabled: true, projects: [] },
+-          ],
+-        }
+-      : { enabled: false, cliPath: '', workspaces: [], syncOnLaunch: true },
+-    prerequisites: { cli: demoMode ? '/usr/local/bin/tapd-cli' : null, endpointSet: demoMode, tokenSet: demoMode },
+-  }),
++  'tapd.settings': ({ patch }) => {
++    if (patch) tapdSettings = { ...tapdSettings, ...patch, transport: 'mcp' };
++    return tapdState();
++  },
++  'tapd.mcp.configure': ({ endpoint, workspaceIds, auth, hasToken }) => {
++    let url;
++    try { url = new URL(endpoint); } catch { throw fail('COMMAND_FAILED', '请输入有效的 HTTPS MCP 连接地址'); }
++    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
++      throw fail('COMMAND_FAILED', 'MCP 地址必须使用 HTTPS，授权信息通过独立授权方式提供');
++    }
++    const ids = [...new Set(workspaceIds)];
++    if (!ids.length || ids.some((id) => typeof id !== 'string' || !/^\d+$/.test(id))) {
++      throw fail('COMMAND_FAILED', 'TAPD 项目 ID 应为数字');
++    }
++    const sameAuth = tapdSettings.mcp?.endpoint === url.href && tapdSettings.mcp?.auth === auth;
++    if (auth === 'token' && !hasToken && !sameAuth) throw fail('COMMAND_FAILED', '请填写服务访问令牌');
++    const tools = ['get_workspace_info', 'get_todo'];
++    const workspaces = new Map(tapdSettings.workspaces.map((item) => [item.id, item]));
++    for (const id of ids) {
++      if (workspaces.has(id)) continue;
++      const name = id === '67103358' ? 'lm-global' : id === '33349361' ? '蓝马' : `演示项目 ${id}`;
++      workspaces.set(id, { id, name, enabled: true, projects: [] });
++    }
++    tapdSettings = {
++      ...tapdSettings, enabled: true, transport: 'mcp', mcp: { endpoint: url.href, auth },
++      workspaces: [...workspaces.values()],
++    };
++    const server = { id: 'tapd:managed', name: 'TAPD MCP', scope: 'user', transport: 'http', endpoint: url.href,
++      description: '在 TAPD 连接中配置', enabled: true, removable: false, tools, connected: true };
++    db.mcp = [...db.mcp.filter((item) => item.id !== server.id), server];
++    return tapdState();
++  },
++  'tapd.test': () => ({ connected: Boolean(tapdSettings.mcp), message: '尚未配置 TAPD MCP' }),
++  'tapd.workspaces': () => {
++    if (!tapdSettings.mcp) throw fail('COMMAND_FAILED', '请先配置 TAPD MCP');
++    return { workspaces: tapdSettings.workspaces };
++  },
+   'tapd.todos': ({ workspaceId, scope }) => {
++    if (!tapdSettings.enabled || !tapdSettings.mcp) throw fail('COMMAND_FAILED', '请先配置并启用 TAPD MCP');
+     const items = demoTapd.filter(
+       (item) => (!workspaceId || item.ref.workspaceId === workspaceId) && (scope === 'created' ? item.creator === '演示用户' : true),
+     );
+@@ -839,14 +1061,66 @@ Object.assign(handlers, {
+   'tapd.import': () => {
+     throw fail('UNAVAILABLE', '浏览器演示模式不能创建 Work，请在应用里使用');
+   },
+-  'source.overview': () => ({
+-    settings: { name: '开发协作助手', enabled: false, autoStart: false, remoteAnswers: false },
++  'source.overview': ({ profileId }) => ({
++    settings: { ...getWecomBot(profileId) },
+     socket: null,
+     listening: false,
+     lastSeen: null,
+     conversations: [],
+   }),
+-  'source.mcpCommand': () => ({ command: 'ClaudePicker', args: ['--source-mcp'], listening: false }),
++  'prototype.wecom.bots': () => [...wecomBots].map(([id, { name }]) => ({ id, name })),
++  'prototype.wecom.addBot': () => {
++    const id = crypto.randomUUID();
++    const name = `机器人 ${wecomBots.size + 1}`;
++    wecomBots.set(id, { ...defaultWecomSettings, name, actors: [], scopes: ['direct'] });
++    return { id, name };
++  },
++  'source.settings': ({ profileId = 'bot-demo', patch }) => {
++    const settings = { ...getWecomBot(profileId), ...patch };
++    wecomBots.set(profileId, settings);
++    return { ...settings };
++  },
++  'prototype.wecom.conversations': ({ profileId }) => structuredClone(getWecomRecords(profileId)),
++  'prototype.wecom.message': ({ profileId, actor, scope, projectPath, text }) => {
++    const bot = getWecomBot(profileId);
++    const records = getWecomRecords(profileId);
++    if (!['alice', 'bob'].includes(actor) || !['group', 'direct'].includes(scope)) {
++      throw fail('COMMAND_FAILED', '无法确认发件人或会话');
++    }
++    project(projectPath);
++    const matches = (allowed, value) => allowed === null || allowed.includes(value);
++    if (!matches(bot.actors, actor) || !matches(bot.scopes, scope) || !matches(bot.projectPaths, projectPath)) {
++      throw fail('UNAVAILABLE', '未匹配本机器人的人员、场景或项目范围。不会建立会话。');
++    }
++    const key = JSON.stringify([scope, actor, projectPath]);
++    const provider = records[key]?.provider ?? bot.conversationProvider;
++    if (provider === 'dsh' || db.settings.cliPreferences?.[provider]?.enabled === false) {
++      throw fail('UNAVAILABLE', '此会话的 CLI 不可用，请恢复该引擎后重试');
++    }
++    const record = records[key] ??= { sessionId: crypto.randomUUID(), provider, turns: [], card: null };
++    const reply = record.turns.length ? `已续接原会话 · 第 ${record.turns.length + 1} 轮` : '已创建独立会话';
++    record.turns.push({ message: text, reply });
++    return structuredClone(record);
++  },
++  'prototype.wecom.createCard': ({ profileId, actor, scope, projectPath, type }) => {
++    const record = getWecomRecords(profileId)[JSON.stringify([scope, actor, projectPath])];
++    if (!record) throw fail('COMMAND_FAILED', '请先发送一条消息');
++    if (!['work', 'decision'].includes(type)) throw fail('COMMAND_FAILED', '未知卡片类型');
++    if (record.card?.status === 'pending') return structuredClone(record);
++    record.card = { type, status: 'pending', id: crypto.randomUUID() };
++    return structuredClone(record);
++  },
++  'prototype.wecom.chooseCard': ({ profileId, actor, scope, projectPath, cardId, choice }) => {
++    const record = getWecomRecords(profileId)[JSON.stringify([scope, actor, projectPath])];
++    if (!record?.card || record.card.id !== cardId) throw fail('UNAVAILABLE', '该卡片不属于当前身份或会话');
++    const allowed = record.card.type === 'work' ? ['confirm', 'clarify', 'cancel'] : ['a', 'b', 'wait'];
++    if (!allowed.includes(choice)) throw fail('COMMAND_FAILED', '未知选项');
++    if (record.card.status === 'pending') {
++      record.card.status = 'handled';
++      record.card.choice = choice;
++    }
++    return structuredClone(record);
++  },
+   'agent.pack': () => ({ valid: false, configured: false }),
+   'work.create': () => {
+     throw fail('UNAVAILABLE', '浏览器演示模式不能创建 Work，请在应用里使用');
+diff --git a/Web/src/shell/session-info.js b/Web/src/shell/session-info.js
+new file mode 100644
+index 0000000..39f2264
+--- /dev/null
++++ b/Web/src/shell/session-info.js
+@@ -0,0 +1,13 @@
++const resumeCommands = {
++  claude: 'claude --resume',
++  codex: 'codex resume',
++  antigravity: 'agy --conversation',
++  dsh: 'dsh-tui --backend dsh --resume',
++};
++
++export function resumeCommand(provider, id) {
++  const command = resumeCommands[provider];
++  if (!command || !id) return null;
++  const safeId = /^[\w.-]+$/.test(id) && !id.startsWith('-') ? id : "'" + id.replaceAll("'", "'\"'\"'") + "'";
++  return `${command} ${safeId}`;
++}
+diff --git a/Web/src/shell/style.css b/Web/src/shell/style.css
+index 43dac57..7a09e38 100644
+--- a/Web/src/shell/style.css
++++ b/Web/src/shell/style.css
+@@ -3039,3 +3039,13 @@ label.settings-row {
+ .mode-choice strong .provider-badge {
+   margin-right: 6px;
+ }
++
++/* CLI 接入评审原型 */
++.provider-badge.codex { background: #34304a; color: #c9bcfc; }
++.provider-badge.dsh { background: #223a50; color: #a1d0ff; }
++.provider-filter { flex-wrap: wrap; }
++.provider-filter > button { flex: 1 0 auto; }
++.cli-review-terminal { display: grid; gap: 8px; overflow-wrap: anywhere; }
++.cli-review-terminal small { color: #a1a1ac; }
++.cli-review-terminal code { color: #e0a37f; }
++[data-review] .pane-note button, .pane-note [data-review] button { margin-left: 8px; text-decoration: underline; }
+diff --git a/Web/src/shell/work/CliSettings.jsx b/Web/src/shell/work/CliSettings.jsx
+new file mode 100644
+index 0000000..3f29415
+--- /dev/null
++++ b/Web/src/shell/work/CliSettings.jsx
+@@ -0,0 +1,192 @@
++import React, { useState } from 'react';
++import { ArrowsClockwise, ChatCircleText, DotsThree, Terminal, Timer, Warning } from '@phosphor-icons/react';
++import { request } from '../bridge.js';
++
++const engines = {
++  claude: { badge: 'C', modes: ['chat', 'terminal'] },
++  antigravity: { badge: 'A', modes: ['chat', 'terminal'] },
++  codex: { badge: 'Cx', modes: ['chat', 'terminal'] },
++  dsh: { badge: 'Ds', modes: ['terminal'], guide: 'https://github.com/ccch1mneyyy/dsh-TUI#quick-start' },
++};
++const catalog = [
++  { id: 'workbuddy', label: 'WorkBuddy', badge: 'Wb', command: 'CLI 启动入口待验证' },
++  { id: 'opencode', label: 'OpenCode', badge: 'Oc', command: 'opencode', guide: 'https://opencode.ai/docs/' },
++  { id: 'codebuddy', label: 'CodeBuddy', badge: 'Cb', command: 'codebuddy', guide: 'https://www.codebuddy.ai/' },
++];
++const modeLabel = { chat: '聊天', terminal: '终端' };
++
++function ModePreview({ mode }) {
++  return (
++    <div className={`cli-mode-preview ${mode}`} aria-hidden="true">
++      <div><span>{mode === 'chat' ? <ChatCircleText size={14} /> : <Terminal size={14} />}</span> claude-picker</div>
++      {mode === 'chat' ? (
++        <section><b>项目的入口在哪里？</b><p>入口位于 <code>Web/src/main.jsx</code>。</p><small>输入消息…</small></section>
++      ) : (
++        <section><code>$ claude</code><p>› 项目的入口在哪里？</p><small>❯ ▍</small></section>
++      )}
++    </div>
++  );
++}
++
++export default function CliSettings({ providers, settings, onChange, notify }) {
++  const [menu, setMenu] = useState(null);
++  const [guide, setGuide] = useState(false);
++  const globalMode = settings.interactionMode === 'chat' ? 'chat' : 'terminal';
++  const config = settings.cliPreferences ?? {};
++  const preferred = settings.defaultProvider ?? 'claude';
++  const installed = providers.filter((item) => item.available || item.id === 'dsh');
++  const available = [
++    ...providers.filter((item) => !item.available && item.id !== 'dsh'),
++    ...catalog,
++  ];
++
++  function updateEntry(id, patch) {
++    onChange({ cliPreferences: { ...config, [id]: { ...config[id], ...patch } } });
++  }
++
++  function toggleEngine(id) {
++    const enabled = config[id]?.enabled === false;
++    const patch = { cliPreferences: { ...config, [id]: { ...config[id], enabled } } };
++    if (!enabled && preferred === id) {
++      patch.defaultProvider = installed.find((item) => item.id !== id && item.available && config[item.id]?.enabled !== false)?.id ?? null;
++    }
++    onChange(patch);
++  }
++
++  async function refresh() {
++    const snapshot = await request('app.state');
++    notify(`检测到 ${snapshot.providers.filter((item) => item.available).length} 个可启动引擎（演示）`);
++  }
++
++  return (
++    <div className="cli-settings-page" onClick={() => menu && setMenu(null)}>
++      <h3>CLI 引擎</h3>
++      <div className="cli-settings-section" data-review="CLI 配置 · 全局打开方式">
++        <h4>智能体打开方式</h4>
++        <p>新会话默认使用的界面。仅支持终端的引擎会直接打开终端。</p>
++        <div className="cli-mode-grid" role="group" aria-label="智能体打开方式">
++          {Object.entries(modeLabel).map(([mode, label]) => (
++            <button key={mode} className="cli-mode-card" aria-pressed={globalMode === mode}
++              onClick={() => {
++                onChange({ interactionMode: mode });
++              }}>
++              <ModePreview mode={mode} />
++              <strong>{label}</strong>
++              <small>{mode === 'chat' ? '在会话界面阅读消息与工具结果' : '在项目目录中打开引擎的原生终端'}</small>
++            </button>
++          ))}
++        </div>
++        <button className="cli-settings-link" onClick={() => {
++          document.querySelector('#cli-installed-list')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
++        }}>按引擎设置 ↓</button>
++      </div>
++      <div className="cli-settings-section" data-review="CLI 配置 · 新会话默认权限">
++        <h4>新会话</h4>
++        <label className="cli-permission"><span>默认权限</span>
++          <select aria-label="默认权限" value={settings.cliPermission ?? 'inherit'} onChange={(event) => onChange({ cliPermission: event.target.value })}>
++            <option value="inherit">沿用引擎设置</option>
++            <option value="approval">操作前请求批准</option>
++            <option value="readonly">只读</option>
++          </select>
++        </label>
++        <p>权限选项仅供原型评审。实际行为由各 CLI 的权限设置决定。</p>
++      </div>
++      <div className="cli-settings-section" data-review="CLI 配置 · 提示缓存定时器">
++        <h4>提示缓存定时器</h4>
++        <p>Claude 会话空闲后，可以在侧栏查看缓存预计何时过期。</p>
++        <div className="cli-engine-list">
++          <div className="cli-engine-row">
++            <div className="cli-engine-label"><Timer size={17} />
++              <div><strong>缓存定时器</strong><small className="cli-cache-setting-description">显示在 Claude 会话行</small></div>
++            </div>
++            <button className="cli-engine-switch" type="button" role="switch" aria-label="缓存定时器"
++              aria-checked={settings.promptCacheTimer?.enabled !== false}
++              onClick={() => onChange({ promptCacheTimer: { ...settings.promptCacheTimer, enabled: settings.promptCacheTimer?.enabled === false } })} />
++          </div>
++          <div className="cli-engine-row">
++            <div><strong>定时器持续时间</strong><small className="cli-cache-setting-description">按提供商的缓存 TTL 设置，默认 5 分钟。</small></div>
++            <select aria-label="定时器持续时间" disabled={settings.promptCacheTimer?.enabled === false}
++              value={settings.promptCacheTimer?.minutes ?? 5}
++              onChange={(event) => onChange({ promptCacheTimer: { ...settings.promptCacheTimer, minutes: Number(event.target.value) } })}>
++              {[5, 10, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分钟</option>)}
++            </select>
++          </div>
++        </div>
++      </div>
++      <div className="cli-settings-section" id="cli-installed-list" data-review="CLI 配置 · 已安装">
++        <div className="cli-section-title"><h4>已安装 <small>{installed.length} 已检测</small></h4>
++          <button onClick={refresh}><ArrowsClockwise size={14} /> 刷新</button></div>
++        <div className="cli-engine-list">
++          {installed.map((item) => {
++            const engine = engines[item.id];
++            const enabled = config[item.id]?.enabled !== false;
++            const selectedMode = config[item.id]?.mode ?? 'inherit';
++            return (
++              <div className="cli-engine-row" key={item.id}>
++                <div className="cli-engine-label">
++                  <em className={`provider-badge ${item.id}`}>{engine?.badge}</em>
++                  <div><strong>{item.label}{preferred === item.id && <small className="cli-default">默认</small>}</strong>
++                    <code>{item.command}{item.id === 'dsh' ? ' --backend dsh' : ''}</code></div>
++                </div>
++                <div className="cli-engine-actions">
++                  {item.available && engine?.modes.length > 1 && (
++                    <select aria-label={`${item.label} 打开方式`} value={selectedMode} onChange={(event) => updateEntry(item.id, { mode: event.target.value })}>
++                      <option value="inherit">跟随全局</option>
++                      <option value="chat">聊天</option>
++                      <option value="terminal">CLI</option>
++                    </select>
++                  )}
++                  {!item.available && <button className="cli-engine-warning" onClick={() => setGuide(!guide)}><Warning size={14} /> 缺少 dsh</button>}
++                  {item.available && <button type="button" role="switch" className="cli-engine-switch" aria-label={`启用 ${item.label}`} aria-checked={enabled} onClick={() => toggleEngine(item.id)} />}
++                  <div className="cli-engine-menu">
++                    <button aria-label={`${item.label} 更多操作`} aria-expanded={menu === item.id} onClick={(event) => {
++                      event.stopPropagation();
++                      setMenu(menu === item.id ? null : item.id);
++                    }}><DotsThree size={19} /></button>
++                    {menu === item.id && <div className="cli-menu-items" onClick={(event) => event.stopPropagation()}>
++                      {item.available && <label>{item.label} 权限
++                        <select aria-label={`${item.label} 权限`} value={config[item.id]?.permission ?? 'default'} onChange={(event) => updateEntry(item.id, { permission: event.target.value })}>
++                          <option value="default">跟随新会话默认值</option>
++                          <option value="inherit">沿用引擎设置</option>
++                          <option value="approval">操作前请求批准</option>
++                          <option value="readonly">只读</option>
++                        </select>
++                      </label>}
++                      <button disabled={!item.available || !enabled || preferred === item.id} onClick={() => { onChange({ defaultProvider: item.id }); setMenu(null); }}>设为默认引擎</button>
++                      {item.id === 'dsh' && <button onClick={() => { setGuide(true); setMenu(null); }}>依赖与安装</button>}
++                    </div>}
++                  </div>
++                </div>
++              </div>
++            );
++          })}
++        </div>
++        <label className="cli-scan"><input type="checkbox" checked={settings.scanAntigravity !== false}
++          onChange={(event) => onChange({ scanAntigravity: event.target.checked })} /> 聚合 Antigravity 历史会话</label>
++        {guide && (
++          <div className="cli-install-guide" data-review="CLI 配置 · DeepSeek 依赖">
++            <strong>DeepSeek Harness 依赖</strong>
++            <p>dsh-TUI 已检测到。还需要能从 PATH 找到 DeepSeek Harness（dsh）。</p>
++            <a href={engines.dsh.guide} target="_blank" rel="noreferrer">查看安装说明 ↗</a>
++            <button onClick={async () => {
++              await request('prototype.dsh', { available: true });
++              setGuide(false);
++              notify('模拟检测到 dsh');
++            }}>模拟补齐依赖</button>
++          </div>
++        )}
++      </div>
++      <div className="cli-settings-section" data-review="CLI 配置 · 可安装">
++        <div className="cli-section-title"><h4>可安装 <small>{available.length} 个引擎</small></h4></div>
++        <p>安装目录预览。引擎接入与本机检测需单独完成。</p>
++        <div className="cli-engine-list">
++          {available.map((item) => <div className="cli-engine-row" key={item.id}>
++            <div className="cli-engine-label"><em className="provider-badge">{item.badge ?? item.label[0]}</em>
++              <div><strong>{item.label}</strong><code>{item.command}</code></div></div>
++            {item.guide && <a href={item.guide} target="_blank" rel="noreferrer" aria-label={`查看 ${item.label} 安装说明`}>安装说明 ↗</a>}
++          </div>)}
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/Web/src/shell/work/ContextPanel.jsx b/Web/src/shell/work/ContextPanel.jsx
+index 584a5f3..6bf9139 100644
+--- a/Web/src/shell/work/ContextPanel.jsx
++++ b/Web/src/shell/work/ContextPanel.jsx
+@@ -210,7 +210,7 @@ function WorkDetail({ work, review, transcript, home, notify, onOpenFile, onOpen
+           <button className="source-box" onClick={onOpenSource}>
+             <div>
+               <ChatsCircle size={13} />
+-              <span>企业微信 · WorkBuddy</span>
++              <span>企业微信 · 机器人</span>
+             </div>
+             <strong>{work.title}</strong>
+             <small>查看原始消息、澄清与回执</small>
+diff --git a/Web/src/shell/work/ReviewTab.jsx b/Web/src/shell/work/ReviewTab.jsx
+index ed09b12..660cb3d 100644
+--- a/Web/src/shell/work/ReviewTab.jsx
++++ b/Web/src/shell/work/ReviewTab.jsx
+@@ -34,7 +34,7 @@ const STATUS_TEXT = { A: '新增', M: '修改', D: '删除', R: '重命名', C:
+ function FileDiff({ work, file, tree }) {
+   const [result, setResult] = useState(null);
+   const [error, setError] = useState(null);
+-  const [mode, setMode] = useStored('reviewDiffMode', '统一');
++  const [mode, setMode] = useStored('reviewDiffMode', '并排');
+   const token = useRef(0);
+   useEffect(() => {
+     if (!file) return;
+diff --git a/Web/src/shell/work/SettingsModal.jsx b/Web/src/shell/work/SettingsModal.jsx
+index b1f33f9..be04ce3 100644
+--- a/Web/src/shell/work/SettingsModal.jsx
++++ b/Web/src/shell/work/SettingsModal.jsx
+@@ -6,7 +6,6 @@ import {
+   Cat,
+   ChatCircleDots,
+   CheckCircle,
+-  Copy,
+   FolderOpen,
+   Info,
+   PlugsConnected,
+@@ -18,6 +17,8 @@ import {
+   XCircle,
+ } from '@phosphor-icons/react';
+ import { errorText, request } from '../bridge.js';
++import WecomChatPreview from './WecomChatPreview.jsx';
++import CliSettings from './CliSettings.jsx';
+ import VersionUpdates from './VersionUpdates.jsx';
+ import { relativeTime } from '../ui.jsx';
+ import { confirmAction } from './confirm.jsx';
+@@ -27,6 +28,7 @@ import { PetSettings } from '../pet/PetSettings.jsx';
+ 
+ const PAGES = [
+   ['appearance', '界面与会话', SlidersHorizontal],
++  ['cli', 'CLI 引擎', Robot],
+   ['navigation', '顶部页签', SquaresFour],
+   ['pet', '桌宠', Cat],
+   ['tapd', 'TAPD 连接', PlugsConnected],
+@@ -36,52 +38,13 @@ const PAGES = [
+   ['updates', '版本更新', Info],
+ ];
+ 
+-function Appearance({ settings, providers = [], capacity, onChange, notify }) {
++function Appearance({ settings, capacity, onChange, notify }) {
+   const [slots, setSlots] = useState(capacity.slots);
+   useEffect(() => setSlots(capacity.slots), [capacity.slots]);
+   return (
+     <>
+       <h3>界面与会话</h3>
+       <p>这些偏好即时生效，不影响正在执行的 Work。</p>
+-      <div className="field" role="group" aria-label="CLI 引擎">
+-        CLI 引擎
+-        {providers.length > 0 && (
+-          <div className="cli-status-list">
+-            {providers.map((prov) => (
+-              <div key={prov.id} className="cli-status-row">
+-                {prov.available ? <CheckCircle size={13} className="green" /> : <XCircle size={13} className="red" />}
+-                <b>{prov.label}</b>
+-                <code>{prov.available ? (prov.path ?? prov.command) : `${prov.command}（未安装）`}</code>
+-              </div>
+-            ))}
+-          </div>
+-        )}
+-        <div className="segmented" style={{ marginTop: 6 }}>
+-          {[
+-            ['claude', '默认新建：Claude Code'],
+-            ['antigravity', '默认新建：Antigravity'],
+-          ].map(([value, label]) => (
+-            <button
+-              key={value}
+-              type="button"
+-              className={(settings.defaultProvider ?? 'claude') === value ? 'chosen' : ''}
+-              onClick={() => onChange({ defaultProvider: value })}
+-            >
+-              {label}
+-            </button>
+-          ))}
+-        </div>
+-        <label className="follow-session-setting" style={{ marginTop: 8 }}>
+-          <span>扫描并聚合 Antigravity 历史会话（~/.gemini/antigravity-cli）</span>
+-          <input
+-            type="checkbox"
+-            role="switch"
+-            aria-label="扫描 Antigravity 历史会话"
+-            checked={settings.scanAntigravity !== false}
+-            onChange={(event) => onChange({ scanAntigravity: event.target.checked })}
+-          />
+-        </label>
+-      </div>
+       <label className="font-slider">
+         界面字号
+         <input
+@@ -128,27 +91,6 @@ function Appearance({ settings, providers = [], capacity, onChange, notify }) {
+         </div>
+         <small>工作空间：会话 + 详情；任务看板：启动时先看 Work 中心；专注对话：详情默认收起、会话居中。</small>
+       </div>
+-      <div className="field" role="group" aria-label="普通会话的交互方式">
+-        普通会话的交互方式
+-        <div className="segmented">
+-          {[
+-            ['terminal', '原生终端'],
+-            ['chat', '图形聊天（实验）'],
+-          ].map(([value, label]) => (
+-            <button
+-              key={value}
+-              type="button"
+-              className={(settings.interactionMode ?? 'terminal') === value ? 'chosen' : ''}
+-              onClick={() => onChange({ interactionMode: value })}
+-            >
+-              {label}
+-            </button>
+-          ))}
+-        </div>
+-        <small>
+-          切换会结束另一种方式下运行中的普通会话（历史保留），切换前会再确认一次。Work 始终由结构化执行器驱动，不受这个选项影响；同一个会话不会被两种方式同时持有。
+-        </small>
+-      </div>
+       <div className="field">
+         同时执行的 Work 数量
+         <div className="slots-row">
+@@ -274,12 +216,20 @@ function Tapd({ projects, notify, onDirty }) {
+   const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
+   const [saving, setSaving] = useState(false);
+   const [error, setError] = useState(null);
++  const [endpoint, setEndpoint] = useState('');
++  const [projectIds, setProjectIds] = useState('');
++  const workspaceIds = [...new Set(projectIds.split(/[\s,，;；]+/).filter(Boolean))];
++  const [auth, setAuth] = useState('oauth');
++  const [token, setToken] = useState('');
++  const [configuring, setConfiguring] = useState(false);
+ 
+   useEffect(() => {
+     request('tapd.settings')
+       .then((result) => {
+         setInfo(result);
+         setForm(result.settings);
++        setEndpoint(result.settings.mcp?.endpoint ?? '');
++        setAuth(result.settings.mcp?.auth ?? 'oauth');
+       })
+       .catch((cause) => setError(errorText(cause)));
+   }, []);
+@@ -302,6 +252,28 @@ function Tapd({ projects, notify, onDirty }) {
+     }
+   }
+ 
++  async function configureMcp() {
++    setConfiguring(true);
++    setError(null);
++    setTest(null);
++    try {
++      const result = await request('tapd.mcp.configure', {
++        endpoint: endpoint.trim(), workspaceIds, auth, hasToken: Boolean(token.trim()),
++      });
++      setInfo(result);
++      setForm(result.settings);
++      setEndpoint(result.settings.mcp.endpoint);
++      setProjectIds('');
++      setToken('');
++      setTest({ connected: true });
++      notify('TAPD MCP 已配置并启用（演示）');
++    } catch (cause) {
++      setError(errorText(cause));
++    } finally {
++      setConfiguring(false);
++    }
++  }
++
+   async function runTest() {
+     setTesting(true);
+     setTest(null);
+@@ -339,7 +311,7 @@ function Tapd({ projects, notify, onDirty }) {
+   }
+ 
+   if (!form) return error ? <div className="pane-note error">{error}</div> : <div className="pane-note">正在读取…</div>;
+-  const pre = info.prerequisites;
++  const canReuseAuth = info.prerequisites.connected && endpoint.trim() === info.settings.mcp?.endpoint && auth === info.settings.mcp?.auth;
+   const updateWorkspace = (id, patch) =>
+     setForm((current) => ({
+       ...current,
+@@ -349,74 +321,43 @@ function Tapd({ projects, notify, onDirty }) {
+   return (
+     <>
+       <h3>TAPD 连接</h3>
+-      <p>通过本机的 tapd-cli 读取分配给你的待办。个人令牌保存在 macOS 钥匙串里，不会写进设置文件、日志，也不会再显示出来。</p>
+-      <div className="prereq-list">
+-        <div>
+-          {pre.cli ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
+-          tapd-cli：{pre.cli ?? '没有找到'}
+-        </div>
+-        <div>
+-          {pre.tokenSet ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
+-          个人令牌：
+-          {pre.tokenSource === 'keychain'
+-            ? '已保存在钥匙串'
+-            : pre.tokenSource === 'env'
+-              ? '使用登录 shell 的 TAPD_TOKEN'
+-              : '未设置'}
+-        </div>
+-        <div>
+-          <CheckCircle size={14} className="green" />
+-          API 地址：{pre.endpoint}
++      <div className="tapd-mcp-intro" data-review="TAPD MCP · 配置步骤">
++        <strong>TAPD MCP <small>默认连接方式</small></strong>
++        <ol>
++          <li><b>准备服务信息</b><span>向团队管理员获取 TAPD MCP 的 HTTPS 连接地址和授权方式。</span></li>
++          <li><b>确认 TAPD 项目</b><span>从 TAPD 项目地址中复制一个或多个项目 ID，并确认该账号可查看这些项目和待办。</span></li>
++          <li><b>一键配置</b><span>完成授权并逐个验证项目。通过后添加新项目，已有项目的启用状态和仓库映射会保留。</span></li>
++        </ol>
++      </div>
++      <div className="tapd-mcp-form" data-review="TAPD MCP · 一键配置">
++        <label className="field">MCP 连接地址<input autoComplete="off" type="url"
++          placeholder="https://你的组织提供的地址/mcp" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>
++        <label className="field">TAPD 项目 ID（可多个）
++          <textarea rows={3} placeholder="每行一个，也可以用逗号或空格分隔"
++            value={projectIds} onChange={(event) => setProjectIds(event.target.value)} />
++        </label>
++        <p className="tapd-mcp-hint">可以随时追加项目，重复 ID 会合并。</p>
++        <label className="field">授权方式<select aria-label="授权方式" value={auth} onChange={(event) => { setAuth(event.target.value); setToken(''); }}>
++          <option value="oauth">浏览器授权（OAuth）</option>
++          <option value="token">服务访问令牌</option>
++        </select></label>
++        {auth === 'token' && !canReuseAuth && <label className="field">服务访问令牌<input type="password" autoComplete="off" value={token}
++          placeholder="原型请使用演示令牌" onChange={(event) => setToken(event.target.value)} /></label>}
++        <div className="settings-inline">
++          <button onClick={() => { setEndpoint('https://tapd-mcp.example.com/mcp'); setProjectIds('67103358\n33349361'); setAuth('oauth'); setToken(''); }}>填入演示配置</button>
++          <button className="primary" disabled={!endpoint.trim() || !workspaceIds.length || (auth === 'token' && !canReuseAuth && !token.trim()) || configuring}
++            onClick={configureMcp}>{configuring ? '正在配置…' : '一键配置'}</button>
+         </div>
++        <p className="tapd-mcp-hint">原型模拟授权和校验，只使用演示数据。</p>
+       </div>
+-      <SecretField
+-        label="TAPD 个人令牌"
+-        saved={pre.tokenSource === 'keychain'}
+-        placeholder="在 TAPD「个人设置 → 个人令牌」里生成"
+-        hint="保存后优先使用这里的令牌；清除后回到登录 shell 的 TAPD_TOKEN（如果有）。"
+-        onSave={async (token) => {
+-          const result = await request('tapd.setToken', { token });
+-          setInfo((current) => ({ ...current, prerequisites: result.prerequisites }));
+-          setTest(null);
+-          notify('TAPD 令牌已保存到钥匙串');
+-        }}
+-        onClear={async () => {
+-          const result = await request('tapd.clearToken');
+-          setInfo((current) => ({ ...current, prerequisites: result.prerequisites }));
+-          setTest(null);
+-        }}
+-      />
+-      <label className="field">
+-        API 地址（留空使用 https://api.tapd.cn）
+-        <input
+-          value={form.endpoint ?? ''}
+-          placeholder="https://api.tapd.cn"
+-          onChange={(event) => setForm({ ...form, endpoint: event.target.value })}
+-        />
+-      </label>
+-      <label className="field">
+-        tapd-cli 路径（留空自动查找）
+-        <input
+-          value={form.cliPath ?? ''}
+-          placeholder="~/.local/bin/tapd-cli"
+-          onChange={(event) => setForm({ ...form, cliPath: event.target.value })}
+-        />
+-      </label>
+-      <div className="settings-inline">
+-        <button disabled={testing || dirty} title={dirty ? '先保存修改再测试' : ''} onClick={runTest}>
+-          {testing ? '正在测试…' : '测试连接'}
++      <div className="settings-inline" data-review="TAPD MCP · 连接状态">
++        <span role="status" className={info.prerequisites.connected ? 'green' : ''}>
++          {info.prerequisites.connected ? '已连接 TAPD MCP' : '尚未配置 TAPD MCP'}
++        </span>
++        <button disabled={testing || !info.prerequisites.connected} onClick={runTest}>
++          {testing ? '正在检测…' : '重新检测'}
+         </button>
+-        {test &&
+-          (test.connected ? (
+-            <span className="green">
+-              <CheckCircle size={14} /> 已连接：{test.user.name}（{test.user.nick}）
+-            </span>
+-          ) : (
+-            <span className="red">
+-              <XCircle size={14} /> {test.message}
+-              {test.detail ? `：${test.detail}` : ''}
+-            </span>
+-          ))}
++        {test && <span className={test.connected ? 'green' : 'red'}>{test.connected ? '授权、工具与项目访问验证通过' : test.message}</span>}
+       </div>
+       <label className="check-option">
+         <input type="checkbox" checked={form.enabled === true} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
+@@ -428,8 +369,8 @@ function Tapd({ projects, notify, onDirty }) {
+         勾选要显示待办的 TAPD 项目，并为它登记可能对应的本地项目（可多个）。这个映射只用于导入时的候选，
+         与企业微信机器人无关。
+       </p>
+-      <button disabled={loadingWorkspaces} onClick={loadWorkspaces}>
+-        {loadingWorkspaces ? '正在读取…' : form.workspaces?.length ? '重新读取我参与的项目' : '读取我参与的项目'}
++      <button disabled={loadingWorkspaces || !info.prerequisites.connected} onClick={loadWorkspaces}>
++        {loadingWorkspaces ? '正在读取…' : '刷新已配置项目'}
+       </button>
+       {(form.workspaces ?? []).map((item) => (
+         <div className="workspace-row" key={item.id}>
+@@ -523,16 +464,82 @@ const BOT_STATE = {
+   disabled: ['未连接', 'neutral'],
+ };
+ 
+-function Wecom({ notify, onDirty, onOpenConversations }) {
++function WecomScopePicker({ label, allLabel, options, selected, onChange }) {
++  const all = selected === null;
++  const checked = all ? options.map(([value]) => value) : selected;
++  return (
++    <fieldset className="wecom-scope-picker">
++      <legend>{label}</legend>
++      <label className="wecom-scope-all">
++        <input type="checkbox" checked={all} onChange={(event) => onChange(event.target.checked ? null : [])} />
++        {allLabel}
++      </label>
++      <div className="wecom-scope-options">
++        {options.map(([value, name]) => (
++          <label className="wecom-scope-option" key={value}>
++            <input type="checkbox" checked={checked.includes(value)}
++              onChange={(event) => onChange(event.target.checked ? [...checked, value] : checked.filter((id) => id !== value))} />
++            {name}
++          </label>
++        ))}
++      </div>
++    </fieldset>
++  );
++}
++
++function WecomProfiles(props) {
++  const [bots, setBots] = useState(null);
++  const [selected, setSelected] = useState('');
++  const [dirty, setDirty] = useState(false);
++  const [busy, setBusy] = useState(false);
++
++  useEffect(() => {
++    request('prototype.wecom.bots').then((rows) => {
++      setBots(rows);
++      setSelected(rows[0]?.id ?? '');
++    }).catch((error) => props.notify(errorText(error), true));
++  }, []);
++
++  async function addBot() {
++    setBusy(true);
++    try {
++      const bot = await request('prototype.wecom.addBot');
++      setBots((rows) => [...rows, bot]);
++      setSelected(bot.id);
++    } catch (error) {
++      props.notify(errorText(error), true);
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  if (!bots) return <div className="pane-note">正在读取机器人…</div>;
++  return (
++    <>
++      <div className="wecom-bot-picker" data-review="企业微信 · 多机器人">
++        <label className="field">配置机器人<select aria-label="配置机器人" disabled={dirty || busy} value={selected}
++          onChange={(event) => setSelected(event.target.value)}>
++          {bots.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
++        </select></label>
++        <button disabled={dirty || busy} onClick={addBot}>＋ 添加机器人</button>
++      </div>
++      {dirty && <small className="setting-hint">保存或放弃当前修改后，可以切换机器人。</small>}
++      {!busy && selected && <Wecom key={selected} {...props} profileId={selected}
++        onDirty={(value) => { setDirty(value); props.onDirty(value); }}
++        onSaved={(form) => setBots((rows) => rows.map((item) => item.id === selected ? { ...item, name: form.name } : item))} />}
++    </>
++  );
++}
++
++function Wecom({ notify, onDirty, onOpenConversations, providers, cliPreferences, profileId, onSaved, projects }) {
+   const [overview, setOverview] = useState(null);
+   const [bot, setBot] = useState(null);
+   const [form, setForm] = useState(null);
+-  const [command, setCommand] = useState(null);
+   const [saving, setSaving] = useState(false);
+   const [error, setError] = useState(null);
+ 
+   function load() {
+-    request('source.overview')
++    request('source.overview', { profileId })
+       .then((result) => {
+         setOverview(result);
+         setForm((current) => current ?? result.settings);
+@@ -541,7 +548,6 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
+   }
+   useEffect(() => {
+     load();
+-    request('source.mcpCommand').then(setCommand).catch(() => {});
+     const poll = () => request('source.botStatus').then(setBot).catch(() => {});
+     poll();
+     const timer = window.setInterval(poll, 2500);
+@@ -557,9 +563,10 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
+     setSaving(true);
+     setError(null);
+     try {
+-      const saved = await request('source.settings', { patch: form });
++      const saved = await request('source.settings', { profileId, patch: form });
+       setOverview((current) => ({ ...current, settings: saved })); // 回读保存后的值
+       setForm(saved);
++      onSaved(saved);
+       notify('机器人配置已保存');
+     } catch (cause) {
+       setError(errorText(cause));
+@@ -569,7 +576,6 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
+   }
+ 
+   if (!form) return error ? <div className="pane-note error">{error}</div> : <div className="pane-note">正在读取…</div>;
+-  const commandLine = command ? [command.command, ...command.args].map((part) => (part.includes(' ') ? `"${part}"` : part)).join(' ') : '';
+   return (
+     <>
+       <div className="robot-heading">
+@@ -578,7 +584,7 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
+         </div>
+         <div>
+           <h3>企业微信机器人</h3>
+-          <p>直接在企业微信与 Claude 连续对话，处理项目任务。</p>
++          <p>在企业微信与选定的 CLI 连续对话，也可以创建和跟进 Work。</p>
+         </div>
+       </div>
+       <div className="robot-connection">
+@@ -600,7 +606,7 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
+         <CaretRight size={12} />
+         <span>{form.name || '机器人'}</span>
+         <CaretRight size={12} />
+-        <b>{form.mode === 'work' ? '项目 / Work' : 'Claude 连续对话'}</b>
++        <b>{form.mode === 'work' ? '项目 / Work' : 'CLI 连续对话'}</b>
+       </div>
+       <label className="field">
+         Bot ID
+@@ -615,7 +621,7 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
+         label="Secret"
+         saved={Boolean(bot?.secretSaved)}
+         placeholder="在同一页点「获取 Secret」"
+-        hint="Secret 只保存在钥匙串。一个机器人同一时间只能保持一条长连接：在别处（例如另一台电脑或 WorkBuddy）用同一组凭据连接时，这里会被顶替断开。"
++        hint="Secret 只保存在钥匙串。一个机器人同一时间只能保持一条长连接：在另一台电脑用同一组凭据连接时，这里会被顶替断开。"
+         onSave={async (secret) => {
+           await request('source.setSecret', { secret });
+           notify('Secret 已保存到钥匙串');
+@@ -638,20 +644,48 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
+         启用企业微信对话入口
+       </label>
+       <small className="setting-hint">关闭后停止接收企微消息。</small>
++      <div className="wecom-routing" data-review="企业微信 · 人员场景与项目范围">
++        <h4>生效范围</h4>
++        <WecomScopePicker label="允许人员" allLabel="所有已授权成员"
++          options={[[ 'alice', '小林（演示）' ], [ 'bob', '小周（演示）' ]]}
++          selected={form.actors === undefined ? (form.actor === 'all' ? null : form.actor ? [form.actor] : []) : form.actors}
++          onChange={(actors) => setForm({ ...form, actors })} />
++        <WecomScopePicker label="会话场景" allLabel="所有已授权场景"
++          options={[[ 'direct', '与机器人的私聊' ], [ 'group', '指定项目群（演示）' ]]}
++          selected={form.scopes === undefined ? (form.scope === 'all' ? null : form.scope ? [form.scope] : []) : form.scopes}
++          onChange={(scopes) => setForm({ ...form, scopes })} />
++        <WecomScopePicker label="项目范围" allLabel="所有已授权的登记项目"
++          options={projects.filter((item) => !item.isHome).map((item) => [item.path, item.title])}
++          selected={form.projectPaths === undefined ? (form.projectPath ? [form.projectPath] : null) : form.projectPaths}
++          onChange={(projectPaths) => setForm({ ...form, projectPaths })} />
++        <p>每项都可多选。人员、场景和项目需同时匹配，任一项为空则不接收。</p>
++      </div>
+       <label className="field">
+         对话模式
+         <select value={form.mode ?? 'claude'} onChange={(event) => setForm({ ...form, mode: event.target.value })}>
+-          <option value="claude">直接连接 Claude</option>
++          <option value="claude">直接对话</option>
+           <option value="work">创建和跟进 Work</option>
+         </select>
+       </label>
+       {form.mode !== 'work' && (
+-        <p>企微消息直接进入 Claude，连续对话保留上下文。可操作已登记项目，工具权限和问题在当前企微对话中确认。</p>
++        <>
++          <label className="field" data-review="企业微信 · 对话默认 CLI">对话默认 CLI
++            <select aria-label="对话默认 CLI" value={form.conversationProvider ?? 'claude'}
++              onChange={(event) => setForm({ ...form, conversationProvider: event.target.value })}>
++              {providers.map((item) => {
++                const reason = item.id === 'dsh' ? '对话接入待验证' : !item.available || cliPreferences?.[item.id]?.enabled === false ? '不可用' : null;
++                return <option key={item.id} value={item.id} disabled={Boolean(reason)}>{item.label}{reason ? `（${reason}）` : ''}</option>;
++              })}
++            </select>
++          </label>
++          <p>默认 CLI 只用于新会话。已绑定的会话继续使用原 CLI 和会话 ID，同群成员和不同私聊分别隔离。</p>
++          <WecomChatPreview profileId={profileId} providers={providers} projects={projects} />
++        </>
+       )}
+       {form.mode === 'work' && <>
+       <div className="static-rule">
+         <Info size={14} />
+-        接收方式（群内 @ / 私聊）由 WorkBuddy 一侧决定，应用不配置也不臆测。
++        机器人按选定的私聊／群聊场景接收消息，群内由被 @ 的机器人响应。
+       </div>
+       <label className="check-option">
+         <input type="checkbox" checked={form.autoStart === true} onChange={(event) => setForm({ ...form, autoStart: event.target.checked })} />
+@@ -693,21 +727,6 @@ function Wecom({ notify, onDirty, onOpenConversations }) {
+ 
+       </>}
+ 
+-      <h4>通过 WorkBuddy 接入（可选）</h4>
+-      <p>
+-        不用上面的机器人长连接、改由 WorkBuddy 收发时，把下面的命令作为 MCP 工具服务添加到 WorkBuddy（stdio）。
+-        {overview.lastSeen ? `最近一次调用：${relativeTime(overview.lastSeen)}。` : '目前还没有收到过调用。'}
+-      </p>
+-      <div className="code-box copy-box">
+-        <code>{commandLine || '正在读取…'}</code>
+-        <button
+-          aria-label="复制命令"
+-          title="复制命令"
+-          onClick={() => navigator.clipboard?.writeText(commandLine).then(() => notify('已复制'))}
+-        >
+-          <Copy size={13} />
+-        </button>
+-      </div>
+       {error && (
+         <div className="pane-note error" role="alert">
+           <Warning size={14} />
+@@ -814,7 +833,6 @@ function Agent({ notify }) {
+       <h4>尚未接入</h4>
+       {[
+         '把选定的技能、知识与仓规注入到 Run',
+-        '检测 / 应用 WorkBuddy 同步（会修改用户级配置，需要单独验证）',
+         '守卫覆盖检查与权限规则回放',
+         '知识改进建议',
+       ].map((text) => (
+@@ -873,11 +891,11 @@ export default function SettingsModal({
+           ))}
+         </nav>
+         <div className="settings-detail">
++          {page === 'cli' && <CliSettings providers={providers} settings={settings} onChange={onChange} notify={notify} />}
+           {page === 'updates' && <VersionUpdates />}
+           {page === 'appearance' && (
+             <Appearance
+               settings={settings}
+-              providers={providers}
+               capacity={capacity}
+               onChange={onChange}
+               notify={notify}
+@@ -888,7 +906,8 @@ export default function SettingsModal({
+             <PetSettings settings={settings.pet} onChange={(patch) => onChange({ pet: { ...settings.pet, ...patch } })} />
+           )}
+           {page === 'tapd' && <Tapd projects={projects} notify={notify} onDirty={setDirty} />}
+-          {page === 'wecom' && <Wecom notify={notify} onDirty={setDirty} onOpenConversations={onOpenConversations} />}
++          {page === 'wecom' && <WecomProfiles notify={notify} onDirty={setDirty} onOpenConversations={onOpenConversations}
++            providers={providers} cliPreferences={settings.cliPreferences} projects={projects} />}
+           {page === 'mcp' && (
+             <>
+               <h3>MCP 服务</h3>
+diff --git a/Web/src/shell/work/WecomChatPreview.jsx b/Web/src/shell/work/WecomChatPreview.jsx
+new file mode 100644
+index 0000000..79c5d90
+--- /dev/null
++++ b/Web/src/shell/work/WecomChatPreview.jsx
+@@ -0,0 +1,102 @@
++import React, { useEffect, useState } from 'react';
++import { errorText, request } from '../bridge.js';
++
++const cards = {
++  work: { title: '创建任务', actions: [['confirm', '确认创建'], ['clarify', '补充信息'], ['cancel', '取消']] },
++  decision: { title: '待拍板', actions: [['a', '采用方案 A'], ['b', '采用方案 B'], ['wait', '稍后决定']] },
++};
++
++export default function WecomChatPreview({ profileId, providers, projects }) {
++  const localProjects = projects.filter((item) => !item.isHome);
++  const [actor, setActor] = useState('alice');
++  const [scope, setScope] = useState('group');
++  const [projectPath, setProjectPath] = useState(localProjects[0]?.path ?? '');
++  const [records, setRecords] = useState({});
++  const [text, setText] = useState('');
++  const [pending, setPending] = useState(false);
++  const [error, setError] = useState('');
++  const key = JSON.stringify([scope, actor, projectPath]);
++  const record = records[key];
++  const engine = providers.find((item) => item.id === record?.provider)?.label;
++  const card = record?.card;
++  const template = cards[card?.type];
++  const context = { profileId, actor, scope, projectPath };
++
++  useEffect(() => {
++    let current = true;
++    request('prototype.wecom.conversations', { profileId }).then((result) => { if (current) setRecords(result); })
++      .catch((cause) => { if (current) setError(errorText(cause)); });
++    return () => { current = false; };
++  }, [profileId]);
++
++  async function apply(method, payload = {}) {
++    if (pending) return false;
++    setPending(true);
++    setError('');
++    try {
++      const result = await request(method, { ...context, ...payload });
++      setRecords((current) => ({ ...current, [key]: result }));
++      return true;
++    } catch (cause) {
++      setError(errorText(cause));
++      return false;
++    } finally {
++      setPending(false);
++    }
++  }
++
++  function change(setter, event) {
++    setter(event.target.value);
++    setText('');
++    setError('');
++  }
++
++  return (
++    <div className="wecom-isolation-preview" data-review="企业微信 · 人员与会话隔离">
++      <h4>隔离续聊演示</h4>
++      <p>切换发言人、私聊／群聊或项目，查看各自的会话和记录。</p>
++      <div className="wecom-preview-fields">
++        <label className="field">发言人<select aria-label="发言人" value={actor} disabled={pending} onChange={(event) => change(setActor, event)}>
++          <option value="alice">小林</option><option value="bob">小周</option>
++        </select></label>
++        <label className="field">会话场景<select aria-label="会话场景" value={scope} disabled={pending} onChange={(event) => change(setScope, event)}>
++          <option value="group">同一个项目群</option><option value="direct">与机器人的私聊</option>
++        </select></label>
++      </div>
++      <label className="field">演示项目<select aria-label="演示项目" value={projectPath} disabled={pending} onChange={(event) => change(setProjectPath, event)}>
++        {localProjects.map((item) => <option key={item.path} value={item.path}>{item.title}</option>)}
++      </select></label>
++      {record ? (
++        <div className="wecom-conversation-preview">
++          <strong>{engine ?? record.provider} · {record.turns.length} 轮</strong>
++          <code title="引擎原始会话 ID">{record.sessionId}</code>
++          <ol aria-label="当前身份的会话记录">{record.turns.map(({ message, reply }, index) => (
++            <li key={index}><span>{message}</span><small>{reply}</small></li>
++          ))}</ol>
++        </div>
++      ) : <p className="muted">当前身份在此场景和项目还没有会话。</p>}
++      <form className="wecom-preview-message" onSubmit={async (event) => {
++        event.preventDefault();
++        if (text.trim() && await apply('prototype.wecom.message', { text: text.trim() })) setText('');
++      }}>
++        <input aria-label="模拟企微消息" placeholder="输入企微消息" value={text} onChange={(event) => setText(event.target.value)} />
++        <button type="submit" disabled={pending || !text.trim() || !projectPath}>模拟发送</button>
++      </form>
++      {record && <div className="wecom-preview-card" data-review="企业微信 · 决策卡片">
++        <div className="settings-inline">
++          <button disabled={pending || card?.status === 'pending'} onClick={() => apply('prototype.wecom.createCard', { type: 'work' })}>演示创建任务卡</button>
++          <button disabled={pending || card?.status === 'pending'} onClick={() => apply('prototype.wecom.createCard', { type: 'decision' })}>演示拍板卡</button>
++        </div>
++        {template && <div className="wecom-card-body">
++          <strong>{template.title}</strong>
++          <p>{card.type === 'work' ? '将本轮对话整理成工作任务，创建后等待执行。' : '选择是否先交付核心功能，其余能力留待下一版。'}</p>
++          {card.status === 'handled' ? <p role="status">已选择「{template.actions.find(([value]) => value === card.choice)?.[1]}」（演示）</p> :
++            <div className="settings-inline">{template.actions.map(([value, label]) => (
++              <button key={value} disabled={pending} onClick={() => apply('prototype.wecom.chooseCard', { cardId: card.id, choice: value })}>{label}</button>
++            ))}</div>}
++        </div>}
++      </div>}
++      {error && <p className="pane-note error" role="alert">{error}</p>}
++    </div>
++  );
++}
+diff --git a/Web/src/shell/work/WorkChat.jsx b/Web/src/shell/work/WorkChat.jsx
+index b5e7069..86b6f85 100644
+--- a/Web/src/shell/work/WorkChat.jsx
++++ b/Web/src/shell/work/WorkChat.jsx
+@@ -733,7 +733,7 @@ export default function WorkChat({
+         <div className="conversation-inner">
+           {(tapd || work.origin === 'wecom') && (
+             <button className="source-chip" onClick={onOpenSource}>
+-              {tapd ? `TAPD ${tapd.entityType} #${tapd.entityId}` : '企业微信 · WorkBuddy 原始对话'}
++              {tapd ? `TAPD ${tapd.entityType} #${tapd.entityId}` : '企业微信 · 原始对话'}
+               <span>{tapd ? tapd.title : '查看来源消息与回执'}</span>
+               <ArrowRight size={12} />
+             </button>
+diff --git a/Web/src/shell/work/WorkModals.jsx b/Web/src/shell/work/WorkModals.jsx
+index 7c6b166..334586d 100644
+--- a/Web/src/shell/work/WorkModals.jsx
++++ b/Web/src/shell/work/WorkModals.jsx
+@@ -394,7 +394,7 @@ export function DeliveryModal({ work, target, notify, onClose }) {
+             <span className="pill neutral">{isTapd ? '评论' : '回复'}</span>
+           </div>
+           <label className="field">
+-            {isTapd ? '回填内容（将作为一条评论添加）' : '交给 WorkBuddy 在原会话发送的内容'}
++            {isTapd ? '回填内容（将作为一条评论添加）' : '由企业微信机器人发回原会话的内容'}
+             <textarea rows={11} value={body} onChange={(event) => edit(event.target.value)} />
+             <small>
+               草稿根据实际的审阅与验证记录生成，可以修改；关闭后草稿保留。
+@@ -409,7 +409,7 @@ export function DeliveryModal({ work, target, notify, onClose }) {
+             <Info size={13} />
+             {isTapd
+               ? `只添加评论。业务状态保持「${info.businessStatus ?? '当前状态'}」不变，不填写工时、排期或上线字段。`
+-              : '由 WorkBuddy 领取后在原会话发送；收到发送回执之前不会显示为已发送。'}
++              : '机器人在原会话发送。收到发送回执后显示为已发送。'}
+           </div>
+           {blockers.map((text) => (
+             <div className="pane-note warn" role="status" key={text}>
+@@ -487,7 +487,7 @@ export function SourceModal({ work, onClose, onOpenWork }) {
+       {!overview && !error && <div className="pane-note">正在读取…</div>}
+       {overview && conversations.length === 0 && (
+         <p className="context-empty">
+-          {work ? '没有找到这个 Work 的来源记录。' : '还没有收到任何来源消息。WorkBuddy 接入并调用宿主接口后，消息会出现在这里。'}
++          {work ? '没有找到这个 Work 的来源记录。' : '还没有收到任何来源消息。机器人收到企微消息后，来源记录会出现在这里。'}
+         </p>
+       )}
+       {conversations.map((conversation) => (

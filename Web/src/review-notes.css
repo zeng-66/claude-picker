@@ -1,0 +1,56 @@
+.h5-review-notes {
+  color-scheme: dark;
+}
+
+.h5-review-trigger {
+  position: fixed;
+  z-index: 60;
+  inset: auto 12px 12px auto;
+  min-height: 30px;
+  padding-inline: 12px;
+  background: #4a3d36;
+  color: #f5e9e0;
+  border: 1px solid #8d6856;
+}
+
+.h5-review-notes dialog {
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  margin: auto 16px 16px auto;
+  padding: 16px;
+  color: #e9dfd7;
+  background: #262424;
+  border: 1px solid #5f5149;
+  border-radius: 10px;
+}
+
+.h5-review-notes dialog::backdrop {
+  background: #14121266;
+}
+
+.h5-review-notes :is(header, .h5-review-actions) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.h5-review-notes h2 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.h5-review-notes label {
+  display: grid;
+  gap: 6px;
+  margin-block: 12px;
+}
+
+.h5-review-notes form button {
+  border-color: #5f5149;
+}
+
+.h5-review-notes li p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
