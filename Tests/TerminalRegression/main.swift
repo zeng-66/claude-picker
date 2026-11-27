@@ -228,5 +228,80 @@ MainActor.assumeIsolated {
     check(agy.view.nativeForegroundColor != claude.view.nativeForegroundColor,
           "antigravity terminal softens default foreground contrast")
 }
+do {
+    // Codex 新会话：首行 session_meta 很长（带 AGENTS.md），按 ID 查找与新会话识别都要认得出来。
+    let codexHome = directory.appendingPathComponent("codex-home")
+    setenv("CODEX_HOME", codexHome.path, 1)
+    defer { unsetenv("CODEX_HOME") }
+    let now = Date()
+    let fields = Calendar(identifier: .iso8601).dateComponents(in: .current, from: now)
+    let day = codexHome.appendingPathComponent(String(format: "sessions/%04d/%02d/%02d", fields.year!, fields.month!, fields.day!))
+    try! FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+    let id = "01a2125e-0b6d-7550-b318-4717b47d0802"
+    let cwd = directory.appendingPathComponent("codex-project").path
+    let meta: [String: Any] = ["type": "session_meta", "payload": [
+        "id": id, "cwd": cwd, "timestamp": now.addingTimeInterval(30).ISO8601Format(.iso8601.year().month().day().time(includingFractionalSeconds: true).timeZone(separator: .omitted)),
+        "base_instructions": String(repeating: "x", count: 100_000),
+    ]]
+    var rollout = try! JSONSerialization.data(withJSONObject: meta)
+    rollout.append(10)
+    try! rollout.write(to: day.appendingPathComponent("rollout-test-\(id).jsonl"))
+    check(CodexSessionScanner.find(id: id)?.cwd == cwd, "a codex session with a 100KB first line is found by id")
+    check(CodexSessionScanner.newConversation(in: cwd, since: now, ignoring: [])?.id == id,
+          "a codex session written after the terminal started binds to the new conversation")
+    check(CodexSessionScanner.newConversation(in: cwd, since: now, ignoring: [id]) == nil,
+          "known codex sessions are not rebound")
+}
+MainActor.assumeIsolated {
+    // SwiftTerm 终端链接解析与第三栏拦截：相对路径、行列定位、工作树 cwd、file://、网页链接放行、越界路径
+    let repoDir = directory.appendingPathComponent("link-repo").resolvingSymlinksInPath()
+    let wtDir = repoDir.appendingPathComponent(".worktrees/wt-1")
+    let srcDir = wtDir.appendingPathComponent("src")
+    try! FileManager.default.createDirectory(at: srcDir, withIntermediateDirectories: true)
+    let fileInWt = srcDir.appendingPathComponent("App.swift")
+    try! "let x = 1\n".write(to: fileInWt, atomically: true, encoding: .utf8)
+    let rootFile = repoDir.appendingPathComponent("README.md")
+    try! "# hello\n".write(to: rootFile, atomically: true, encoding: .utf8)
+
+    let rel = TerminalLinkResolver.resolve(link: "src/App.swift:42:7", isExplicit: false,
+                                           cwd: wtDir.path, projectRoot: repoDir.path)
+    check(rel?.projectPath == wtDir.path && rel?.path == "src/App.swift" && rel?.line == 42 && rel?.column == 7,
+          "relative path with line:col resolves against worktree cwd")
+
+    let fileURLTarget = TerminalLinkResolver.resolve(link: "file://\(fileInWt.path)#L12C3", isExplicit: true,
+                                                     cwd: wtDir.path, projectRoot: repoDir.path)
+    check(fileURLTarget?.path == "src/App.swift" && fileURLTarget?.line == 12 && fileURLTarget?.column == 3,
+          "file:// URL with fragment resolves to local file target")
+
+    let rootTarget = TerminalLinkResolver.resolve(link: rootFile.path + ":1", isExplicit: false,
+                                                  cwd: wtDir.path, projectRoot: repoDir.path)
+    check(rootTarget?.projectPath == repoDir.path && rootTarget?.path == "README.md" && rootTarget?.line == 1,
+          "absolute path inside parent project root resolves cleanly")
+
+    let outside = TerminalLinkResolver.resolve(link: "/etc/hosts", isExplicit: false,
+                                               cwd: wtDir.path, projectRoot: repoDir.path)
+    check(outside?.projectPath == wtDir.path && outside?.path == "/etc/hosts",
+          "out-of-bounds path is forwarded to third pane for FileService boundary rejection")
+
+    check(TerminalLinkResolver.resolve(link: "https://example.com/docs", isExplicit: false, cwd: wtDir.path) == nil,
+          "https links fall through to SwiftTerm / system browser")
+    check(TerminalLinkResolver.resolve(link: "mailto:user@example.com", isExplicit: false, cwd: wtDir.path) == nil,
+          "other URL schemes fall through to SwiftTerm policy")
+    check(TerminalLinkResolver.resolve(link: "file://remote.example.com/tmp/a.txt", isExplicit: true, cwd: wtDir.path) == nil,
+          "remote file:// host is not opened locally")
+
+    // CopyableTerminalView 拦截测试：不触碰系统外部程序
+    let session = TerminalSession(cwd: wtDir.path, resumeId: nil, projectRoot: repoDir.path,
+                                  options: RenderOptions(), fontName: "", fontSize: 12)
+    defer { session.terminate() }
+    var captured: TerminalFileTarget?
+    session.onOpenFile = { captured = $0 }
+    check(session.handleActivatedLink("src/App.swift:9"),
+          "TerminalSession intercepts file links into onOpenFile callback")
+    check(captured?.path == "src/App.swift" && captured?.line == 9,
+          "captured target preserves relative path and line number")
+    check(!session.handleActivatedLink("https://example.com/docs"),
+          "web links are not intercepted as local files")
+}
 if failures > 0 { exit(1) }
 print("Terminal regression checks passed")

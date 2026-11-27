@@ -1,7 +1,7 @@
 // 会话级结构化聊天：第二栏里渲染 CLI 结构化协议的事件流（消息、工具记录、审批、中断）。
 // 数据全部来自原生 SessionChatHub；界面只做展示和转发，不猜测 CLI 输出。
 import React, { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, CaretDown, Check, CircleNotch, ProhibitInset, ShieldWarning, Stop, Warning, WarningCircle } from '@phosphor-icons/react';
+import { ArrowDown, ArrowUp, CaretDown, Check, CircleNotch, Lightning, ProhibitInset, ShieldWarning, Stop, Warning, WarningCircle } from '@phosphor-icons/react';
 import { errorText, on, request } from './bridge.js';
 import { ToolRow, toolSummary } from './work/WorkChat.jsx';
 import { confirmAction } from './work/confirm.jsx';
@@ -125,6 +125,7 @@ function ChipMenu({ label, display, icon, sections, open, onToggle, onPick, disa
               {sections.length > 1 && <div className="menu-heading">{section.title}</div>}
               {section.items.map((item) => (
                 <button type="button" role="menuitemradio" aria-checked={item.id === section.value} key={item.id}
+                  disabled={Boolean(item.disabled)}
                   onClick={() => onPick(section.key, item.id)}>
                   {item.icon}
                   {item.label}
@@ -193,7 +194,16 @@ function ApprovalCard({ item, sessionId, onError }) {
   );
 }
 
-export default function SessionChat({ sessionId, provider, label, supportedModes = ['terminal'], notify }) {
+export default function SessionChat({
+  sessionId,
+  provider,
+  label,
+  supportedModes = ['terminal'],
+  providers = [],
+  cliPreferences = {},
+  onHandoff,
+  notify,
+}) {
   const [events, setEvents] = useState([]);
   const [phase, setPhase] = useState('starting');
   const [info, setInfo] = useState({});
@@ -339,6 +349,19 @@ export default function SessionChat({ sessionId, provider, label, supportedModes
   }
 
   const engine = PROVIDER_LABEL[provider] ?? provider;
+  const handoffItems = ['claude', 'antigravity', 'codex', 'dsh']
+    .filter((id) => id !== provider)
+    .map((id) => {
+      const enabled = cliPreferences?.[id]?.enabled !== false;
+      const available = providers.length === 0 || providers.some((p) => p.id === id && p.available);
+      const ok = enabled && available;
+      return {
+        id: `handoff:${id}`,
+        label: `转到 ${PROVIDER_LABEL[id] ?? id} 接力继续${!available ? '（未安装）' : !enabled ? '（已停用）' : ''}`,
+        icon: <EngineIcon id={id} />,
+        disabled: !ok,
+      };
+    });
   // 与 Claude Code 桌面端一致：⌘⇧M 权限模式、⌘⇧I 模型、⌘⇧E 推理强度（同一个模型菜单里的分组）；Esc 关闭菜单。
   function onKeyDown(event) {
     if (event.key === 'Escape' && menu) {
@@ -465,14 +488,26 @@ export default function SessionChat({ sessionId, provider, label, supportedModes
                 label="打开方式"
                 display="结构化聊天"
                 icon={<EngineIcon id={provider} />}
-                sections={[{ key: 'surface', title: '打开方式', value: 'structured',
-                  items: [{ id: 'structured', label: `${engine} · 结构化聊天`, icon: <EngineIcon id={provider} /> },
-                    ...OPEN_MODES.filter(([id]) => supportedModes.includes(id)).map(([id, text]) => ({ id, label: text }))] }]}
+                sections={[
+                  { key: 'surface', title: '打开方式', value: 'structured',
+                    items: [{ id: 'structured', label: `${engine} · 结构化聊天`, icon: <EngineIcon id={provider} /> },
+                      ...OPEN_MODES.filter(([id]) => supportedModes.includes(id)).map(([id, text]) => ({ id, label: text }))] },
+                  { key: 'handoff', title: '跨引擎接力', value: '', items: handoffItems },
+                ]}
                 open={menu === 'surface'}
                 disabled={sessionId.startsWith('pending-')}
-                title={sessionId.startsWith('pending-') ? '取得原始会话 ID 后可以切换' : '与终端共用同一个原始会话 ID'}
+                title={sessionId.startsWith('pending-') ? '取得原始会话 ID 后可以切换' : '与终端共用同一个原始会话 ID，或接力到其他 CLI'}
                 onToggle={() => setMenu(menu === 'surface' ? null : 'surface')}
-                onPick={(_, id) => (id === 'structured' ? setMenu(null) : switchSurface(id))}
+                onPick={(sectionKey, id) => {
+                  if (sectionKey === 'handoff') {
+                    setMenu(null);
+                    onHandoff?.(id.replace(/^handoff:/, ''));
+                  } else if (id === 'structured') {
+                    setMenu(null);
+                  } else {
+                    switchSurface(id);
+                  }
+                }}
               />
               {(runtime.modes ?? []).length > 0 && (
                 <ChipMenu
@@ -501,6 +536,19 @@ export default function SessionChat({ sessionId, provider, label, supportedModes
                   onToggle={() => setMenu(menu === 'model' ? null : 'model')}
                   onPick={pickRuntime}
                 />
+              )}
+              {(provider === 'codex' || runtime.supportsFast) && (
+                <button
+                  type="button"
+                  className={`composer-chip interactive ${runtime.fast ? 'fast-on' : ''}`}
+                  aria-label={`快速模式${runtime.fast ? '开启' : '关闭'}`}
+                  aria-pressed={Boolean(runtime.fast)}
+                  title="快速模式（service_tier=fast，下一回合起生效）"
+                  onClick={() => pickRuntime('fast', runtime.fast ? 'false' : 'true')}
+                >
+                  <Lightning size={12} weight={runtime.fast ? 'fill' : 'regular'} />
+                  快速
+                </button>
               )}
             </div>
             <div>

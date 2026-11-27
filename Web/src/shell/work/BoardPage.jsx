@@ -1,6 +1,6 @@
 // Work 中心：看板 / 列表。列、数量、执行容量都来自领域状态；卡片不能靠拖动改变状态。
 import EngineIcon from '../EngineIcon.jsx';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ChatCircleDots,
   ChatsCircle,
@@ -16,7 +16,7 @@ import {
   WarningCircle,
 } from '@phosphor-icons/react';
 import { errorText, request } from '../bridge.js';
-import { relativeTime, useStored } from '../ui.jsx';
+import { relativeTime, useStored, useMenuFocus } from '../ui.jsx';
 import { StatusPill } from './WorkChat.jsx';
 import { confirmAction } from './confirm.jsx';
 import { needsAttention, newId, shortId, statusOf } from './useWorks.js';
@@ -67,10 +67,11 @@ function sourceChip(work) {
 }
 
 function CardMenu({ work, notify, onExport, onClose }) {
-  const ref = useRef(null);
+  const focus = useMenuFocus(onClose);
+  const { ref } = focus;
   useEffect(() => {
     const dismiss = (event) => {
-      if (!ref.current?.contains(event.target)) onClose();
+      if (!ref.current?.parentElement.contains(event.target)) onClose();
     };
     window.addEventListener('pointerdown', dismiss);
     return () => window.removeEventListener('pointerdown', dismiss);
@@ -90,7 +91,7 @@ function CardMenu({ work, notify, onExport, onClose }) {
   const ended = ENDED.includes(work.status);
   const idle = ended || TROUBLE.includes(work.status);
   return (
-    <div className="dropdown card-menu" role="menu" ref={ref} data-blocking onClick={(event) => event.stopPropagation()}>
+    <div className="dropdown card-menu" role="menu" aria-label="Work 操作" {...focus} data-blocking onClick={(event) => event.stopPropagation()}>
       {work.status === 'queued' && !work.startRequested && (
         <button role="menuitem" onClick={() => run('work.start')}>
           启动
@@ -148,18 +149,9 @@ function CardMenu({ work, notify, onExport, onClose }) {
 function WorkCard({ work, onOpen, notify, onExport, focused = false }) {
   const [menu, setMenu] = useState(false);
   return (
-    <div
+    <article
       data-work-id={work.id}
       className={`task-card ${needsAttention(work) ? 'attention' : ''} ${focused ? 'focused' : ''}`}
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(work)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onOpen(work);
-        }
-      }}
     >
       <div className="task-card-top">
         {sourceChip(work)}
@@ -168,6 +160,7 @@ function WorkCard({ work, onOpen, notify, onExport, focused = false }) {
           className="icon-button"
           aria-label={`${work.displayId} 的操作`}
           title="更多操作"
+          aria-haspopup="menu"
           aria-expanded={menu}
           onClick={(event) => {
             event.stopPropagation();
@@ -178,7 +171,7 @@ function WorkCard({ work, onOpen, notify, onExport, focused = false }) {
         </button>
         {menu && <CardMenu work={work} notify={notify} onExport={onExport} onClose={() => setMenu(false)} />}
       </div>
-      <h3>{work.title}</h3>
+      <h3><button type="button" className="task-card-open" onClick={() => onOpen(work)}>{work.title}</button></h3>
       <p>{work.objective}</p>
       <div className="task-card-env">
         <EngineIcon id={work.executor ?? 'claude'} />
@@ -189,7 +182,7 @@ function WorkCard({ work, onOpen, notify, onExport, focused = false }) {
         <StatusPill work={work} />
         <small>{relativeTime(work.updatedAt)}</small>
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -317,10 +310,10 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
 
       <div className="board-toolbar">
         <div className="segmented" role="group" aria-label="视图">
-          <button className={view === 'board' ? 'chosen' : ''} onClick={() => setView('board')}>
+          <button aria-pressed={view === 'board'} className={view === 'board' ? 'chosen' : ''} onClick={() => setView('board')}>
             看板
           </button>
-          <button className={view === 'list' ? 'chosen' : ''} onClick={() => setView('list')}>
+          <button aria-pressed={view === 'list'} className={view === 'list' ? 'chosen' : ''} onClick={() => setView('list')}>
             列表
           </button>
         </div>
@@ -418,8 +411,8 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
           )}
         </>
       ) : (
-        <div className="work-table" role="table" aria-label="Work 列表">
-          <div className="work-table-head" role="row">
+        <div className="work-table" role="group" aria-label="Work 列表">
+          <div className="work-table-head" aria-hidden="true">
             <span>编号</span>
             <span>名称</span>
             <span>项目</span>
@@ -437,7 +430,7 @@ export default function BoardPage({ snapshot, notify, onOpenWork, onNewWork, onO
               <p className="context-empty padded">没有符合条件的 Work。</p>
             ))}
           {listed.map((work) => (
-            <button className="work-table-row" role="row" key={work.id} onClick={() => onOpenWork(work)}>
+            <button className="work-table-row" key={work.id} onClick={() => onOpenWork(work)}>
               <span>{work.displayId}</span>
               <span title={work.title}>
                 <b>{work.title}</b>

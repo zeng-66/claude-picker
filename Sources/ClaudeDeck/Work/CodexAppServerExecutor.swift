@@ -87,6 +87,9 @@ final class CodexAppServerProcess: AgentExecutorProcess, @unchecked Sendable {
         var params: [String: JSONValue] = [:]
         if let model = overrides["model"] { params["model"] = .string(model) }
         if let effort = overrides["effort"] { params["effort"] = .string(effort) }
+        if let fast = overrides["fast"] {
+            params["serviceTier"] = .string(fast == "true" ? "fast" : "default")
+        }
         switch overrides["mode"] {
         case "never":
             params["approvalPolicy"] = .string("never")
@@ -114,6 +117,7 @@ final class CodexAppServerProcess: AgentExecutorProcess, @unchecked Sendable {
             "sandbox": .string(policy.sandbox),
         ]
         if let model = config.model, !model.isEmpty, model != "default" { params["model"] = .string(model) }
+        if let fast = config.fast { params["serviceTier"] = .string(fast ? "fast" : "default") }
         if let prompt = config.systemPrompt, !prompt.isEmpty { params["developerInstructions"] = .string(prompt) }
         if config.permissionMode == "auto-review" { params["approvalsReviewer"] = .string("auto_review") }
         if let threadId {
@@ -233,12 +237,23 @@ final class CodexAppServerProcess: AgentExecutorProcess, @unchecked Sendable {
                     "defaultEffort": model["defaultReasoningEffort"] ?? .null,
                 ])
             }
+            if error == nil {
+                let catalogEntries: [CodexModelEntry] = models.compactMap { item in
+                    guard let id = item["id"]?.text else { return nil }
+                    let label = item["label"]?.text ?? id
+                    let efforts = (item["efforts"]?.arrayValue ?? []).compactMap(\.text)
+                    return CodexModelEntry(id: id, label: label, efforts: efforts.isEmpty ? CodexConfig.fallbackEfforts : efforts)
+                }
+                CodexConfig.updateDynamicModels(catalogEntries)
+            }
             let info = threadResult
+            let resolvedFast = (info["serviceTier"]?.text == "fast") || (config.fast == true)
             onEvent(.sessionInfo(.obj([
                 "sessionId": .string(threadId),
                 "executor": .string(AgentProvider.codex.rawValue),
                 "model": .str(info["model"]?.text ?? config.model),
                 "effort": info["reasoningEffort"] ?? .null,
+                "fast": .bool(resolvedFast),
                 "permissionMode": .str(Self.preset(approval: info["approvalPolicy"]?.text, sandbox: info["sandbox"]?["type"]?.text,
                                                    reviewer: info["approvalsReviewer"]?.text)),
                 "cwd": .string(info["cwd"]?.text ?? config.cwd),
@@ -461,7 +476,7 @@ final class CodexAppServerProcess: AgentExecutorProcess, @unchecked Sendable {
 
     @discardableResult
     func updateRuntime(key: String, value: String) -> Bool {
-        guard ["mode", "model", "effort"].contains(key) else { return false }
+        guard ["mode", "model", "effort", "fast"].contains(key) else { return false }
         queue.sync { overrides[key] = value }
         return true
     }

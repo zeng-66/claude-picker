@@ -117,7 +117,10 @@ enum WorkspaceService {
             suffix += 1
             branch = "\(stem)-\(suffix)"
         }
-        let container = URL(fileURLWithPath: project.path).appendingPathComponent(WorktreeLayout.directoryName, isDirectory: true)
+        let container = URL(fileURLWithPath: canonical(project.path)).appendingPathComponent(WorktreeLayout.directoryName, isDirectory: true)
+        guard container.resolvingSymlinksInPath().path == container.path else {
+            throw WorkError.unavailable("工作树目录必须位于项目内", detail: container.path)
+        }
         var target = container.appendingPathComponent(slug(branch), isDirectory: true)
         while FileManager.default.fileExists(atPath: target.path) {
             suffix += 1
@@ -129,6 +132,9 @@ enum WorkspaceService {
             throw WorkError.unavailable("无法创建 \(container.path)", detail: error.localizedDescription)
         }
         excludeWorktrees(in: project.path)
+        guard git(["check-ignore", "--quiet", "--", target.path], in: project.path, timeout: 15).ok else {
+            throw WorkError.unavailable("工作树目录未被 Git 忽略", detail: "请检查本机 info/exclude 与仓库忽略规则")
+        }
 
         let added = git(["worktree", "add", target.path, "-b", branch, baseCommit], in: project.path, timeout: 180)
         guard added.ok else {

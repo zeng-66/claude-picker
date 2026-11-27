@@ -100,6 +100,8 @@ final class Store: ObservableObject {
     @Published var settings: AppSettings = SettingsStore.load()
     @Published var options = ClaudeConfig.loadOptions()
     @Published var agyOptions = AgyConfig.loadOptions()
+    @Published var dshOptions = DeepSeekConfig.loadOptions()
+    @Published var codexOptions = CodexConfig.loadOptions()
     @Published var activeMode: PermissionMode = ClaudeConfig.loadOptions().mode
     @Published var idleProvider: AgentProvider = SettingsStore.load().defaultProvider
     @Published var usage = UsageCache.load() ?? UsageSnapshot(session: nil, weekly: nil)
@@ -108,6 +110,12 @@ final class Store: ObservableObject {
     private var codexUsageLoading = false
     private var codexUsage: CodexUsage.Snapshot?
     private var codexUsageError: String?
+    private var deepseekUsageLoading = false
+    private var deepseekBalance: DeepSeekUsage.Snapshot? = DeepSeekUsage.loadCache()
+    private var deepseekBalanceError: String?
+    private var agyUsageLoading = false
+    private var agyUsage: AntigravityUsage.Snapshot? = AntigravityUsage.loadCache()
+    private var agyUsageError: String?
 
     private var hiddenProjects: Set<String>
     private var hiddenSessions: Set<String>
@@ -116,6 +124,8 @@ final class Store: ObservableObject {
     private var sessionProviders: [String: String]
     private var sessionBranches: [String: String]
     private var handoffFrom: [String: String]
+    private var handoffChains: [String: [HandoffSegment]]
+    private var pendingStartedAt: [String: Date] = [:]
     /// 会话打开方式记录（会话 id → InteractionMode.rawValue）
     private var sessionModes: [String: String]
     /// 第二栏当前显示的结构化聊天会话（与终端、Swttch 互斥显示）
@@ -140,6 +150,7 @@ final class Store: ObservableObject {
         self.sessionProviders = o.sessionProviders
         self.sessionBranches = o.sessionBranches
         self.handoffFrom = o.handoffFrom
+        self.handoffChains = Self.reconcileChains(o.handoffChains, projects: projects)
         self.sessionModes = o.sessionModes
         AgyModelCatalog.refreshInBackground()
         // 任何状态变化都把快照推给网页；同一轮事件循环里的多次改动合并成一次。
@@ -227,6 +238,13 @@ final class Store: ObservableObject {
                 "showAll": project.showAll,
                 "sessions": project.sessions.map { session -> [String: Any] in
                     let mark = key(provider: session.provider, cwd: session.cwd, sid: session.id)
+                    let chain = handoffChains[session.id].flatMap { $0.count > 1 ? $0 : nil }
+                    let isRunning = runningKeys.contains(mark) || (chain?.contains { seg in
+                        runningKeys.contains(key(provider: AgentProvider.parse(seg.provider), cwd: session.cwd, sid: seg.id))
+                    } ?? false)
+                    let isUnread = unreadKeys.contains(mark) || (chain?.contains { seg in
+                        unreadKeys.contains(key(provider: AgentProvider.parse(seg.provider), cwd: session.cwd, sid: seg.id))
+                    } ?? false)
                     return [
                         "id": session.id,
                         "originalSessionId": session.id.hasPrefix("pending-") ? NSNull() : session.id as Any,
@@ -236,10 +254,11 @@ final class Store: ObservableObject {
                         "named": customTitles[session.id] != nil,
                         "cwd": session.cwd,
                         "time": relativeText(session.date),
-                        "running": runningKeys.contains(mark),
-                        "unread": unreadKeys.contains(mark),
+                        "running": isRunning,
+                        "unread": isUnread,
                         "provider": session.provider.rawValue,
                         "handoffFrom": handoffFrom[session.id] ?? NSNull(),
+                        "handoffChain": chain.map { serializeChain($0, cwd: session.cwd, activeId: activeSessionId) } ?? NSNull(),
                         "openMode": openMode(for: session.id, provider: session.provider).rawValue,
                     ]
                 },
@@ -249,19 +268,27 @@ final class Store: ObservableObject {
         var activeInfo: Any = NSNull()
         if let target = structuredTarget {
             let owner = projectIndex(owning: target.cwd).map { projects[$0].path } ?? target.cwd
+            let headId = threadHeadId(for: target.sid) ?? target.sid
+            let chain = chainSegments(for: target.sid)
             activeInfo = [
                 "sessionId": target.sid,
+                "threadId": headId,
                 "cwd": target.cwd,
                 "projectPath": owner,
                 "label": activeLabel,
                 "busy": runningKeys.contains(activeKey),
                 "surface": InteractionMode.structured.rawValue,
                 "provider": target.provider.rawValue,
+                "handoffChain": chain.map { serializeChain($0, cwd: target.cwd, activeId: target.sid) } ?? NSNull(),
             ] as [String: Any]
         } else if chatActive, let target = chatTarget {
             let owner = projectIndex(owning: target.cwd).map { projects[$0].path } ?? target.cwd
+            let sid = target.sid ?? ""
+            let headId = sid.isEmpty ? "" : (threadHeadId(for: sid) ?? sid)
+            let chain = sid.isEmpty ? nil : chainSegments(for: sid)
             activeInfo = [
-                "sessionId": target.sid ?? "",
+                "sessionId": sid,
+                "threadId": headId,
                 "cwd": target.cwd,
                 "projectPath": owner,
                 "label": activeLabel,
@@ -269,17 +296,22 @@ final class Store: ObservableObject {
                 "chat": true,
                 "surface": InteractionMode.chat.rawValue,
                 "provider": AgentProvider.claude.rawValue,
+                "handoffChain": chain.map { serializeChain($0, cwd: target.cwd, activeId: sid) } ?? NSNull(),
             ] as [String: Any]
         } else if let terminal = active {
             let owner = projectIndex(owning: terminal.cwd).map { projects[$0].path } ?? terminal.cwd
+            let headId = threadHeadId(for: activeSessionId) ?? activeSessionId
+            let chain = chainSegments(for: activeSessionId)
             activeInfo = [
                 "sessionId": activeSessionId,
+                "threadId": headId,
                 "cwd": terminal.cwd,
                 "projectPath": owner,
                 "label": activeLabel,
                 "busy": runningKeys.contains(activeKey),
                 "surface": InteractionMode.terminal.rawValue,
                 "provider": terminal.provider.rawValue,
+                "handoffChain": chain.map { serializeChain($0, cwd: terminal.cwd, activeId: activeSessionId) } ?? NSNull(),
             ] as [String: Any]
         }
 
@@ -292,7 +324,35 @@ final class Store: ObservableObject {
         let claudeModels = choices(ModelChoice.allCases, id: \.rawValue, label: \.label)
         let agyModes = choices(AgyMode.allCases, id: \.rawValue, label: \.label)
         let agyModels = AgyModelCatalog.entries().map { ["id": $0.id, "label": $0.label] }
+        let dshModes = choices(DeepSeekMode.allCases, id: \.rawValue, label: \.label)
+        let dshModels = DeepSeekConfig.entries(ensuring: dshOptions.model).map { ["id": $0.id, "label": $0.label] }
+        let codexModes = choices(CodexMode.allCases, id: \.rawValue, label: \.label)
+        let codexModels = CodexConfig.entries(ensuring: codexOptions.model).map { ["id": $0.id, "label": $0.label] }
+        let codexEfforts = CodexConfig.efforts(for: codexOptions.model, ensuring: codexOptions.effort)
+            .map { ["id": $0.id, "label": $0.label] }
         let efforts = choices(EffortChoice.allCases, id: \.rawValue, label: \.label)
+        let catalogs: [String: Any] = [
+            "claude": [
+                "modes": choices(claudeModes, id: \.rawValue, label: \.label),
+                "models": claudeModels,
+                "defaultMode": options.mode.rawValue,
+            ],
+            "antigravity": [
+                "modes": agyModes,
+                "models": agyModels,
+                "defaultMode": agyOptions.mode.rawValue,
+            ],
+            "codex": [
+                "modes": codexModes,
+                "models": codexModels,
+                "defaultMode": codexOptions.mode.rawValue,
+            ],
+            "dsh": [
+                "modes": dshModes,
+                "models": dshModels,
+                "defaultMode": dshOptions.mode.rawValue,
+            ],
+        ]
 
         let rtProvider = currentRuntimeProvider
         let runtimeDict: [String: Any]
@@ -309,18 +369,7 @@ final class Store: ObservableObject {
                 "modes": choices(claudeModes, id: \.rawValue, label: \.label),
                 "models": claudeModels,
                 "efforts": efforts,
-                "catalogs": [
-                    "claude": [
-                        "modes": choices(claudeModes, id: \.rawValue, label: \.label),
-                        "models": claudeModels,
-                        "defaultMode": options.mode.rawValue,
-                    ],
-                    "antigravity": [
-                        "modes": agyModes,
-                        "models": agyModels,
-                        "defaultMode": agyOptions.mode.rawValue,
-                    ],
-                ],
+                "catalogs": catalogs,
             ]
         case .antigravity:
             runtimeDict = [
@@ -334,27 +383,35 @@ final class Store: ObservableObject {
                 "modes": agyModes,
                 "models": agyModels,
                 "efforts": efforts,
-                "catalogs": [
-                    "claude": [
-                        "modes": choices(claudeModes, id: \.rawValue, label: \.label),
-                        "models": claudeModels,
-                        "defaultMode": options.mode.rawValue,
-                    ],
-                    "antigravity": [
-                        "modes": agyModes,
-                        "models": agyModels,
-                        "defaultMode": agyOptions.mode.rawValue,
-                    ],
-                ],
+                "catalogs": catalogs,
             ]
-        case .codex, .dsh:
+        case .dsh:
             runtimeDict = [
-                "provider": rtProvider.rawValue,
+                "provider": AgentProvider.dsh.rawValue,
+                "mode": dshOptions.mode.rawValue,
+                "model": dshOptions.model,
+                "effort": dshOptions.effort.rawValue,
+                "fast": false,
                 "supportsFast": false,
+                "hotSwitchable": true,
+                "modes": dshModes,
+                "models": dshModels,
+                "efforts": efforts,
+                "catalogs": catalogs,
+            ]
+        case .codex:
+            runtimeDict = [
+                "provider": AgentProvider.codex.rawValue,
+                "mode": codexOptions.mode.rawValue,
+                "model": codexOptions.model,
+                "effort": codexOptions.effort,
+                "fast": codexOptions.fast,
+                "supportsFast": true,
                 "hotSwitchable": false,
-                "modes": [],
-                "models": [],
-                "efforts": [],
+                "modes": codexModes,
+                "models": codexModels,
+                "efforts": codexEfforts,
+                "catalogs": catalogs,
             ]
         }
 
@@ -425,7 +482,7 @@ final class Store: ObservableObject {
             "session": window(usage.session, "HH:mm"),
             "weekly": window(usage.weekly, "MM-dd"),
             "note": note,
-            "loading": usageLoading || codexUsageLoading,
+            "loading": usageLoading || codexUsageLoading || deepseekUsageLoading || agyUsageLoading,
             "codex": codexUsage.map { snapshot in
                 snapshot.windows.filter { $0.resetsAt.map { $0 > Date().timeIntervalSince1970 } ?? true }.map { window in
                     [
@@ -437,8 +494,37 @@ final class Store: ObservableObject {
                     ] as [String: Any]
                 }
             } ?? [],
+            "codexPlan": codexUsage?.plan as Any? ?? NSNull(),
             "codexUpdated": codexUsage?.fetchedAt.formatted(date: .omitted, time: .shortened) ?? "",
             "codexError": codexUsageError as Any? ?? NSNull(),
+            "antigravity": agyUsage.map { snapshot in
+                let now = Date()
+                return snapshot.buckets.filter { $0.resetsAt.map { $0 > now } ?? true }.map { bucket in
+                    [
+                        "id": bucket.id,
+                        "label": bucket.label,
+                        "percent": bucket.usedPercent,
+                        "reset": bucket.resetsAt.map {
+                            $0.formatted(date: .abbreviated, time: .shortened)
+                        } ?? "—",
+                    ] as [String: Any]
+                }
+            } ?? [],
+            "antigravityCredits": agyUsage?.remainingCredits as Any? ?? NSNull(),
+            "antigravityUpdated": agyUsage?.fetchedAt.formatted(date: .omitted, time: .shortened) ?? "",
+            "antigravityError": agyUsageError as Any? ?? NSNull(),
+            "deepseek": deepseekBalance.map { b in
+                [
+                    "currency": b.currency,
+                    "symbol": b.currency.uppercased() == "USD" ? "$" : "¥",
+                    "total": b.total,
+                    "granted": b.granted,
+                    "toppedUp": b.toppedUp,
+                    "available": b.isAvailable,
+                    "updated": b.fetchedAt.formatted(date: .omitted, time: .shortened),
+                ] as [String: Any]
+            } ?? NSNull(),
+            "deepseekError": deepseekBalanceError as Any? ?? NSNull(),
             "updated": usage.session == nil && usage.weekly == nil ? "" : usage.fetchedAt.formatted(date: .omitted, time: .shortened),
         ]
     }
@@ -609,6 +695,13 @@ final class Store: ObservableObject {
         let sess = projects[p].sessions.remove(at: s)
         hiddenSessions.insert(sess.id)
         customTitles.removeValue(forKey: sess.id)
+        if let chain = handoffChains.removeValue(forKey: sess.id) {
+            for seg in chain {
+                hiddenSessions.insert(seg.id)
+                customTitles.removeValue(forKey: seg.id)
+                handoffFrom.removeValue(forKey: seg.id)
+            }
+        }
         persistTree()
     }
 
@@ -666,11 +759,162 @@ final class Store: ObservableObject {
         panes[key(provider: provider, cwd: cwd, sid: id)]?.alive == true
     }
 
+    func hasLiveSession(cwd: String, id: String, provider: AgentProvider) -> Bool {
+        hasLiveTerminal(cwd: cwd, id: id, provider: provider) || chatHub.isLive(id)
+    }
+
+    func hasPane(cwd: String, id: String, provider: AgentProvider) -> Bool {
+        panes[key(provider: provider, cwd: cwd, sid: id)] != nil
+    }
+
+    // MARK: 单会话跨引擎接力链
+
+    static func reconcileChains(_ raw: [String: [HandoffSegment]], projects: [Project]) -> [String: [HandoffSegment]] {
+        let existingIds = Set(projects.flatMap(\.sessions).map(\.id))
+        var out: [String: [HandoffSegment]] = [:]
+        for (headId, segments) in raw {
+            // 保留已落盘段（或仍在内存里的 head），裁剪上次崩溃残留的无落盘 pending 段。
+            let kept = segments.filter { seg in
+                if seg.id.hasPrefix("pending-") { return existingIds.contains(seg.id) }
+                return true
+            }
+            guard kept.count > 1 else { continue }
+            if existingIds.contains(headId) {
+                out[headId] = kept
+            } else if let fallbackHead = kept.last(where: { existingIds.contains($0.id) })?.id {
+                out[fallbackHead] = kept
+            }
+        }
+        return out
+    }
+
+    func threadHeadId(for segmentId: String) -> String? {
+        guard !segmentId.isEmpty else { return nil }
+        if handoffChains[segmentId] != nil { return segmentId }
+        for (head, chain) in handoffChains where chain.contains(where: { $0.id == segmentId }) {
+            return head
+        }
+        return nil
+    }
+
+    func chainSegments(for id: String) -> [HandoffSegment]? {
+        guard let head = threadHeadId(for: id),
+              let chain = handoffChains[head],
+              chain.count > 1 else { return nil }
+        return chain
+    }
+
+    func resolveSegment(id: String) -> (head: Session, segment: HandoffSegment)? {
+        for (headId, chain) in handoffChains {
+            guard let seg = chain.first(where: { $0.id == id }),
+                  let head = session(id: headId) else { continue }
+            return (head, seg)
+        }
+        return nil
+    }
+
+    private func serializeChain(_ segments: [HandoffSegment], cwd: String, activeId: String) -> [[String: Any]] {
+        segments.map { seg in
+            let prov = AgentProvider.parse(seg.provider)
+            return [
+                "id": seg.id,
+                "provider": prov.rawValue,
+                "label": prov.label,
+                "shortLabel": prov.shortLabel,
+                "active": seg.id == activeId,
+                "pending": seg.id.hasPrefix("pending-"),
+                "alive": hasLiveSession(cwd: cwd, id: seg.id, provider: prov),
+                "hasPane": hasPane(cwd: cwd, id: seg.id, provider: prov),
+                "switchedAt": seg.switchedAt ?? NSNull(),
+            ]
+        }
+    }
+
+    private func allKnownSessionIds() -> Set<String> {
+        var ids = Set(projects.flatMap(\.sessions).map(\.id))
+        for chain in handoffChains.values {
+            for seg in chain { ids.insert(seg.id) }
+        }
+        return ids
+    }
+
+    private func rebindChainId(from oldId: String, to newId: String) {
+        if var chain = handoffChains.removeValue(forKey: oldId) {
+            for i in chain.indices where chain[i].id == oldId {
+                chain[i].id = newId
+            }
+            handoffChains[newId] = chain
+        }
+        for key in Array(handoffChains.keys) {
+            guard var chain = handoffChains[key],
+                  chain.contains(where: { $0.id == oldId }) else { continue }
+            for i in chain.indices where chain[i].id == oldId {
+                chain[i].id = newId
+            }
+            handoffChains[key] = chain
+        }
+    }
+
+    /// 在打开、接力或关闭临界点主动探测一次 pending 会话是否已落盘取得原始 ID，避免轮询间隙误判。
+    @discardableResult
+    func tryBindPendingSession(sessionId: String, cwd: String, provider: AgentProvider) -> String {
+        guard sessionId.hasPrefix("pending-"), provider != .claude else { return sessionId }
+        let k = key(provider: provider, cwd: cwd, sid: sessionId)
+        let terminal = panes[k]
+        if let bound = terminal?.boundConversationId, !bound.isEmpty {
+            return bound
+        }
+        let since = pendingStartedAt[sessionId] ?? Date().addingTimeInterval(-300)
+        var knownIds = allKnownSessionIds()
+        knownIds.remove(sessionId)
+        let found: Session?
+        switch provider {
+        case .codex: found = CodexSessionScanner.newConversation(in: cwd, since: since, ignoring: knownIds)
+        case .dsh: found = DeepSeekSessionScanner.newConversation(in: cwd, since: since, ignoring: knownIds)
+        case .antigravity: found = AgySessionScanner.latestConversation(in: cwd, since: since, ignoring: knownIds)
+        case .claude: return sessionId
+        }
+        guard let found, !knownIds.contains(found.id) else { return sessionId }
+        if let terminal {
+            promotePlaceholderSession(cwd: cwd, from: sessionId, to: found, terminal: terminal)
+        } else {
+            promotePlaceholderMetadata(cwd: cwd, from: sessionId, to: found)
+        }
+        return found.id
+    }
+
+    private func promotePlaceholderMetadata(cwd: String, from placeholderId: String, to real: Session) {
+        let oldKey = key(provider: real.provider, cwd: cwd, sid: placeholderId)
+        let newKey = key(provider: real.provider, cwd: real.cwd, sid: real.id)
+        pendingStartedAt.removeValue(forKey: placeholderId)
+        if runningKeys.remove(oldKey) != nil { runningKeys.insert(newKey) }
+        if unreadKeys.remove(oldKey) != nil { unreadKeys.insert(newKey) }
+        if let custom = customTitles.removeValue(forKey: placeholderId) { customTitles[real.id] = custom }
+        if let branch = sessionBranches.removeValue(forKey: placeholderId) { sessionBranches[real.id] = branch }
+        if let handoff = handoffFrom.removeValue(forKey: placeholderId) { handoffFrom[real.id] = handoff }
+        if let mode = sessionModes.removeValue(forKey: placeholderId) { sessionModes[real.id] = mode }
+        rebindChainId(from: placeholderId, to: real.id)
+        sessionProviders.removeValue(forKey: placeholderId)
+        sessionProviders[real.id] = real.provider.rawValue
+        for i in projects.indices {
+            if let j = projects[i].sessions.firstIndex(where: { $0.id == placeholderId }) {
+                projects[i].sessions[j] = retitled(real)
+                break
+            }
+        }
+        if activeKey == oldKey {
+            activeKey = newKey
+            activeSessionId = real.id
+            activeLabel = retitled(real).title
+        }
+        persistTree()
+    }
+
     /// 打开（或切到）一个会话。`sid == nil` 是新建：`name` 作为会话名，`prompt` 作为首条提示词。
     @discardableResult
     func open(cwd: String, sid: String?, label: String, name: String? = nil, prompt: String? = nil,
               provider: AgentProvider? = nil, handoffSource: String? = nil, boundBranch: String? = nil,
-              surfaceOverride: InteractionMode? = nil) -> String {
+              surfaceOverride: InteractionMode? = nil, replacingSessionId: String? = nil) -> String {
         let targetProvider = provider ?? (sid != nil ? providerOfSession(id: sid) : idleProvider)
         // 同一个 CLI 会话只能有一个持有者：Work 执行器正在驱动它时，不再用终端或图形聊天打开。
         if let sid, SessionOwnership.shared.heldByExecutor(sid) {
@@ -683,9 +927,14 @@ final class Store: ObservableObject {
             ?? InteractionMode.resolve(recorded: nil, provider: targetProvider, global: settings.interactionMode,
                                        overrides: settings.providerModes)
         if let sid, chatHub.isLive(sid) { surface = .structured }
+        // Swttch 图形聊天无法在新建时透传首条接力信封，携带 prompt 时改用原生终端以免丢失交接上下文。
+        if surface == .chat, let prompt, !prompt.isEmpty {
+            surface = .terminal
+        }
         if surface == .structured {
             if let opened = openStructured(cwd: cwd, sid: sid, label: label, name: name, prompt: prompt,
-                                           provider: targetProvider, boundBranch: boundBranch) {
+                                           provider: targetProvider, handoffSource: handoffSource,
+                                           boundBranch: boundBranch, replacingSessionId: replacingSessionId) {
                 return opened
             }
             surface = .terminal
@@ -700,30 +949,64 @@ final class Store: ObservableObject {
             chatActive = false
             chatTarget = nil
         }
-        // Claude 可通过 --session-id 预生成稳定 ID；Antigravity 由 CLI 自己分配 ID，先用占位键启动并在落盘后自动晋升绑定。
+        // Claude 可通过 --session-id 预生成稳定 ID；其它引擎由 CLI 自己分配 ID，先用占位键启动并在落盘后自动晋升绑定。
         let startedAt = Date()
         let generatedId = UUID().uuidString.lowercased()
         let idPrefix = targetProvider == .antigravity ? "agy" : targetProvider.rawValue
         let newId = sid == nil ? (targetProvider == .claude ? generatedId : "pending-\(idPrefix)-\(generatedId)") : nil
         let sessionId = sid ?? newId ?? ""
+        if let newId, newId.hasPrefix("pending-") {
+            pendingStartedAt[newId] = startedAt
+        }
         sessionProviders[sessionId] = targetProvider.rawValue
         if let handoffSource, !handoffSource.isEmpty {
             handoffFrom[sessionId] = handoffSource
         }
         let k = key(provider: targetProvider, cwd: cwd, sid: sessionId)
         if panes[k] == nil {
-            let cliSessionId = targetProvider == .claude ? newId : nil
-            let t = TerminalSession(cwd: cwd, resumeId: sid, sessionId: cliSessionId,
+            var resolvedResumeId = sid
+            var cliSessionId = targetProvider == .claude ? newId : nil
+            if targetProvider == .claude, let sid {
+                let hasClaudeRecord = (session(id: sid)?.fileURL ?? SessionScanner.find(id: sid)?.fileURL)
+                    .map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+                if !hasClaudeRecord {
+                    resolvedResumeId = nil
+                    cliSessionId = sid
+                }
+            }
+            let ownerProjectPath = projectIndex(owning: cwd).map { projects[$0].path }
+            let t = TerminalSession(cwd: cwd, resumeId: resolvedResumeId, sessionId: cliSessionId,
+                                    projectRoot: ownerProjectPath,
                                     name: name, prompt: prompt,
                                     provider: targetProvider,
                                     options: options,
                                     agyOptions: agyOptions,
+                                    codexOptions: codexOptions,
                                     fontName: settings.termFontName,
                                     fontSize: settings.termFontSize)
+            t.onOpenFile = { [weak self, weak t] target in
+                MainActor.assumeIsolated {
+                    guard self != nil else { return }
+                    let currentId = t?.boundConversationId ?? sessionId
+                    var detail: [String: Any] = [
+                        "name": "openTerminalFile",
+                        "sessionId": currentId,
+                        "projectPath": target.projectPath,
+                        "path": target.path,
+                        "displayPath": target.displayPath,
+                    ]
+                    if let line = target.line { detail["line"] = line }
+                    if let column = target.column { detail["column"] = column }
+                    Bridge.emit("claude-picker:command", detail: detail)
+                }
+            }
             t.onExit = { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    let currentId = t.boundConversationId ?? sessionId
+                    var currentId = t.boundConversationId ?? sessionId
+                    if currentId.hasPrefix("pending-") {
+                        currentId = self.tryBindPendingSession(sessionId: currentId, cwd: cwd, provider: targetProvider)
+                    }
                     let currentKey = self.key(provider: targetProvider, cwd: cwd, sid: currentId)
                     SessionOwnership.shared.setTerminal(currentId, held: false)
                     self.runningKeys.remove(currentKey)
@@ -757,7 +1040,7 @@ final class Store: ObservableObject {
         if let newId {
             if let name, !name.isEmpty { customTitles[newId] = name }
             sessionModes[newId] = InteractionMode.terminal.rawValue
-            insertNewSession(cwd: cwd, id: newId, title: name, provider: targetProvider)
+            insertNewSession(cwd: cwd, id: newId, title: name, provider: targetProvider, replacing: replacingSessionId)
         }
         unreadKeys.remove(k)
         if let owner = projectIndex(owning: cwd), !projects[owner].expanded {
@@ -788,9 +1071,11 @@ final class Store: ObservableObject {
 
     /// 引擎自行分配会话 ID 时，等待本地索引写入可恢复的 ID。
     private func scheduleSessionBind(cwd: String, placeholderId: String, since: Date, terminal: TerminalSession) {
-        let knownIds = Set(projects.flatMap(\.sessions).map(\.id))
+        let knownIds = allKnownSessionIds()
         let provider = terminal.provider
-        for delay in [2.0, 5.0, 12.0, 25.0] {
+        // Codex、DeepSeek 发出第一条消息后才写会话记录，用户可能过几分钟才开口：
+        // 前面密、后面疏地查到 15 分钟，绑定成功或终端关闭后各次检查直接返回。
+        for delay in [2.0, 5.0, 12.0, 25.0, 40.0, 60.0, 90.0, 120.0, 180.0, 240.0, 300.0, 420.0, 600.0, 900.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak terminal] in
                 MainActor.assumeIsolated {
                     guard let self, let terminal, terminal.alive, terminal.boundConversationId == nil else { return }
@@ -799,7 +1084,7 @@ final class Store: ObservableObject {
                         switch provider {
                         case .codex: found = CodexSessionScanner.newConversation(in: cwd, since: since, ignoring: knownIds)
                         case .dsh: found = DeepSeekSessionScanner.newConversation(in: cwd, since: since, ignoring: knownIds)
-                        case .antigravity: found = AgySessionScanner.latestConversation(in: cwd, since: since)
+                        case .antigravity: found = AgySessionScanner.latestConversation(in: cwd, since: since, ignoring: knownIds)
                         case .claude: return
                         }
                         guard let found, !knownIds.contains(found.id) else { return }
@@ -825,6 +1110,7 @@ final class Store: ObservableObject {
         let oldKey = key(provider: real.provider, cwd: cwd, sid: placeholderId)
         let newKey = key(provider: real.provider, cwd: real.cwd, sid: real.id)
         terminal.boundConversationId = real.id
+        pendingStartedAt.removeValue(forKey: placeholderId)
         if let pane = panes.removeValue(forKey: oldKey) { panes[newKey] = pane }
         SessionOwnership.shared.setTerminal(placeholderId, held: false)
         SessionOwnership.shared.setTerminal(real.id, held: true)
@@ -834,6 +1120,7 @@ final class Store: ObservableObject {
         if let branch = sessionBranches.removeValue(forKey: placeholderId) { sessionBranches[real.id] = branch }
         if let handoff = handoffFrom.removeValue(forKey: placeholderId) { handoffFrom[real.id] = handoff }
         if let mode = sessionModes.removeValue(forKey: placeholderId) { sessionModes[real.id] = mode }
+        rebindChainId(from: placeholderId, to: real.id)
         sessionProviders.removeValue(forKey: placeholderId)
         sessionProviders[real.id] = real.provider.rawValue
 
@@ -851,32 +1138,102 @@ final class Store: ObservableObject {
         persistTree()
     }
 
-    /// 跨 CLI 接力续聊：从原会话提取四层 `<thread-handoff>` 上下文信封，在同目录启动目标引擎新会话。
+    /// 跨 CLI 接力续聊：从原会话提取四层 `<thread-handoff>` 上下文信封，在同目录切到目标引擎继续，
+    /// 并合并在同一条会话内（不再每次接力多出一条侧栏会话）。
     func handoff(sessionId: String, sourceProvider: AgentProvider?, targetProvider: AgentProvider,
                  projectPath: String, cwd: String) throws -> [String: String] {
-        guard CliBinaryLocator.find(targetProvider) != nil else {
+        if settings.disabledProviders.contains(targetProvider) {
+            throw GitError.commandFailed("\(targetProvider.label) 已停用，请在 CLI 引擎设置中启用后再接力。", recoverable: true)
+        }
+        if ProcessInfo.processInfo.environment["CLAUDE_PICKER_TEST_SHELL"] == nil {
+            if let error = CliBinaryLocator.launchError(targetProvider) {
+                throw GitError.commandFailed("\(targetProvider.label)：\(error)，请先安装后再接力。", recoverable: false)
+            }
+        } else if CliBinaryLocator.find(targetProvider) == nil {
             throw GitError.commandFailed("本机未检测到 \(targetProvider.label)（\(targetProvider.commandName)），请先安装后再接力。", recoverable: false)
         }
-        let existing = session(id: sessionId)
-        let srcProvider = sourceProvider ?? existing?.provider ?? providerOfSession(id: sessionId)
-        let resolvedCwd = existing?.cwd ?? (cwd.isEmpty ? projectPath : cwd)
+        let initialExisting = session(id: sessionId) ?? resolveSegment(id: sessionId)?.head
+        let initialProvider = sourceProvider
+            ?? resolveSegment(id: sessionId).map { AgentProvider.parse($0.segment.provider) }
+            ?? initialExisting?.provider
+            ?? providerOfSession(id: sessionId)
+        let initialCwd = initialExisting?.cwd ?? (cwd.isEmpty ? projectPath : cwd)
+        let effectiveSourceId = sessionId.hasPrefix("pending-") && !initialCwd.isEmpty
+            ? tryBindPendingSession(sessionId: sessionId, cwd: initialCwd, provider: initialProvider)
+            : sessionId
+
+        let segLookup = resolveSegment(id: effectiveSourceId)
+        let existing = session(id: effectiveSourceId) ?? segLookup?.head
+        let threadHead = threadHeadId(for: effectiveSourceId) ?? effectiveSourceId
+        let headSession = session(id: threadHead) ?? existing
+        let srcProvider = sourceProvider
+            ?? segLookup.map { AgentProvider.parse($0.segment.provider) }
+            ?? existing?.provider
+            ?? providerOfSession(id: effectiveSourceId)
+        let resolvedCwd = headSession?.cwd ?? (cwd.isEmpty ? projectPath : cwd)
         guard !resolvedCwd.isEmpty else {
             throw GitError.commandFailed("缺少会话工作目录，无法执行跨引擎接力", recoverable: false)
         }
-        let fileURL: URL? = existing?.fileURL ?? (
-            srcProvider == .claude
-                ? SessionScanner.find(id: sessionId)?.fileURL
-                : AgySessionScanner.find(id: sessionId)?.fileURL
-        )
-        let baseTitle = existing?.title ?? "接力会话"
+        let resolveTranscript: (String, AgentProvider) -> URL? = { sid, prov in
+            if sid == existing?.id, let url = existing?.fileURL { return url }
+            switch prov {
+            case .claude: return SessionScanner.find(id: sid)?.fileURL
+            case .antigravity:
+                if let url = AgySessionScanner.find(id: sid)?.fileURL { return url }
+                let fallback = AgySessionScanner.transcriptURL(for: sid)
+                return FileManager.default.fileExists(atPath: fallback.path) ? fallback : nil
+            case .codex: return CodexSessionScanner.find(id: sid)?.fileURL
+            case .dsh:
+                return DeepSeekSessionScanner.transcriptURL(for: sid, cwd: resolvedCwd)
+                    ?? DeepSeekSessionScanner.find(id: sid)?.fileURL
+            }
+        }
+        var contextSourceId = effectiveSourceId
+        var contextSourceProvider = srcProvider
+        var fileURL = resolveTranscript(effectiveSourceId, srcProvider)
+        let fallbackTurns: [HandoffBuilder.TurnPair] = {
+            guard fileURL == nil, let run = chatHub.run(effectiveSourceId) else { return [] }
+            return run.events.compactMap { ev in
+                let kind = ev["kind"]?.stringValue
+                guard kind == "user" || kind == "assistant",
+                      let text = ev["payload"]?["text"]?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !text.isEmpty else { return nil }
+                return HandoffBuilder.TurnPair(role: kind == "user" ? "用户" : "助手", text: text)
+            }
+        }()
+        let headProvider = headSession?.provider ?? srcProvider
+        let headDate = headSession?.date.timeIntervalSince1970 ?? Date().timeIntervalSince1970
+        let baseTitle = customTitles[threadHead] ?? customTitles[effectiveSourceId] ?? headSession?.title ?? "接力会话"
+        let boundBranch = headSession.flatMap { recordedBranch(for: $0) } ?? sessionBranches[threadHead]
+        var chain = handoffChains.removeValue(forKey: threadHead) ?? [
+            HandoffSegment(id: threadHead, provider: headProvider.rawValue, title: baseTitle, switchedAt: headDate)
+        ]
+        // 若当前段尚未落盘（例如 Codex 停在 Hook 确认页还未写入 rollout），沿接力链回溯最近一个有效段，避免丢失上下文。
+        if fileURL == nil && fallbackTurns.isEmpty {
+            for prev in chain.reversed() where prev.id != effectiveSourceId && !prev.id.hasPrefix("pending-") {
+                let prevProv = AgentProvider.parse(prev.provider)
+                if let prevURL = resolveTranscript(prev.id, prevProv) {
+                    fileURL = prevURL
+                    contextSourceId = prev.id
+                    contextSourceProvider = prevProv
+                    break
+                }
+            }
+            // 移除尾部尚未启动成功的空壳 pending 段，避免链里留下死段。
+            if effectiveSourceId.hasPrefix("pending-"), !hasLiveSession(cwd: resolvedCwd, id: effectiveSourceId, provider: srcProvider) {
+                chain.removeAll { $0.id == effectiveSourceId }
+            }
+        }
         let envelope = HandoffBuilder.fromSessionFile(
-            sourceProvider: srcProvider,
+            sourceProvider: contextSourceProvider,
             targetProvider: targetProvider,
             title: baseTitle,
             cwd: resolvedCwd,
-            fileURL: fileURL
+            fileURL: fileURL,
+            sessionId: contextSourceId,
+            fallbackTurns: fallbackTurns
         )
-        let newTitle = "\(baseTitle)"
+        let newTitle = baseTitle
         let newId = open(
             cwd: resolvedCwd,
             sid: nil,
@@ -884,10 +1241,22 @@ final class Store: ObservableObject {
             name: newTitle,
             prompt: envelope,
             provider: targetProvider,
-            handoffSource: "\(srcProvider.shortLabel) · \(baseTitle)"
+            handoffSource: "\(contextSourceProvider.shortLabel) · \(baseTitle)",
+            boundBranch: boundBranch,
+            replacingSessionId: threadHead
         )
+        chain.append(HandoffSegment(
+            id: newId,
+            provider: targetProvider.rawValue,
+            title: newTitle,
+            switchedAt: Date().timeIntervalSince1970
+        ))
+        handoffChains[newId] = chain
+        persistTree()
+        schedulePush()
         return [
             "sessionId": newId,
+            "threadId": newId,
             "cwd": resolvedCwd,
             "provider": targetProvider.rawValue,
         ]
@@ -904,10 +1273,20 @@ final class Store: ObservableObject {
     /// 启动（或重新挂接）会话的结构化执行器。已有会话按原始 ID 接续，并带上本地记录里的最近消息。
     func startStructured(cwd: String, sid: String, provider: AgentProvider, isNew: Bool) throws {
         let existing = session(id: sid)
-        let fileURL: URL? = existing?.fileURL ?? (provider == .claude ? SessionScanner.find(id: sid)?.fileURL : nil)
+        let fileURL: URL? = existing?.fileURL ?? {
+            switch provider {
+            case .claude: return SessionScanner.find(id: sid)?.fileURL
+            case .codex: return CodexSessionScanner.find(id: sid)?.fileURL
+            case .antigravity:
+                let url = AgySessionScanner.transcriptURL(for: sid)
+                return FileManager.default.fileExists(atPath: url.path) ? url : nil
+            case .dsh: return nil
+            }
+        }()
         // Claude 只有在会话已经落盘后才能 --resume；预生成但还没发过消息的 ID 仍用 --session-id 新建。
         let resume = !isNew && !sid.hasPrefix("pending-") && (provider != .claude || fileURL != nil)
-        let history = isNew || chatHub.run(sid) != nil ? [] : SessionChatHistory.load(provider: provider, fileURL: fileURL)
+        // 首次打开或从终端重新切回结构化聊天时重载本地历史（仅在执行器仍活着时复用内存态）。
+        let history = isNew || chatHub.isLive(sid) ? [] : SessionChatHistory.load(provider: provider, fileURL: fileURL)
         try chatHub.ensure(sessionId: sid, provider: provider, cwd: cwd, resume: resume,
                            runtime: structuredRuntime(for: provider), history: history)
         if resume { refreshStructuredContext(sid: sid, provider: provider) }
@@ -928,7 +1307,23 @@ final class Store: ObservableObject {
                     "models": list(ModelChoice.allCases, id: \.rawValue, label: \.label),
                     "efforts": list(EffortChoice.allCases, id: \.rawValue, label: \.label)]
         case .codex:
-            return ["modes": list(CodexAppServerProcess.presets, id: \.id, label: \.label)]
+            let models = CodexConfig.entries(ensuring: codexOptions.model).map {
+                JSONValue.obj(["id": .string($0.id), "label": .string($0.label)])
+            }
+            let efforts = CodexConfig.efforts(for: codexOptions.model, ensuring: codexOptions.effort).map {
+                JSONValue.obj(["id": .string($0.id), "label": .string($0.label)])
+            }
+            var out: [String: JSONValue] = [
+                "mode": .string(codexOptions.mode.rawValue),
+                "effort": .string(codexOptions.effort),
+                "fast": .bool(codexOptions.fast),
+                "supportsFast": .bool(true),
+                "modes": list(CodexMode.allCases, id: \.rawValue, label: \.label),
+                "models": .array(models),
+                "efforts": .array(efforts),
+            ]
+            if !codexOptions.model.isEmpty { out["model"] = .string(codexOptions.model) }
+            return out
         default:
             return [:]
         }
@@ -955,7 +1350,8 @@ final class Store: ObservableObject {
 
     /// 在第二栏打开结构化聊天。失败时返回 nil，调用方按原路径改用终端。
     private func openStructured(cwd: String, sid: String?, label: String, name: String?, prompt: String?,
-                                provider: AgentProvider, boundBranch: String?) -> String? {
+                                provider: AgentProvider, handoffSource: String? = nil,
+                                boundBranch: String? = nil, replacingSessionId: String? = nil) -> String? {
         let isNew = sid == nil
         let generated = UUID().uuidString.lowercased()
         let sessionId = sid ?? (provider == .claude ? generated : "pending-\(provider == .antigravity ? "agy" : provider.rawValue)-\(generated)")
@@ -975,9 +1371,12 @@ final class Store: ObservableObject {
         }
         sessionProviders[sessionId] = provider.rawValue
         sessionModes[sessionId] = InteractionMode.structured.rawValue
+        if let handoffSource, !handoffSource.isEmpty {
+            handoffFrom[sessionId] = handoffSource
+        }
         if isNew {
             if let name, !name.isEmpty { customTitles[sessionId] = name }
-            insertNewSession(cwd: cwd, id: sessionId, title: name, provider: provider)
+            insertNewSession(cwd: cwd, id: sessionId, title: name, provider: provider, replacing: replacingSessionId)
         }
         let k = key(provider: provider, cwd: cwd, sid: sessionId)
         if activeKey != k, let prev = panes[activeKey] { prev.noteDetached() }
@@ -1060,6 +1459,7 @@ final class Store: ObservableObject {
         if let custom = customTitles.removeValue(forKey: placeholder) { customTitles[real] = custom }
         if let branch = sessionBranches.removeValue(forKey: placeholder) { sessionBranches[real] = branch }
         if let handoff = handoffFrom.removeValue(forKey: placeholder) { handoffFrom[real] = handoff }
+        rebindChainId(from: placeholder, to: real)
         sessionModes.removeValue(forKey: placeholder)
         sessionModes[real] = InteractionMode.structured.rawValue
         sessionProviders.removeValue(forKey: placeholder)
@@ -1103,9 +1503,13 @@ final class Store: ObservableObject {
         let k = key(provider: provider, cwd: cwd, sid: sessionId)
         let finish: () -> Void = { [weak self] in
             guard let self else { return }
+            if mode != .structured, self.structuredTarget?.sid == sessionId {
+                self.structuredTarget = nil
+            }
             self.sessionModes[sessionId] = mode.rawValue
             self.persistTree()
             self.open(cwd: cwd, sid: sessionId, label: label, provider: provider)
+            self.schedulePush()
             completion(.success(()))
         }
         guard from != mode || (mode != .structured && chatHub.isLive(sessionId)) else {
@@ -1320,9 +1724,16 @@ final class Store: ObservableObject {
         if let t { open(cwd: t.cwd, sid: t.sid, label: label) }
     }
 
-    /// 新建会话插到所属项目会话列表最前（tree.json 存的也是这个顺序 → 重启后仍在最前）
-    private func insertNewSession(cwd: String, id: String, title: String?, provider: AgentProvider = .claude) {
+    /// 新建会话插到所属项目会话列表最前（tree.json 存的也是这个顺序 → 重启后仍在最前）。
+    /// `replacing` 非空时（跨引擎接力合并），原地替换旧主会话，保持侧栏只有一条会话。
+    private func insertNewSession(cwd: String, id: String, title: String?, provider: AgentProvider = .claude,
+                                  replacing oldId: String? = nil) {
         guard let i = projectIndex(owning: cwd) else { return }
+        if let oldId, oldId != id {
+            for pi in projects.indices {
+                projects[pi].sessions.removeAll { $0.id == oldId }
+            }
+        }
         guard !projects[i].sessions.contains(where: { $0.id == id }) else { return }
         let s = Session(id: id, cwd: resolvedPath(cwd),
                         title: title.flatMap { $0.isEmpty ? nil : $0 } ?? "新建会话",
@@ -1356,7 +1767,7 @@ final class Store: ObservableObject {
             case .antigravity:
                 updated = AgySessionScanner.find(id: sid)
             case .codex:
-                updated = source.flatMap(CodexSessionScanner.parse)
+                updated = source.flatMap(CodexSessionScanner.parse) ?? CodexSessionScanner.find(id: sid)
             case .dsh:
                 updated = DeepSeekSessionScanner.find(id: sid)
             }
@@ -1400,17 +1811,68 @@ final class Store: ObservableObject {
             return
         }
         let k = activeKey
+        let closingSid = activeSessionId
+        let closingPane = panes[k]
         if !k.isEmpty {
-            panes[k]?.terminate()
+            closingPane?.terminate()
             panes.removeValue(forKey: k)
-            SessionOwnership.shared.setTerminal(activeSessionId, held: false)
+            SessionOwnership.shared.setTerminal(closingSid, held: false)
             runningKeys.remove(k)
             unreadKeys.remove(k)
+        }
+        // 关闭尚未落盘的 pending 终端前做一次最后绑定检查；仍未取得原始 ID 时，回退接力链或移除空壳占位行，
+        // 避免侧栏残留点击即报「会话尚未取得原始 ID，无法恢复」的死节点。
+        if closingSid.hasPrefix("pending-"), let closingPane {
+            let bound = tryBindPendingSession(sessionId: closingSid, cwd: closingPane.cwd, provider: closingPane.provider)
+            if bound.hasPrefix("pending-") {
+                cleanupUnboundPendingSession(id: bound, cwd: closingPane.cwd)
+            }
         }
         activeKey = ""
         activeSessionId = ""
         activeLabel = ""
         onActiveChanged?()
+    }
+
+    private func cleanupUnboundPendingSession(id: String, cwd: String) {
+        pendingStartedAt.removeValue(forKey: id)
+        if var chain = handoffChains.removeValue(forKey: id) {
+            chain.removeAll { $0.id == id }
+            if let prev = chain.last {
+                let prevProvider = AgentProvider.parse(prev.provider)
+                if chain.count > 1 { handoffChains[prev.id] = chain }
+                if let custom = customTitles.removeValue(forKey: id), customTitles[prev.id] == nil {
+                    customTitles[prev.id] = custom
+                }
+                if let branch = sessionBranches.removeValue(forKey: id), sessionBranches[prev.id] == nil {
+                    sessionBranches[prev.id] = branch
+                }
+                if let pi = projectIndex(owning: cwd) {
+                    let restored = Session(
+                        id: prev.id,
+                        cwd: resolvedPath(cwd),
+                        title: customTitles[prev.id] ?? prev.title ?? "会话",
+                        summary: nil,
+                        date: Date(timeIntervalSince1970: prev.switchedAt ?? Date().timeIntervalSince1970),
+                        provider: prevProvider
+                    )
+                    if let j = projects[pi].sessions.firstIndex(where: { $0.id == id }) {
+                        projects[pi].sessions[j] = restored
+                    } else if !projects[pi].sessions.contains(where: { $0.id == prev.id }) {
+                        projects[pi].sessions.insert(restored, at: 0)
+                    }
+                    refreshSession(cwd: cwd, sid: prev.id, provider: prevProvider)
+                }
+            } else {
+                for pi in projects.indices { projects[pi].sessions.removeAll { $0.id == id } }
+            }
+        } else {
+            for pi in projects.indices { projects[pi].sessions.removeAll { $0.id == id } }
+        }
+        handoffFrom.removeValue(forKey: id)
+        sessionProviders.removeValue(forKey: id)
+        sessionModes.removeValue(forKey: id)
+        persistTree()
     }
 
     /// 退出 App 时把所有还活着的终端一起关掉（多终端并存后不能只关当前那个）
@@ -1613,6 +2075,7 @@ final class Store: ObservableObject {
         o.sessionProviders = sessionProviders
         o.sessionBranches = sessionBranches
         o.handoffFrom = handoffFrom
+        o.handoffChains = handoffChains
         o.sessionModes = sessionModes
         TreeOrderStore.save(o)
     }
@@ -1820,6 +2283,86 @@ final class Store: ObservableObject {
             }
             return
         }
+        if currentRuntimeProvider == .dsh {
+            switch key {
+            case "mode":
+                if let raw = value as? String, let m = DeepSeekMode(rawValue: raw), dshOptions.mode != m {
+                    dshOptions.mode = m
+                    DeepSeekConfig.setMode(m)
+                    if active?.provider == .dsh {
+                        active?.sendSlashCommand("/permission \(m.rawValue)")
+                    }
+                }
+            case "model":
+                if let raw = value as? String, !raw.isEmpty {
+                    let norm = DeepSeekConfig.normalizeRoute(raw)
+                    if dshOptions.model != norm {
+                        dshOptions.model = norm
+                        DeepSeekConfig.setModel(norm)
+                        if active?.provider == .dsh {
+                            active?.sendSlashCommand("/model \(norm)")
+                        }
+                    }
+                }
+            case "effort":
+                if let raw = value as? String, let e = EffortChoice(rawValue: raw), dshOptions.effort != e {
+                    dshOptions.effort = e
+                    DeepSeekConfig.setEffort(e)
+                    if active?.provider == .dsh {
+                        active?.sendSlashCommand("/effort \(e.rawValue)")
+                    }
+                }
+            default:
+                break
+            }
+            return
+        }
+
+        if currentRuntimeProvider == .codex {
+            var changed = false
+            switch key {
+            case "mode":
+                if let raw = value as? String, let m = CodexMode(rawValue: raw), codexOptions.mode != m {
+                    codexOptions.mode = m
+                    CodexConfig.setMode(m)
+                    changed = true
+                }
+            case "model":
+                if let raw = value as? String, !raw.isEmpty, codexOptions.model != raw {
+                    codexOptions.model = raw
+                    CodexConfig.setModel(raw)
+                    changed = true
+                }
+            case "effort":
+                if let raw = value as? String, !raw.isEmpty, codexOptions.effort != raw {
+                    codexOptions.effort = raw
+                    CodexConfig.setEffort(raw)
+                    changed = true
+                }
+            case "fast":
+                if let on = value as? Bool ?? (value as? NSNumber)?.boolValue, codexOptions.fast != on {
+                    codexOptions.fast = on
+                    CodexConfig.setFast(on)
+                    changed = true
+                }
+            default:
+                break
+            }
+            if changed {
+                if let target = structuredTarget, target.provider == .codex, chatHub.isLive(target.sid) {
+                    let strVal: String? = key == "fast"
+                        ? (codexOptions.fast ? "true" : "false")
+                        : (value as? String)
+                    if let strVal { try? setStructuredRuntime(sessionId: target.sid, key: key, value: strVal) }
+                } else if active?.provider == .codex, active?.alive == true {
+                    Bridge.emit("claude-picker:command", detail: [
+                        "name": "runtimeSavedNextLaunch",
+                        "text": "已保存，将在新会话或重开终端后生效",
+                    ])
+                }
+            }
+            return
+        }
 
         switch key {
         case "mode":
@@ -1842,9 +2385,36 @@ final class Store: ObservableObject {
         if active == nil, activeMode != o.mode { activeMode = o.mode }
         let agy = AgyConfig.loadOptions()
         if agyOptions != agy { agyOptions = agy }
+        let dsh = DeepSeekConfig.loadOptions()
+        if dshOptions != dsh { dshOptions = dsh }
+        let codex = CodexConfig.loadOptions()
+        if codexOptions != codex { codexOptions = codex }
     }
 
     // MARK: 用量
+
+    func refreshDeepSeekBalance(onlyIfEmpty: Bool = false) {
+        guard !deepseekUsageLoading, !settings.disabledProviders.contains(.dsh) else { return }
+        if onlyIfEmpty, deepseekBalance != nil || deepseekBalanceError != nil { return }
+        deepseekUsageLoading = true
+        schedulePush()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let outcome = DeepSeekUsage.fetch()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.deepseekUsageLoading = false
+                switch outcome {
+                case .success(let snap):
+                    self.deepseekBalance = snap
+                    self.deepseekBalanceError = nil
+                    DeepSeekUsage.saveCache(snap)
+                case .failure(let error):
+                    self.deepseekBalanceError = error.message
+                }
+                self.schedulePush()
+            }
+        }
+    }
 
     func refreshCodexUsage(onlyIfEmpty: Bool = false) {
         guard !codexUsageLoading, !settings.disabledProviders.contains(.codex) else { return }
@@ -1858,6 +2428,29 @@ final class Store: ObservableObject {
                 self.codexUsageLoading = false
                 if let snapshot { self.codexUsage = snapshot }
                 self.codexUsageError = snapshot == nil ? "Codex 额度暂不可用，请检查 CLI 登录状态" : nil
+                self.schedulePush()
+            }
+        }
+    }
+
+    func refreshAntigravityUsage(onlyIfEmpty: Bool = false) {
+        guard !agyUsageLoading, !settings.disabledProviders.contains(.antigravity) else { return }
+        if onlyIfEmpty, agyUsage != nil || agyUsageError != nil { return }
+        agyUsageLoading = true
+        schedulePush()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let outcome = AntigravityUsage.fetch()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.agyUsageLoading = false
+                switch outcome {
+                case .success(let snap):
+                    self.agyUsage = snap
+                    self.agyUsageError = nil
+                    AntigravityUsage.saveCache(snap)
+                case .failure(let error):
+                    self.agyUsageError = error.message
+                }
                 self.schedulePush()
             }
         }
@@ -2109,9 +2702,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         store.refreshUsage()
+        store.refreshCodexUsage(onlyIfEmpty: true)
+        store.refreshAntigravityUsage(onlyIfEmpty: true)
+        store.refreshDeepSeekBalance()
         usageTimer = Timer.scheduledTimer(withTimeInterval: 90, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.store.refreshUsage()
+                self?.store.refreshAntigravityUsage()
+                self?.store.refreshDeepSeekBalance()
             }
         }
         // 会话行上的相对时间（「3 分钟前」）要跟着走
@@ -2333,6 +2931,18 @@ func buildProjects() -> [Project] {
     let ord = TreeOrderStore.load()
     let hiddenP = Set(ord.hiddenProjects.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path })
     let hiddenS = Set(ord.hiddenSessions)
+    // 跨引擎接力合并链：已折叠的历史段不再作为独立顶层会话展示，只在主会话内切换。
+    let scannedIds = Set(rawMap.values.flatMap { $0.map(\.id) })
+    var foldedIds = Set<String>()
+    var inheritedTitles: [String: String] = [:]
+    for (headId, segments) in ord.handoffChains {
+        let existing = segments.filter { scannedIds.contains($0.id) && !hiddenS.contains($0.id) }
+        guard existing.count > 1, let effectiveHead = existing.last?.id else { continue }
+        for seg in existing.dropLast() { foldedIds.insert(seg.id) }
+        if ord.titles[effectiveHead] == nil, let custom = ord.titles[headId] {
+            inheritedTitles[effectiveHead] = custom
+        }
+    }
     var map: [String: [Session]] = [:]
     for (k, v) in rawMap {
         // scan 出的 cwd 可能是 /private/tmp 这类符号链接形式，而 hiddenProjects 存的是
@@ -2340,9 +2950,9 @@ func buildProjects() -> [Project] {
         // 在 `<项目>/.worktrees/<名字>` 里跑的会话归到 `<项目>` 名下（会话自己的 cwd 不变）。
         let kstd = WorktreeLayout.owner(of: URL(fileURLWithPath: k).resolvingSymlinksInPath().path)
         guard !hiddenP.contains(kstd) else { continue }
-        let kept = v.filter { !hiddenS.contains($0.id) }.map { session -> Session in
+        let kept = v.filter { !hiddenS.contains($0.id) && !foldedIds.contains($0.id) }.map { session -> Session in
             // 用户新建会话时起的名字优先于 CLI 自动生成的标题
-            guard let custom = ord.titles[session.id] else { return session }
+            guard let custom = ord.titles[session.id] ?? inheritedTitles[session.id] else { return session }
             return Session(id: session.id, cwd: session.cwd, title: custom, summary: session.summary,
                            date: session.date, fileURL: session.fileURL, provider: session.provider, gitBranch: session.gitBranch,
                        lastCompletedTurn: session.lastCompletedTurn)

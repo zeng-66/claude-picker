@@ -39,6 +39,7 @@ struct ExecutorConfig: Sendable {
     var permissionMode: String?
     var model: String?
     var effort: String?
+    var fast: Bool? = nil
     var environment: [String: String]
     var systemPrompt: String? = nil
     var acpArguments: [String] = ["acp"]

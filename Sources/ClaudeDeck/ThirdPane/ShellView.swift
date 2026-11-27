@@ -22,6 +22,8 @@ final class ShellView: NSView, WKScriptMessageHandler {
     private var blocked = false
     /// 弹窗打开前键盘在终端里：弹窗关掉后还回去。
     private var restoreTerminalFocus = false
+    /// 终端视图刚挂载但网页尚未回报非零洞口时，暂存焦点请求，待宿主可见时兑现。
+    private var pendingTerminalFocus = false
     /// 网页能不能画透明底。不能时退回「终端盖在网页上面、弹窗打开时暂时隐藏终端」。
     private let webIsTransparent: Bool
 
@@ -97,11 +99,14 @@ final class ShellView: NSView, WKScriptMessageHandler {
     func showTerminal(_ view: NSView?, backgroundColor: NSColor = kTerminalBackground) {
         layer?.backgroundColor = backgroundColor.cgColor
         terminalHost.layer?.backgroundColor = backgroundColor.cgColor
+        if view == nil { pendingTerminalFocus = false }
         guard terminalView !== view else { return }
         terminalView?.removeFromSuperview()
         terminalView = view
         if let view {
-            view.frame = terminalHost.bounds
+            if terminalHost.bounds.width > 1 && terminalHost.bounds.height > 1 {
+                view.frame = terminalHost.bounds
+            }
             view.autoresizingMask = [.width, .height]
             terminalHost.addSubview(view)
         }
@@ -110,12 +115,29 @@ final class ShellView: NSView, WKScriptMessageHandler {
 
     private func updateTerminalVisibility() {
         let visible = terminalRect != nil && terminalView != nil && (webIsTransparent || !blocked)
+        let wasHidden = terminalHost.isHidden
         if terminalHost.isHidden == visible { terminalHost.isHidden = !visible }
+        if wasHidden && visible, let terminalView {
+            if terminalHost.bounds.width > 1 && terminalHost.bounds.height > 1,
+               terminalView.frame != terminalHost.bounds {
+                terminalView.frame = terminalHost.bounds
+            }
+            terminalView.needsDisplay = true
+            if pendingTerminalFocus && !blocked {
+                pendingTerminalFocus = false
+                window?.makeFirstResponder(terminalView)
+            }
+        }
     }
 
     func focusTerminal(_ view: NSView) {
-        guard view === terminalView, !terminalHost.isHidden, !blocked else { return }
-        window?.makeFirstResponder(view)
+        guard view === terminalView, !blocked else { return }
+        if !terminalHost.isHidden {
+            pendingTerminalFocus = false
+            window?.makeFirstResponder(view)
+        } else {
+            pendingTerminalFocus = true
+        }
     }
 
     func focusWeb() {
@@ -146,9 +168,15 @@ final class ShellView: NSView, WKScriptMessageHandler {
 
         if hole != terminalRect {
             terminalRect = hole
-            if let hole {
-                // 对齐到整像素，避免终端文字发虚
-                terminalHost.frame = backingAlignedRect(hole, options: .alignAllEdgesNearest)
+        }
+        if let hole {
+            // 对齐到整像素，避免终端文字发虚
+            let aligned = backingAlignedRect(hole, options: .alignAllEdgesNearest)
+            if terminalHost.frame != aligned {
+                terminalHost.frame = aligned
+            }
+            if let terminalView, terminalView.frame != terminalHost.bounds {
+                terminalView.frame = terminalHost.bounds
             }
         }
 

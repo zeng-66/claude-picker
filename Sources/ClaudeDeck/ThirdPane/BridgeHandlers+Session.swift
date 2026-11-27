@@ -20,14 +20,22 @@ enum SessionHandlers: BridgeModule {
                 var target = cwd.isEmpty ? projectPath : cwd
                 var title: String?
                 var hitProvider: AgentProvider? = requestedProvider
+                var effectiveSessionId = sessionId
                 if let sessionId {
+                    var matched = false
                     for project in store.projects {
                         if let hit = project.sessions.first(where: { $0.id == sessionId && (requestedProvider == nil || $0.provider == requestedProvider) }) {
                             title = hit.title
                             target = hit.cwd
                             hitProvider = hit.provider
+                            matched = true
                             break
                         }
+                    }
+                    if !matched, let resolved = store.resolveSegment(id: sessionId) {
+                        title = resolved.head.title
+                        target = resolved.head.cwd
+                        hitProvider = AgentProvider.parse(resolved.segment.provider)
                     }
                 }
                 guard !target.isEmpty else {
@@ -38,10 +46,16 @@ enum SessionHandlers: BridgeModule {
                 let label = title
                     ?? store.projectIndex(owning: target).map { store.projects[$0].title }
                     ?? (target as NSString).lastPathComponent
-                if let sessionId, sessionId.hasPrefix("pending-"), !store.hasLiveTerminal(cwd: target, id: sessionId, provider: provider) {
-                    throw GitError.commandFailed("会话尚未取得原始 ID，无法恢复", recoverable: true)
+                if let currentId = effectiveSessionId, currentId.hasPrefix("pending-") {
+                    let bound = store.tryBindPendingSession(sessionId: currentId, cwd: target, provider: provider)
+                    effectiveSessionId = bound
+                    if bound.hasPrefix("pending-"),
+                       !store.hasLiveSession(cwd: target, id: bound, provider: provider),
+                       !store.hasPane(cwd: target, id: bound, provider: provider) {
+                        throw GitError.commandFailed("会话尚未取得原始 ID，无法恢复", recoverable: true)
+                    }
                 }
-                store.open(cwd: target, sid: sessionId, label: label, provider: provider)
+                store.open(cwd: target, sid: effectiveSessionId, label: label, provider: provider)
             }
             return .handled(NSNull())
 

@@ -567,15 +567,16 @@ struct GitService: Sendable {
         }
 
         let root = URL(fileURLWithPath: projectPath).resolvingSymlinksInPath().standardizedFileURL
-        let container = root.appendingPathComponent(".worktrees", isDirectory: true)
+        let container = root.appendingPathComponent(WorktreeLayout.directoryName, isDirectory: true)
         let target: URL
         if let custom = input.path?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
             target = URL(fileURLWithPath: custom, relativeTo: root).standardizedFileURL
         } else {
             target = container.appendingPathComponent(Self.worktreeSlug(branch), isDirectory: true)
         }
-        guard target.path.hasPrefix(root.path + "/") else {
-            throw GitError.permissionDenied("Worktree 路径必须在项目目录内：\(target.path)")
+        guard target.deletingLastPathComponent().path == container.path,
+              container.resolvingSymlinksInPath().path == container.path else {
+            throw GitError.permissionDenied("工作树必须直接建在项目的 .worktrees 目录下：\(target.path)")
         }
         if FileManager.default.fileExists(atPath: target.path) {
             throw GitError.worktreePathExists(target.path)
@@ -587,6 +588,10 @@ struct GitService: Sendable {
             throw GitError.permissionDenied("无法创建目录 \(target.deletingLastPathComponent().path)：\(error.localizedDescription)")
         }
         await excludeWorktreesDirectory(in: projectPath)
+        let ignored = try await git(["check-ignore", "--quiet", "--", target.path], in: projectPath)
+        guard ignored.succeeded else {
+            throw GitError.permissionDenied("工作树目录未被 Git 忽略，请检查本机的 info/exclude 与仓库忽略规则")
+        }
 
         let output = try await git(["worktree", "add", target.path, "-b", branch, base],
                                    in: projectPath, timeout: Self.networkTimeout)

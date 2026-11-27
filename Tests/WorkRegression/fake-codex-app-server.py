@@ -84,8 +84,38 @@ def main():
             else:
                 state["thread"] = "fake-thread-" + uuid.uuid4().hex[:8]
             send({"id": rid, "result": {"thread": {"id": state["thread"]}, "model": "gpt-fake", "approvalPolicy": params.get("approvalPolicy"),
+                                        "serviceTier": params.get("serviceTier"),
                                         "cwd": params.get("cwd") or os.getcwd(), "sandbox": {"type": params.get("sandbox")}}})
             note("thread/started", {"thread": {"id": state["thread"]}})
+        elif method == "model/list":
+            send({"id": rid, "result": {"data": [
+                {
+                    "id": "gpt-fake",
+                    "model": "gpt-fake",
+                    "displayName": "GPT-Fake",
+                    "hidden": False,
+                    "defaultReasoningEffort": "medium",
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low"},
+                        {"reasoningEffort": "medium"},
+                        {"reasoningEffort": "high"},
+                        {"reasoningEffort": "xhigh"},
+                    ],
+                },
+                {
+                    "id": "gpt-5.4",
+                    "model": "gpt-5.4",
+                    "displayName": "GPT-5.4",
+                    "hidden": False,
+                    "defaultReasoningEffort": "high",
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low"},
+                        {"reasoningEffort": "medium"},
+                        {"reasoningEffort": "high"},
+                        {"reasoningEffort": "xhigh"},
+                    ],
+                },
+            ]}})
         elif method == "turn/start":
             turn = "turn-" + uuid.uuid4().hex[:8]
             state["turn"] = turn

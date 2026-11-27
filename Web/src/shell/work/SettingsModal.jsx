@@ -1,6 +1,6 @@
 // 设置：界面与会话 / TAPD 连接 / 企业微信机器人 / MCP 服务 / 智能体能力。
 // 界面偏好即时生效；连接类配置要点「保存」，有未保存修改时切页或关闭会先确认。
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   CaretRight,
   Cat,
@@ -16,25 +16,32 @@ import {
   Warning,
   XCircle,
 } from '@phosphor-icons/react';
-import { errorText, request } from '../bridge.js';
+import { errorText, isNative, request } from '../bridge.js';
 import VersionUpdates from './VersionUpdates.jsx';
-import { relativeTime } from '../ui.jsx';
+import { openExternal, relativeTime } from '../ui.jsx';
 import { confirmAction } from './confirm.jsx';
 import { DeepSeekStatus } from './DeepSeekMaintenance.jsx';
 import { ModalFrame } from './WorkModals.jsx';
 import { NavigationSettings } from '../ModuleViews.jsx';
+import EngineIcon from '../EngineIcon.jsx';
 import { PetSettings } from '../pet/PetSettings.jsx';
 
-const PAGES = [
-  ['appearance', '界面与会话', SlidersHorizontal],
-  ['cli', 'CLI 引擎', Robot],
-  ['navigation', '顶部页签', SquaresFour],
-  ['pet', '桌宠', Cat],
-  ['tapd', 'TAPD 连接', PlugsConnected],
-  ['wecom', '企业微信机器人', ChatCircleDots],
-  ['mcp', 'MCP 服务', PuzzlePiece],
-  ['agent', '智能体能力', Robot],
-  ['updates', '版本更新', Info],
+const PAGE_GROUPS = [
+  ['偏好', [
+    ['appearance', '界面与会话', SlidersHorizontal],
+    ['cli', 'CLI 引擎', Robot],
+    ['navigation', '顶部页签', SquaresFour],
+    ['pet', '桌宠', Cat],
+  ]],
+  ['集成', [
+    ['tapd', 'TAPD 连接', PlugsConnected],
+    ['wecom', '企业微信机器人', ChatCircleDots],
+    ['mcp', 'MCP 服务', PuzzlePiece],
+  ]],
+  ['应用', [
+    ['agent', '智能体能力', Robot],
+    ['updates', '版本更新', Info],
+  ]],
 ];
 
 /// 「可安装」目录：安装命令登记在原生端白名单里，这里只按 ID 触发，执行前展示完整命令并确认。
@@ -70,15 +77,22 @@ function Installables({ notify }) {
     <div className="cli-status-list">
       {items.map((item) => (
         <div key={item.id} className="cli-status-row installable-row">
-          {item.path ? <CheckCircle size={13} className="green" /> : <XCircle size={13} className="red" />}
-          <b>{item.label}</b>
-          <code title={item.path ?? ''}>
-            {item.path ? `${item.command} · ${item.version ?? '已安装'}` : item.install ? item.install : item.note}
-          </code>
+          <div className="cli-engine-identity">
+            <EngineIcon id={item.id} size={19} decorative />
+            <div>
+              <b>{item.label}</b>
+              <code title={item.path || item.note}>
+                {item.path ? `${item.command} · ${item.version ?? '已安装'}` : item.note}
+              </code>
+            </div>
+          </div>
           {item.install && (
             <button type="button" disabled={busy != null} onClick={() => install(item)}>
               {busy === item.id ? '正在安装…' : item.path ? '重新安装 / 更新' : '安装'}
             </button>
+          )}
+          {item.homepage && (
+            <button type="button" title={item.homepage} onClick={() => openExternal(item.homepage)}>文档</button>
           )}
           <small>{item.note}</small>
           {log?.id === item.id && !log.ok && <pre>{log.log}</pre>}
@@ -109,11 +123,13 @@ function CliEngines({ settings, providers, onChange, notify }) {
   }
 
   return (
-    <>
+    <div className="connection-settings">
       <h3>CLI 引擎</h3>
+      <section className="settings-card" aria-label="会话默认设置">
+        <h4>会话默认设置</h4>
       <div className="field" role="group" aria-label="新会话的默认打开方式">
-        新会话的默认打开方式
-        <div className="segmented">
+        打开方式
+        <div className="segmented settings-mode-options">
           {[
             ['terminal', '原生终端'],
             ['structured', '结构化聊天'],
@@ -123,6 +139,7 @@ function CliEngines({ settings, providers, onChange, notify }) {
               key={value}
               type="button"
               className={(settings.interactionMode ?? 'terminal') === value ? 'chosen' : ''}
+              aria-pressed={(settings.interactionMode ?? 'terminal') === value}
               onClick={() => onChange({ interactionMode: value })}
             >
               {label}
@@ -130,38 +147,49 @@ function CliEngines({ settings, providers, onChange, notify }) {
           ))}
         </div>
         <small>
-          打开方式保存在每个会话上，这里只决定新会话和未记录旧会话的初始界面，不会结束已打开的会话。右键会话可改用终端、结构化聊天或 Swttch；切换前会先结束进行中的回合，同一个原始会话只由一端写入。引擎不支持所选方式时（如 DeepSeek、Swttch 下的非 Claude 会话）使用终端。
+          用于新会话及尚未记录打开方式的旧会话。右键会话可切换界面，切换会结束当前回合。引擎不支持所选方式时使用终端。
         </small>
       </div>
-
-      <div className="field">
-        <label>默认新会话引擎 <select aria-label="默认新会话引擎"
+      <label className="field">默认新会话引擎 <select
           value={available.some((engine) => engine.id === settings.defaultProvider) ? settings.defaultProvider : ''}
           onChange={(event) => onChange({ defaultProvider: event.target.value })}>
           <option value="" disabled>请选择可用引擎</option>
           {available.map((engine) => <option key={engine.id} value={engine.id}>{engine.label}</option>)}
-        </select></label>
-      </div>
-      <div className="field">
+        </select>
+      </label>
+      </section>
+      <section className="settings-card" aria-label="Claude 提示缓存">
+        <h4>Claude 提示缓存</h4>
         <label className="follow-session-setting">
-          <span>显示 Claude 提示缓存倒计时（估算）</span>
+          <span>显示缓存倒计时（估算）</span>
           <input type="checkbox" role="switch" checked={settings.promptCacheEnabled !== false}
             onChange={(event) => onChange({ promptCacheEnabled: event.target.checked })} />
         </label>
-        <label>缓存时长 <select aria-label="缓存时长" value={settings.promptCacheMinutes ?? 5}
+        <label className="field">缓存时长 <select value={settings.promptCacheMinutes ?? 5}
           disabled={settings.promptCacheEnabled === false}
           onChange={(event) => onChange({ promptCacheMinutes: Number(event.target.value) })}>
           {[5, 10, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分钟</option>)}
         </select></label>
+      </section>
+      <section className="settings-card" aria-label="已安装的引擎">
+      <div className="settings-card-header">
+        <h4>已安装的引擎</h4>
+        <button type="button" disabled={refreshing} onClick={refresh}>{refreshing ? '检测中…' : '重新检测'}</button>
       </div>
-      <h4>已安装 <button type="button" disabled={refreshing} onClick={refresh}>{refreshing ? '检测中…' : '重新检测'}</button></h4>
       <div className="cli-status-list">
         {installed.map((engine) => <div key={engine.id} className="cli-status-row">
-          {engine.available ? <CheckCircle size={13} className="green" /> : <XCircle size={13} className="red" />}
-          <b>{engine.label}{settings.defaultProvider === engine.id ? ' · 默认' : ''}</b>
-          <code title={engine.path}>{engine.command} · {engine.status ?? (engine.available ? '可启动' : '不可用')}</code>
-          <label>
-            <input type="checkbox" aria-label={`启用 ${engine.label}`}
+          <div className="cli-engine-identity">
+            <EngineIcon id={engine.id} size={19} decorative />
+            <div>
+              <b>{engine.label}</b>{settings.defaultProvider === engine.id && <span className="cli-engine-default">默认</span>}
+              <code title={engine.path}>
+                <i className={`cli-engine-state ${engine.available ? 'green' : 'red'}`} aria-hidden="true" />
+                {engine.command} · {engine.status ?? (engine.available ? '可启动' : '不可用')}
+              </code>
+            </div>
+          </div>
+          <label className="cli-engine-enabled">
+            <input type="checkbox" role="switch" aria-label={`启用 ${engine.label}`}
               checked={preferences[engine.id]?.enabled !== false}
               onChange={(event) => {
                 const enabled = event.target.checked;
@@ -187,6 +215,8 @@ function CliEngines({ settings, providers, onChange, notify }) {
         </div>)}
         {!installed.length && <p>未检测到可执行文件</p>}
       </div>
+      </section>
+      <section className="settings-card" aria-label="引擎维护">
       <h4>DeepSeek Harness 维护</h4>
       <label className="follow-session-setting">
         <span>启动时与每 6 小时检查 DeepSeek 新版本和环境，有问题时提示升级</span>
@@ -194,18 +224,23 @@ function CliEngines({ settings, providers, onChange, notify }) {
           onChange={(event) => onChange({ deepseekAutoCheck: event.target.checked })} />
       </label>
       <DeepSeekStatus notify={notify} />
+      </section>
+      <section className="settings-card" aria-label="可安装引擎和会话扫描">
       <h4>可安装</h4>
-      <ul>
-        {list.filter((engine) => !installed.includes(engine)).map((engine) =>
-          <li key={engine.id}>{engine.label} · <code>{engine.command}</code> · {engine.status ?? '未安装'}</li>)}
-      </ul>
+      {list.filter((engine) => !installed.includes(engine)).map((engine) => (
+        <div className="cli-engine-identity" key={engine.id}>
+          <EngineIcon id={engine.id} size={19} decorative />
+          <div><b>{engine.label}</b><code>{engine.command} · {engine.status ?? '未安装'}</code></div>
+        </div>
+      ))}
       <Installables notify={notify} />
       <label className="follow-session-setting">
         <span>扫描 Antigravity 历史会话</span>
         <input type="checkbox" role="switch" checked={settings.scanAntigravity !== false}
           onChange={(event) => onChange({ scanAntigravity: event.target.checked })} />
       </label>
-    </>
+      </section>
+    </div>
   );
 }
 
@@ -390,21 +425,50 @@ const MCP_STAGE = {
 };
 
 /// TAPD MCP 一键配置：握手、工具发现、逐项目只读试读，全部通过才保存。
-function TapdMcpSetup({ info, onSaved, notify }) {
+function TapdMcpSetup({ info, dirty, onSaved, notify }) {
   const [ids, setIds] = useState('');
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
-  const tokenSaved = info.prerequisites.tokenSet;
+  const [refreshError, setRefreshError] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const demo = import.meta.env.DEV && !isNative() && new URLSearchParams(location.search).has('review');
+  const [scenario, setScenario] = useState('success');
+  const pre = info.prerequisites;
+  const server = info.settings.mcp;
+  const [command, setCommand] = useState(server?.command ?? 'uvx');
+  const [args, setArgs] = useState((server?.args ?? ['--from', pre.mcpPackage ?? 'mcp-server-tapd', 'mcp-server-tapd']).join('\n'));
+  const [webBase, setWebBase] = useState(server?.webBase ?? 'https://www.tapd.cn');
+  const serverTouched = useRef(false);
+  const canVerify = !dirty && !busy && !refreshError && ids.trim() && (pre.tokenSet || token.trim()) && command.trim();
+
+  async function refreshSettings() {
+    setRefreshing(true);
+    try {
+      await onSaved();
+      setRefreshError(null);
+    } catch (cause) {
+      setRefreshError(errorText(cause));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function run() {
-    if (!ids.trim() || busy) return;
+    if (!canVerify) return;
     setBusy(true);
     setResult(null);
     try {
       const outcome = await request(
         'tapd.mcpSetup',
-        { workspaceIds: ids, ...(token.trim() ? { token: token.trim() } : {}) },
+        {
+          workspaceIds: ids,
+          ...(demo ? { demoScenario: scenario } : {}),
+          ...(token.trim() ? { token: token.trim() } : {}),
+          ...(serverTouched.current ? {
+            server: { command: command.trim(), args: args.split('\n').map((arg) => arg.trim()).filter(Boolean), webBase: webBase.trim() },
+          } : {}),
+        },
         { timeoutMs: 240000 },
       );
       setResult(outcome);
@@ -412,7 +476,8 @@ function TapdMcpSetup({ info, onSaved, notify }) {
         setToken('');
         setIds('');
         notify(outcome.message);
-        onSaved();
+        serverTouched.current = false;
+        await refreshSettings();
       }
     } catch (cause) {
       setResult({ ok: false, stage: 'launch', message: errorText(cause) });
@@ -422,30 +487,66 @@ function TapdMcpSetup({ info, onSaved, notify }) {
   }
 
   return (
-    <div className="tapd-mcp-setup">
-      <h4>一键配置 MCP</h4>
+    <section className="settings-card tapd-mcp-setup" aria-label="MCP 配置">
+      <div className="settings-card-header">
+        <h4>MCP 配置</h4>
+        <span className="pill neutral">默认连接方式</span>
+      </div>
+      <div className="tapd-connection-summary">
+        <code>{pre.mcpPackage}</code>
+        <span>本地 stdio · {pre.mcpCommand ? '启动命令可用' : '检查 uvx 或配置启动命令'}</span>
+        <span>{pre.tokenSet ? '已配置令牌' : '待配置令牌'}</span>
+      </div>
       <p>
-        使用官方 <code>{info.prerequisites.mcpPackage}</code>，由 <code>uvx</code> 在本机以 stdio 方式启动
-        {info.prerequisites.mcpCommand ? `（${info.prerequisites.mcpCommand}）` : '（未找到 uvx，请先安装 uv）'}。
-        项目 ID 是 TAPD 项目链接 <code>tapd.cn/&lt;项目 ID&gt;/…</code> 中的数字。配置只做握手、工具发现和每个项目的只读试读，全部通过才保存；
-        已配置的项目保留启停与仓库映射。令牌需要能读取这些项目，回填评论和流转状态还需要对应的写权限。
+        填写 TAPD 项目链接中的数字 ID 和具备项目读取权限的个人令牌。应用会启动 MCP、发现工具并逐个试读项目，通过后保存并启用 MCP。
       </p>
       <label className="field">
-        项目 ID（可多个，换行、空格或逗号分隔）
-        <textarea rows={2} value={ids} placeholder="例如 20355782, 69850123" onChange={(event) => setIds(event.target.value)} />
+        项目 ID
+        <textarea rows={2} disabled={busy} value={ids} placeholder="例如 20355782, 69850123" onChange={(event) => setIds(event.target.value)} />
+        <small>可用换行、空格或逗号分隔多个 ID。</small>
       </label>
       <label className="field">
-        TAPD 个人令牌{tokenSaved ? '（留空沿用已保存的令牌）' : ''}
-        <input type="password" autoComplete="off" value={token} placeholder="在 TAPD「个人设置 → 个人令牌」里生成"
+        TAPD 个人令牌
+        <input type="password" autoComplete="off" disabled={busy} value={token} placeholder={pre.tokenSet ? '留空沿用已有令牌' : '在 TAPD「个人设置 → 个人令牌」里生成'}
           onChange={(event) => setToken(event.target.value)} />
       </label>
-      <div className="settings-inline">
-        <button className="primary" disabled={busy || !ids.trim() || (!tokenSaved && !token.trim())} onClick={run}>
-          {busy ? '正在验证…（首次需下载服务）' : '验证并保存'}
+      <details className="settings-disclosure">
+        <summary>MCP 启动设置</summary>
+        <fieldset className="settings-fieldset" disabled={busy} onChange={() => { serverTouched.current = true; }}>
+          <label className="field">启动命令<input value={command} onChange={(event) => setCommand(event.target.value)} /></label>
+          <label className="field">启动参数（每行一项）
+            <textarea rows={3} value={args} onChange={(event) => setArgs(event.target.value)} />
+          </label>
+          <label className="field">TAPD 网页地址
+            <input type="url" value={webBase} onChange={(event) => setWebBase(event.target.value)} />
+          </label>
+        </fieldset>
+      </details>
+      {demo && (
+        <label className="field">
+          演示连接结果
+          <select value={scenario} disabled={busy} onChange={(event) => setScenario(event.target.value)}>
+            <option value="success">验证成功</option>
+            <option value="handshake">MCP 握手失败</option>
+            <option value="project">项目试读失败</option>
+          </select>
+        </label>
+      )}
+      <div className="settings-card-header">
+        <small>{dirty ? '请先保存或放弃其他 TAPD 设置。' : info.settings.mcpCheckedAt ? `最近验证 ${new Date(info.settings.mcpCheckedAt).toLocaleString()}` : ''}</small>
+        <button className="primary" disabled={!canVerify} onClick={run}>
+          {busy ? (demo ? '正在验证…' : '正在验证…（首次需下载服务）') : result?.ok === false ? '重新验证并保存' : '验证并保存'}
         </button>
       </div>
+      {busy && <p className="setting-hint" role="status">正在检查 MCP 服务和项目读取权限…</p>}
+      {refreshError && (
+        <div className="pane-note error" role="alert">
+          <span>配置已保存，读取最新设置失败。{refreshError}</span>
+          <button disabled={refreshing} onClick={refreshSettings}>{refreshing ? '读取中…' : '重新读取'}</button>
+        </div>
+      )}
       {result && (
-        <div className={`pane-note ${result.ok ? '' : 'error'}`} role="status">
+        <div className={`pane-note ${result.ok ? '' : 'error'}`} role={result.ok ? 'status' : 'alert'}>
           {result.ok ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
           <div>
             <b>{MCP_STAGE[result.stage] ?? result.stage}：{result.message}</b>
@@ -466,7 +567,7 @@ function TapdMcpSetup({ info, onSaved, notify }) {
           </div>
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -564,35 +665,12 @@ function Tapd({ projects, notify, onDirty }) {
     }));
 
   return (
-    <>
+    <div className="connection-settings">
       <h3>TAPD 连接</h3>
-      <p>
-        默认通过 TAPD MCP 读取分配给你的待办；按编号查询和「已创建」仍可使用本机的 tapd-cli。个人令牌保存在 macOS 钥匙串里，
-        不会写进设置文件、日志，也不会再显示出来。
-      </p>
-      <div className="field" role="group" aria-label="TAPD 连接方式">
-        连接方式
-        <div className="segmented">
-          {[
-            ['mcp', 'MCP'],
-            ['cli', 'tapd-cli'],
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={(form.transport ?? 'cli') === value ? 'chosen' : ''}
-              disabled={value === 'mcp' && !form.mcpCheckedAt}
-              title={value === 'mcp' && !form.mcpCheckedAt ? '先完成下方的一键配置' : ''}
-              onClick={() => setForm({ ...form, transport: value })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {form.mcpCheckedAt && <small>MCP 最近验证：{new Date(form.mcpCheckedAt).toLocaleString()}</small>}
-      </div>
+      <p>{isNative() ? '通过 TAPD MCP 读取分配给你的待办。桌面版将个人令牌保存在 macOS 钥匙串。' : '浏览器使用演示数据验证连接流程，请使用示例令牌。'}</p>
       <TapdMcpSetup
         info={info}
+        dirty={dirty}
         notify={notify}
         onSaved={() =>
           request('tapd.settings').then((result) => {
@@ -601,6 +679,69 @@ function Tapd({ projects, notify, onDirty }) {
           })
         }
       />
+      <section className="settings-card" aria-label="TAPD 待办与项目">
+      <div className="settings-card-header">
+        <h4>待办与项目</h4>
+        <label className="check-option">
+          <input type="checkbox" role="switch" checked={form.enabled === true} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
+          启用 TAPD 待办
+        </label>
+      </div>
+      <p>选择要显示待办的 TAPD 项目，并登记导入时可选的本地仓库。</p>
+      <button disabled={loadingWorkspaces} onClick={loadWorkspaces}>
+        {loadingWorkspaces ? '正在读取…' : form.workspaces?.length ? '重新读取我参与的项目' : '读取我参与的项目'}
+      </button>
+      {(form.workspaces ?? []).map((item) => (
+        <div className="workspace-row" key={item.id}>
+          <label className="check-option">
+            <input type="checkbox" checked={item.enabled !== false}
+              onChange={(event) => updateWorkspace(item.id, { enabled: event.target.checked })} />
+            <b>{item.name}</b><code>{item.id}</code>
+          </label>
+          <div className="mapping-chips">
+            {(item.projects ?? []).map((path) => {
+              const project = projects.find((entry) => entry.path === path);
+              return (
+                <span className={`pill ${project ? 'neutral' : 'red'}`} key={path} title={path}>
+                  {project?.title ?? '目录已不在列表'}
+                  <button aria-label={`移除映射 ${project?.title ?? path}`}
+                    onClick={() => updateWorkspace(item.id, { projects: item.projects.filter((entry) => entry !== path) })}>×</button>
+                </span>
+              );
+            })}
+            <select aria-label={`为 ${item.name} 添加本地项目`} value=""
+              onChange={(event) => {
+                const path = event.target.value;
+                if (path && !(item.projects ?? []).includes(path))
+                  updateWorkspace(item.id, { projects: [...(item.projects ?? []), path] });
+              }}>
+              <option value="">添加映射…</option>
+              {projects.filter((project) => !(item.projects ?? []).includes(project.path)).map((project) => (
+                <option key={project.path} value={project.path}>{project.title}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      ))}
+      <label className="check-option">
+        <input type="checkbox" checked={form.syncOnLaunch !== false}
+          onChange={(event) => setForm({ ...form, syncOnLaunch: event.target.checked })} />
+        打开「TAPD 待办」时读取我的待办
+      </label>
+      <div className="static-rule">
+        <CheckCircle size={14} className="green" />
+        回填先预览，经确认后添加评论。
+      </div>
+      </section>
+      <details className="settings-card settings-disclosure">
+      <summary>兼容设置 · tapd-cli</summary>
+      <p>按编号查询和「已创建」可以使用本机的 tapd-cli。</p>
+      <label className="field">待办读取方式
+        <select value={form.transport ?? 'mcp'} onChange={(event) => setForm({ ...form, transport: event.target.value })}>
+          <option value="mcp" disabled={!form.mcpCheckedAt}>MCP（默认）</option>
+          <option value="cli">tapd-cli</option>
+        </select>
+      </label>
       <div className="prereq-list">
         <div>
           {pre.cli ? <CheckCircle size={14} className="green" /> : <XCircle size={14} className="red" />}
@@ -671,84 +812,7 @@ function Tapd({ projects, notify, onDirty }) {
           ))}
         {test?.scenarios && <McpScenarios scenarios={test.scenarios} />}
       </div>
-      <label className="check-option">
-        <input type="checkbox" checked={form.enabled === true} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
-        启用 TAPD 待办
-      </label>
-
-      <h4>项目与本地仓库</h4>
-      <p>
-        勾选要显示待办的 TAPD 项目，并为它登记可能对应的本地项目（可多个）。这个映射只用于导入时的候选，
-        与企业微信机器人无关。
-      </p>
-      <button disabled={loadingWorkspaces} onClick={loadWorkspaces}>
-        {loadingWorkspaces ? '正在读取…' : form.workspaces?.length ? '重新读取我参与的项目' : '读取我参与的项目'}
-      </button>
-      {(form.workspaces ?? []).map((item) => (
-        <div className="workspace-row" key={item.id}>
-          <label className="check-option">
-            <input
-              type="checkbox"
-              checked={item.enabled !== false}
-              onChange={(event) => updateWorkspace(item.id, { enabled: event.target.checked })}
-            />
-            <b>{item.name}</b>
-            <code>{item.id}</code>
-          </label>
-          <div className="mapping-chips">
-            {(item.projects ?? []).map((path) => {
-              const project = projects.find((entry) => entry.path === path);
-              return (
-                <span className={`pill ${project ? 'neutral' : 'red'}`} key={path} title={path}>
-                  {project?.title ?? '目录已不在列表'}
-                  <button
-                    aria-label={`移除映射 ${project?.title ?? path}`}
-                    onClick={() => updateWorkspace(item.id, { projects: item.projects.filter((entry) => entry !== path) })}
-                  >
-                    ×
-                  </button>
-                </span>
-              );
-            })}
-            <select
-              aria-label={`为 ${item.name} 添加本地项目`}
-              value=""
-              onChange={(event) => {
-                const path = event.target.value;
-                if (path && !(item.projects ?? []).includes(path))
-                  updateWorkspace(item.id, { projects: [...(item.projects ?? []), path] });
-              }}
-            >
-              <option value="">添加映射…</option>
-              {projects
-                .filter((project) => !(item.projects ?? []).includes(project.path))
-                .map((project) => (
-                  <option key={project.path} value={project.path}>
-                    {project.title}
-                  </option>
-                ))}
-            </select>
-          </div>
-        </div>
-      ))}
-
-      <h4>同步与回填</h4>
-      <label className="check-option">
-        <input
-          type="checkbox"
-          checked={form.syncOnLaunch !== false}
-          onChange={(event) => setForm({ ...form, syncOnLaunch: event.target.checked })}
-        />
-        打开「TAPD 待办」时读取我的待办（读取失败会显示出来；这不是自动接单）
-      </label>
-      <div className="static-rule">
-        <CheckCircle size={14} className="green" />
-        回填始终先预览、由你确认后才写入，且只添加评论。这一项不能关闭。
-      </div>
-      <div className="static-rule disabled">
-        <Info size={14} />
-        按规则自动创建 Work：本版本没有提供，不会自动接单。
-      </div>
+      </details>
       {error && (
         <div className="pane-note error" role="alert">
           <Warning size={14} />
@@ -763,7 +827,7 @@ function Tapd({ projects, notify, onDirty }) {
           {saving ? '正在保存…' : '保存'}
         </button>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1312,17 +1376,23 @@ export default function SettingsModal({
   }
 
   return (
-    <ModalFrame title="设置" wide onClose={onClose} guard={guard}>
+    <ModalFrame title="设置" eyebrow={null} wide className="settings-window" onClose={onClose} guard={guard}>
       <div className="settings-layout">
         <nav aria-label="设置分类">
-          {PAGES.map(([value, label, Icon]) => (
-            <button key={value} className={page === value ? 'active' : ''} onClick={() => switchPage(value)}>
-              <Icon size={15} />
-              {label}
-            </button>
+          {PAGE_GROUPS.map(([group, pages]) => (
+            <div className="settings-nav-group" role="group" aria-label={group} key={group}>
+              <span aria-hidden="true">{group}</span>
+              {pages.map(([value, label, Icon]) => (
+                <button type="button" key={value} className={page === value ? 'active' : ''}
+                  aria-current={page === value ? 'page' : undefined} onClick={() => switchPage(value)}>
+                  <Icon size={16} />
+                  {label}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
-        <div className="settings-detail">
+        <div className="settings-detail" key={page}>
           {page === 'updates' && <VersionUpdates />}
           {page === 'cli' && <CliEngines settings={settings} providers={providers} onChange={onChange} notify={notify} />}
           {page === 'appearance' && (
@@ -1352,16 +1422,6 @@ export default function SettingsModal({
           )}
           {page === 'agent' && <Agent notify={notify} />}
         </div>
-      </div>
-      <div className="modal-footer">
-        <button
-          className="primary"
-          onClick={async () => {
-            if (await guard()) onClose();
-          }}
-        >
-          完成
-        </button>
       </div>
     </ModalFrame>
   );

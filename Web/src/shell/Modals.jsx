@@ -6,6 +6,7 @@ import {
   CaretRight,
   FolderOpen,
   GitBranch,
+  Monitor,
   Plus,
   PlugsConnected,
   TreeStructure,
@@ -15,13 +16,16 @@ import {
 import { errorText, request } from './bridge.js';
 import { resumeCommand } from './session-info.js';
 import { contextNumbers } from './Composer.jsx';
-import { IconButton, tildePath } from './ui.jsx';
+import { IconButton, tildePath, useDialogFocus } from './ui.jsx';
+import { untitledWorktreeBranch, worktreeTitleSlug } from './worktree-name.js';
 
-function ModalFrame({ title, wide = false, onClose, children }) {
+function ModalFrame({ title, wide = false, className = '', onClose, dismissOnBackdrop = true, children }) {
+  const focus = useDialogFocus(onClose);
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={dismissOnBackdrop ? onClose : undefined}>
       <section
-        className={`modal ${wide ? 'information-dialog' : ''}`}
+        {...focus}
+        className={`modal${wide ? ' information-dialog' : ''}${className ? ' ' + className : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -29,7 +33,7 @@ function ModalFrame({ title, wide = false, onClose, children }) {
       >
         <div className="modal-header">
           <h2>{title}</h2>
-          <IconButton icon={X} label="关闭弹窗" onClick={onClose} />
+          <IconButton icon={X} label="关闭弹窗" disabled={!onClose} onClick={onClose} />
         </div>
         {children}
       </section>
@@ -221,7 +225,7 @@ export function McpModal({ projectPath, notify, onClose }) {
   }
 
   return (
-    <ModalFrame title="MCP 服务" wide onClose={onClose}>
+    <ModalFrame title="MCP 服务" dismissOnBackdrop={false} wide onClose={onClose}>
       <div className="segmented" style={{ marginBottom: 10 }} role="tablist" aria-label="选择 MCP 配置引擎">
         {[
           ['claude', 'Claude Code 配置'],
@@ -503,7 +507,7 @@ export function DirectoryModal({ notify, onClose, onAdded }) {
   }
 
   return (
-    <ModalFrame title="添加目录" onClose={onClose}>
+    <ModalFrame title="添加目录" dismissOnBackdrop={false} onClose={onClose}>
       <p className="modal-description">输入一个目录路径，或从访达里选择，添加到左侧项目列表。</p>
       <div className="field">
         <span>目录路径</span>
@@ -578,7 +582,8 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
   const available = providers.filter((item) => item.available && settings.cliPreferences?.[item.id]?.enabled !== false);
   const [agent, setAgent] = useState('');
   const [createdTree, setCreatedTree] = useState(null);
-  const branch = name.trim() ? worktreeSlug(name) : '';
+  const worktreeName = worktreeTitleSlug(name);
+  const branch = branches ? (worktreeName || untitledWorktreeBranch(branches)) : '';
 
   useEffect(() => {
     let current = true;
@@ -602,7 +607,7 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
   }
 
   return (
-    <ModalFrame title="创建工作树" onClose={creating ? undefined : onClose}>
+    <ModalFrame title="创建工作树" dismissOnBackdrop={false} className="cli-worktree-modal" onClose={creating ? undefined : onClose}>
       <form className="cli-worktree-form" onSubmit={async (event) => {
         event.preventDefault();
         if (!branch || !base || creating) return;
@@ -615,14 +620,14 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
           }, options);
           if (!createdTree) {
             setCreatedTree(tree);
-            onCreated(tree, path);
+            onCreated(tree, path, worktreeName);
           }
           if (agent) {
             const session = await request('session.create', {
               projectPath: path, provider: agent, mode: 'current',
               workspace: { branch: tree.branch, worktreePath: tree.path },
             }, options);
-            onCreated({ ...tree, ...session }, path);
+            onCreated({ ...tree, ...session }, path, worktreeName);
           }
           onClose();
         } catch (cause) {
@@ -631,30 +636,40 @@ export function CreateWorktreeModal({ projects, projectPath, settings, providers
         }
       }}>
         <fieldset disabled={creating || Boolean(createdTree)} className="cli-worktree-fields">
-        <div className="cli-worktree-grid">
-          <label className="field">项目<select aria-label="项目" value={path} onChange={(event) => { setBase(''); setPath(event.target.value); }}>
-            {projects.map((item) => <option value={item.path} key={item.path}>{item.title}</option>)}
-          </select></label>
-          <label className="field">运行于<select aria-label="运行于" defaultValue="local">
-            <option value="local">本地 Mac</option>
-          </select></label>
-        </div>
-        <div className="cli-worktree-source">
-          <span>创建来源</span>
-          <select aria-label="起始分支" disabled={!branches} value={base} onChange={(event) => setBase(event.target.value)}>
-            <option value="" disabled>{branches ? '选择起始分支' : '读取分支…'}</option>
-            {branches?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
-          </select>
-        </div>
-        <label className="field">工作区名称<input autoFocus value={name} placeholder="例如 cli-integration"
-          onChange={(event) => setName(event.target.value)} /></label>
-        {branch && <small className="cli-worktree-target">新分支与目录 · <code>{branch}</code> · <code>.worktrees/{branch}</code></small>}
+          <div className="cli-worktree-grid">
+            <label className="field">项目
+              <select value={path} onChange={(event) => { setBase(''); setPath(event.target.value); }}>
+                {projects.map((item) => <option value={item.path} key={item.path}>{item.title}</option>)}
+              </select>
+            </label>
+            <div className="field">运行于
+              <span className="cli-worktree-location"><Monitor size={15} aria-hidden="true" /> 本地 Mac</span>
+            </div>
+          </div>
+          <label className="field">起始分支
+            <select disabled={!branches?.length} value={base} onChange={(event) => setBase(event.target.value)}>
+              <option value="" disabled>{error && !branches ? '分支读取失败' : !branches ? '正在读取分支…' : branches.length ? '选择起始分支' : '没有可用分支'}</option>
+              {branches?.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+            </select>
+          </label>
+          <label className="field">工作树标题（可选）
+            <input autoFocus value={name} placeholder="留空时采用第一个会话标题" onChange={(event) => setName(event.target.value)} />
+          </label>
+          {branch && (
+            <dl className="cli-worktree-target">
+              <div><dt>新分支</dt><dd><code>{branch}</code></dd></div>
+              <div><dt>本机目录</dt><dd><code>.worktrees/{worktreeSlug(branch)}</code></dd></div>
+            </dl>
+          )}
         </fieldset>
         <label className="field">代理（可选）
-          <select aria-label="代理（可选）" value={agent} onChange={(event) => setAgent(event.target.value)}>
-            <option value="">仅创建工作树</option>
-            {available.map((item) => <option key={item.id} value={item.id}>{item.label}（{surface(item.id)}）</option>)}
-          </select>
+          <span className="control-select-with-icon">
+            {agent ? <EngineIcon id={agent} size={16} decorative /> : <TreeStructure size={16} aria-hidden="true" />}
+            <select disabled={creating} value={agent} onChange={(event) => setAgent(event.target.value)}>
+              <option value="">仅创建工作树</option>
+              {available.map((item) => <option key={item.id} value={item.id}>{item.label}（{surface(item.id)}）</option>)}
+            </select>
+          </span>
         </label>
         {createdTree && <p className="pane-note">工作树已创建：{createdTree.path}</p>}
         {error && <p className="pane-note error" role="alert">{error}</p>}
@@ -728,7 +743,7 @@ export function SessionModal({
       );
       const provName = engineLabel;
       notify(worktree ? `已在工作树 ${target.trim()} 中创建 ${provName} 会话` : `${provName} 会话已创建`);
-      onCreated(result);
+      onCreated({ ...result, firstSessionTitle: title.trim() });
       onClose();
     } catch (cause) {
       setError(errorText(cause));
@@ -737,7 +752,7 @@ export function SessionModal({
   }
 
   return (
-    <ModalFrame title="新建会话" onClose={onClose}>
+    <ModalFrame title="新建会话" dismissOnBackdrop={false} onClose={onClose}>
       <p className="modal-description">在 {project.title} 中开始新的工作。</p>
       <div className="field">
         执行 CLI 引擎
@@ -832,7 +847,7 @@ export function SessionModal({
           <Warning size={14} />
           {!providerEnabled ? `已停用 ${engineLabel}，请在 CLI 引擎设置中启用。` : provider === 'dsh' ? (
             <span>
-              找到 dsh-TUI，但未检测到 DeepSeek Harness (dsh)。<button type="button" onClick={() => window.dispatchEvent(new Event('cli-review-check'))}>打开 CLI 配置</button>
+              找到 dsh-TUI，但未检测到 DeepSeek Harness (dsh)。<button type="button" onClick={() => window.dispatchEvent(new Event('claude-picker:open-cli-settings'))}>打开 CLI 配置</button>
             </span>
           ) : `未检测到 ${engineLabel}，请先安装并登录。`}
         </div>
@@ -907,7 +922,7 @@ export function RenameSessionModal({ session, onClose, notify }) {
   }
 
   return (
-    <ModalFrame title="重命名会话" onClose={onClose}>
+    <ModalFrame title="重命名会话" dismissOnBackdrop={false} onClose={onClose}>
       <p className="modal-description">
         {session.named ? '当前使用自定义名称。' : `当前为自动标题：${session.title}`}
       </p>

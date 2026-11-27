@@ -45,7 +45,7 @@ enum AgentProvider: String, Codable, Sendable, CaseIterable {
         }
     }
 
-    var supportsFast: Bool { self == .claude }
+    var supportsFast: Bool { self == .claude || self == .codex }
     var hotModeSwitchable: Bool { self == .claude }
     var supportsGraphicalChat: Bool { self == .claude }
     /// 可由结构化协议驱动：Claude stream-json、Antigravity ACP、Codex App Server。DeepSeek 只走终端。
@@ -138,7 +138,18 @@ enum CliBinaryLocator {
         let directories = ["\(NSHomeDirectory())/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
             + (env["PATH"] ?? "").split(separator: ":").map(String.init)
             + loginPathCache.split(separator: ":").map(String.init)
+            + nvmBinDirectories()
         return directories.map { "\($0)/\(command)" }.first { fm.isExecutableFile(atPath: $0) }
+    }
+
+    /// nvm 各版本的 bin 目录，新版本在前。`npm i -g` 装的 codex、dsh-tui 在这里，
+    /// 但 nvm 只在 .zshrc 里初始化，`zsh -lc` 和从访达启动的 App 都看不到。
+    static func nvmBinDirectories() -> [String] {
+        let nvm = "\(NSHomeDirectory())/.nvm/versions/node"
+        guard let versions = try? FileManager.default.contentsOfDirectory(atPath: nvm) else { return [] }
+        return versions.filter { $0.hasPrefix("v") }
+            .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            .map { "\(nvm)/\($0)/bin" }
     }
 
     static func launchError(_ provider: AgentProvider) -> String? {
@@ -372,6 +383,416 @@ enum AgyConfig {
     }
 }
 
+// MARK: - DeepSeek Harness (dsh-tui) 运行参数与配置读写
+
+enum DeepSeekMode: String, CaseIterable, Sendable, Codable {
+    case workspaceWrite = "workspace-write"
+    case readOnly = "read-only"
+    case fullAccess = "danger-full-access"
+
+    var label: String {
+        switch self {
+        case .workspaceWrite: return "工作区读写"
+        case .readOnly: return "只读"
+        case .fullAccess: return "完全访问"
+        }
+    }
+}
+
+struct DeepSeekModelEntry: Equatable, Sendable {
+    let id: String
+    let label: String
+}
+
+struct DeepSeekRenderOptions: Equatable, Sendable {
+    var mode: DeepSeekMode = .workspaceWrite
+    var model: String = DeepSeekConfig.defaultModelRoute
+    var effort: EffortChoice = .high
+}
+
+/// 读写 `dsh-tui` 自身的持久化偏好（`~/.dsh-tui/{permission,model,effort}.json` 与 `model-recents.json`）。
+enum DeepSeekConfig {
+    static let defaultModelRoute = "deepseek-official/deepseek-flash"
+
+    static var dataDir: URL {
+        let env = ProcessInfo.processInfo.environment
+        if let override = env["CLAUDE_PICKER_DSH_TUI_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        if env["CLAUDE_PICKER_TEST_SHELL"] != nil {
+            return AppDataDir.url.appendingPathComponent("dsh-tui", isDirectory: true)
+        }
+        return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".dsh-tui", isDirectory: true)
+    }
+
+    private static func readJSON(_ name: String, in dir: URL? = nil) -> [String: Any] {
+        let url = (dir ?? dataDir).appendingPathComponent(name)
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return obj
+    }
+
+    private static func writeJSON(_ obj: [String: Any], name: String, in dir: URL? = nil) {
+        let base = dir ?? dataDir
+        guard JSONSerialization.isValidJSONObject(obj),
+              let data = try? JSONSerialization.data(
+                  withJSONObject: obj,
+                  options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return }
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try? data.write(to: base.appendingPathComponent(name), options: .atomic)
+    }
+
+    static func splitRoute(_ raw: String?) -> (provider: String, model: String)? {
+        guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        guard let slash = s.firstIndex(of: "/") else {
+            return ("deepseek-official", s)
+        }
+        let p = String(s[..<slash]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let m = String(s[s.index(after: slash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !p.isEmpty, !m.isEmpty else { return nil }
+        return (p, m)
+    }
+
+    static func normalizeRoute(_ raw: String?) -> String {
+        guard let pair = splitRoute(raw) else { return defaultModelRoute }
+        return "\(pair.provider)/\(pair.model)"
+    }
+
+    private static func providerBadge(_ provider: String) -> String {
+        switch provider {
+        case "deepseek-official", "deepseek": return "官方 API"
+        case "deepseek-account": return "官方账号"
+        case "deepseek-vision": return "Vision"
+        default: return provider
+        }
+    }
+
+    static func entries(ensuring current: String? = nil, in dir: URL? = nil) -> [DeepSeekModelEntry] {
+        var routes: [(provider: String, model: String)] = []
+        func appendRoute(_ p: String, _ m: String) {
+            guard !p.isEmpty, !m.isEmpty else { return }
+            if !routes.contains(where: { $0.provider == p && $0.model == m }) {
+                routes.append((p, m))
+            }
+        }
+
+        if let cur = splitRoute(current) {
+            appendRoute(cur.provider, cur.model)
+        }
+        let saved = readJSON("model.json", in: dir)
+        if let p = saved["provider"] as? String, let m = saved["model"] as? String {
+            appendRoute(p, m)
+        }
+        if let recents = readJSON("model-recents.json", in: dir)["models"] as? [[String: Any]] {
+            for item in recents {
+                if let p = item["provider"] as? String, let m = item["id"] as? String {
+                    appendRoute(p, m)
+                }
+            }
+        }
+        for builtin in [
+            ("deepseek-official", "deepseek-flash"),
+            ("deepseek-official", "deepseek-v4-flash"),
+            ("deepseek-official", "deepseek-v4-flash-vision-exp"),
+        ] {
+            appendRoute(builtin.0, builtin.1)
+        }
+
+        var modelCounts: [String: Int] = [:]
+        for r in routes { modelCounts[r.model, default: 0] += 1 }
+
+        return routes.map { r in
+            let needsBadge = (modelCounts[r.model] ?? 0) > 1 || r.provider != "deepseek-official"
+            let label = needsBadge ? "\(r.model) · \(providerBadge(r.provider))" : r.model
+            return DeepSeekModelEntry(id: "\(r.provider)/\(r.model)", label: label)
+        }
+    }
+
+    static func loadOptions(in dir: URL? = nil) -> DeepSeekRenderOptions {
+        var out = DeepSeekRenderOptions()
+        if let rawPerm = readJSON("permission.json", in: dir)["permission"] as? String,
+           let mode = DeepSeekMode(rawValue: rawPerm.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            out.mode = mode
+        }
+        let modelObj = readJSON("model.json", in: dir)
+        if let p = modelObj["provider"] as? String, !p.isEmpty,
+           let m = modelObj["model"] as? String, !m.isEmpty {
+            out.model = "\(p)/\(m)"
+        }
+        if let rawEffort = readJSON("effort.json", in: dir)["effort"] as? String,
+           let effort = EffortChoice(rawValue: rawEffort.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            out.effort = effort
+        }
+        return out
+    }
+
+    static func setMode(_ mode: DeepSeekMode, in dir: URL? = nil) {
+        writeJSON(["permission": mode.rawValue], name: "permission.json", in: dir)
+    }
+
+    static func setModel(_ route: String, in dir: URL? = nil) {
+        let pair = splitRoute(route) ?? ("deepseek-official", "deepseek-flash")
+        writeJSON(["provider": pair.provider, "model": pair.model], name: "model.json", in: dir)
+    }
+
+    static func setEffort(_ effort: EffortChoice, in dir: URL? = nil) {
+        writeJSON(["effort": effort.rawValue], name: "effort.json", in: dir)
+    }
+}
+
+// MARK: - Codex CLI 运行参数与只读配置（config.toml 只读，本应用偏好写 codex-runtime.json）
+
+enum CodexMode: String, CaseIterable, Sendable, Codable {
+    case onRequest = "on-request"
+    case autoReview = "auto-review"
+    case never = "never"
+
+    var label: String {
+        switch self {
+        case .onRequest: return "请求批准"
+        case .autoReview: return "替我批准"
+        case .never: return "完全访问"
+        }
+    }
+
+    var cliFlags: String {
+        switch self {
+        case .onRequest: return "-a on-request -s workspace-write"
+        case .autoReview: return "--approve-for-me"
+        case .never: return "--dangerously-bypass-approvals-and-sandbox"
+        }
+    }
+}
+
+struct CodexModelEntry: Equatable, Sendable {
+    let id: String
+    let label: String
+    let efforts: [String]
+}
+
+struct CodexRenderOptions: Equatable, Sendable {
+    var mode: CodexMode = .onRequest
+    var model: String = ""
+    var effort: String = "high"
+    var fast: Bool = false
+
+    private static func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func escapeTOMLString(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    func flags() -> String {
+        var parts = [mode.cliFlags]
+        if !model.isEmpty {
+            parts.append("-c " + Self.shellQuote("model=\"\(Self.escapeTOMLString(model))\""))
+        }
+        if !effort.isEmpty {
+            parts.append("-c " + Self.shellQuote("model_reasoning_effort=\"\(Self.escapeTOMLString(effort))\""))
+        }
+        parts.append("-c " + Self.shellQuote("service_tier=\"\(fast ? "fast" : "default")\""))
+        return parts.joined(separator: " ")
+    }
+}
+
+enum CodexConfig {
+    static let fallbackEfforts = ["low", "medium", "high", "xhigh"]
+    static let defaultModels: [CodexModelEntry] = [
+        CodexModelEntry(id: "gpt-5.4", label: "GPT-5.4", efforts: fallbackEfforts),
+        CodexModelEntry(id: "gpt-5.3-codex", label: "GPT-5.3 Codex", efforts: fallbackEfforts),
+        CodexModelEntry(id: "o3", label: "o3", efforts: fallbackEfforts),
+    ]
+    static let effortLabels: [String: String] = [
+        "none": "关闭",
+        "minimal": "最低",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "xhigh": "极高",
+        "max": "最高",
+        "ultra": "超高",
+    ]
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var dynamicList: [CodexModelEntry] = []
+
+    static var codexHome: URL {
+        let env = ProcessInfo.processInfo.environment
+        if let override = env["CLAUDE_PICKER_CODEX_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        if let codexHome = env["CODEX_HOME"], !codexHome.isEmpty {
+            return URL(fileURLWithPath: codexHome, isDirectory: true)
+        }
+        if env["CLAUDE_PICKER_TEST_SHELL"] != nil {
+            return AppDataDir.url.appendingPathComponent("codex-home", isDirectory: true)
+        }
+        return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex", isDirectory: true)
+    }
+
+    static var localPrefsURL: URL {
+        AppDataDir.url.appendingPathComponent("codex-runtime.json")
+    }
+
+    static func updateDynamicModels(_ items: [CodexModelEntry]) {
+        guard !items.isEmpty else { return }
+        lock.lock()
+        dynamicList = items
+        lock.unlock()
+    }
+
+    private static func readLocalPrefs() -> [String: Any] {
+        guard let data = try? Data(contentsOf: localPrefsURL),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return obj
+    }
+
+    private static func writeLocalPrefs(_ obj: [String: Any]) {
+        guard JSONSerialization.isValidJSONObject(obj),
+              let data = try? JSONSerialization.data(
+                  withJSONObject: obj,
+                  options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return }
+        try? FileManager.default.createDirectory(at: localPrefsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: localPrefsURL, options: .atomic)
+    }
+
+    /// 只读解析 `~/.codex/config.toml` 顶层键（遇到首个 `[` 分段即停），绝不回写，以免破坏外部托管块。
+    static func readTopLevelTOML(in home: URL? = nil) -> [String: String] {
+        let url = (home ?? codexHome).appendingPathComponent("config.toml")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+        var out: [String: String] = [:]
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if trimmed.hasPrefix("[") { break }
+            guard let eq = trimmed.firstIndex(of: "=") else { continue }
+            let key = trimmed[..<eq].trimmingCharacters(in: .whitespaces)
+            var val = trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+            if val.hasPrefix("\"") {
+                if let endQuote = val.dropFirst().firstIndex(of: "\"") {
+                    val = String(val[val.index(after: val.startIndex)..<endQuote])
+                }
+            } else if val.hasPrefix("'") {
+                if let endQuote = val.dropFirst().firstIndex(of: "'") {
+                    val = String(val[val.index(after: val.startIndex)..<endQuote])
+                }
+            } else {
+                if let hash = val.firstIndex(of: "#") { val = String(val[..<hash]) }
+                val = val.trimmingCharacters(in: .whitespaces)
+            }
+            if !key.isEmpty && !val.isEmpty { out[key] = val }
+        }
+        return out
+    }
+
+    static func cachedModels(in home: URL? = nil) -> [CodexModelEntry] {
+        let url = (home ?? codexHome).appendingPathComponent("models_cache.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = root["models"] as? [[String: Any]] else { return [] }
+        return list.compactMap { item -> CodexModelEntry? in
+            if (item["visibility"] as? String) == "hide" { return nil }
+            guard let id = nonEmpty(item["slug"] as? String) ?? nonEmpty(item["id"] as? String) else { return nil }
+            let label = nonEmpty(item["display_name"] as? String) ?? id
+            let levels = (item["supported_reasoning_levels"] as? [[String: Any]] ?? []).compactMap {
+                nonEmpty($0["effort"] as? String)
+            }
+            return CodexModelEntry(id: id, label: label, efforts: levels.isEmpty ? fallbackEfforts : levels)
+        }
+    }
+
+    static func entries(ensuring current: String? = nil, in home: URL? = nil) -> [CodexModelEntry] {
+        var result: [CodexModelEntry] = []
+        var seen = Set<String>()
+        func appendUnique(_ entry: CodexModelEntry) {
+            guard seen.insert(entry.id).inserted else { return }
+            result.append(entry)
+        }
+        lock.lock()
+        let live = dynamicList
+        lock.unlock()
+        for item in live { appendUnique(item) }
+        for item in cachedModels(in: home) { appendUnique(item) }
+        if result.isEmpty {
+            for item in defaultModels { appendUnique(item) }
+        }
+        if let cur = nonEmpty(current), !seen.contains(cur) {
+            let slug = cur.components(separatedBy: "::").last ?? cur
+            let base = result.first { $0.id == slug }
+            let label = cur.contains("::") ? "\(base?.label ?? slug) · 智能路由" : cur
+            let efforts = base?.efforts ?? fallbackEfforts
+            result.insert(CodexModelEntry(id: cur, label: label, efforts: efforts), at: 0)
+        }
+        return result
+    }
+
+    static func efforts(for model: String, ensuring current: String? = nil, in home: URL? = nil) -> [(id: String, label: String)] {
+        let list = entries(ensuring: model, in: home)
+        let slug = model.components(separatedBy: "::").last ?? model
+        var ids = (list.first { $0.id == model } ?? list.first { $0.id == slug })?.efforts ?? fallbackEfforts
+        if let cur = nonEmpty(current), !ids.contains(cur) {
+            ids.append(cur)
+        }
+        return ids.map { ($0, effortLabels[$0] ?? $0) }
+    }
+
+    static func loadOptions(in home: URL? = nil) -> CodexRenderOptions {
+        var out = CodexRenderOptions()
+        let toml = readTopLevelTOML(in: home)
+        if let m = toml["model"], !m.isEmpty { out.model = m }
+        if let e = toml["model_reasoning_effort"], !e.isEmpty { out.effort = e }
+        if let s = toml["service_tier"], s.lowercased() == "fast" { out.fast = true }
+
+        let local = readLocalPrefs()
+        if let rawMode = local["mode"] as? String, let mode = CodexMode(rawValue: rawMode) {
+            out.mode = mode
+        }
+        if let m = nonEmpty(local["model"] as? String) { out.model = m }
+        if let e = nonEmpty(local["effort"] as? String) { out.effort = e }
+        if let f = local["fast"] as? Bool {
+            out.fast = f
+        } else if let f = local["fast"] as? NSNumber {
+            out.fast = f.boolValue
+        }
+        if out.model.isEmpty {
+            out.model = entries(ensuring: nil, in: home).first?.id ?? defaultModels[0].id
+        }
+        return out
+    }
+
+    static func setMode(_ mode: CodexMode) {
+        var local = readLocalPrefs()
+        local["mode"] = mode.rawValue
+        writeLocalPrefs(local)
+    }
+
+    static func setModel(_ model: String) {
+        var local = readLocalPrefs()
+        local["model"] = model
+        writeLocalPrefs(local)
+    }
+
+    static func setEffort(_ effort: String) {
+        var local = readLocalPrefs()
+        local["effort"] = effort
+        writeLocalPrefs(local)
+    }
+
+    static func setFast(_ fast: Bool) {
+        var local = readLocalPrefs()
+        local["fast"] = fast
+        writeLocalPrefs(local)
+    }
+
+    private static func nonEmpty(_ s: String?) -> String? {
+        guard let trimmed = s?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+}
+
 // MARK: - Antigravity 会话扫描（conversation_summaries.db + conversation_metadata.json + transcript.jsonl）
 
 enum AgySessionScanner {
@@ -425,14 +846,14 @@ enum AgySessionScanner {
     }
 
     /// 查找某个目录下在 `since` 之后新建的最近一条 Antigravity 会话（用于终端新建 `agy` 后回填真实 conversationId）。
-    static func latestConversation(in cwd: String, since: Date, root overrideRoot: URL? = nil) -> Session? {
+    static func latestConversation(in cwd: String, since: Date, ignoring ids: Set<String> = [], root overrideRoot: URL? = nil) -> Session? {
         let target = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path
         let all = scan(root: overrideRoot)
         var matches: [Session] = []
         for (dir, list) in all {
             let resolved = URL(fileURLWithPath: dir).resolvingSymlinksInPath().path
             if resolved == target {
-                matches.append(contentsOf: list.filter { $0.date >= since.addingTimeInterval(-3) })
+                matches.append(contentsOf: list.filter { !ids.contains($0.id) && $0.date >= since.addingTimeInterval(-3) })
             }
         }
         return matches.sorted { $0.date > $1.date }.first
@@ -724,30 +1145,43 @@ enum HandoffBuilder {
         var text: String
     }
 
-    /// 从任意来源会话文件（Claude `.jsonl` 或 Antigravity `transcript.jsonl`）组装结构化四层交接信封。
+    /// 从任意来源会话文件（Claude / Antigravity / Codex / DeepSeek）组装结构化四层交接信封。
     static func fromSessionFile(
         sourceProvider: AgentProvider,
         targetProvider: AgentProvider,
         title: String,
         cwd: String,
         fileURL: URL?,
+        sessionId: String? = nil,
+        fallbackTurns: [TurnPair] = [],
         userInstruction: String? = nil
     ) -> String {
-        let turns: [TurnPair]
-        if let fileURL {
-            turns = sourceProvider == .claude
-                ? extractClaudeTurns(from: fileURL, maxTurns: 8)
-                : extractAgyTurns(from: fileURL, maxTurns: 8)
-        } else {
-            turns = []
+        var extracted: [TurnPair] = []
+        var referencePath = fileURL?.path
+        if sourceProvider == .dsh {
+            if let sid = sessionId, let v4 = Self.dshTranscriptURL(for: sid, cwd: cwd) {
+                extracted = extractDshV4Turns(from: v4, maxTurns: 8)
+                referencePath = v4.path
+            }
+            if extracted.isEmpty, let fileURL {
+                extracted = extractDshTurns(from: fileURL, maxTurns: 8)
+            }
+        } else if let fileURL {
+            switch sourceProvider {
+            case .claude: extracted = extractClaudeTurns(from: fileURL, maxTurns: 8)
+            case .antigravity: extracted = extractAgyTurns(from: fileURL, maxTurns: 8)
+            case .codex: extracted = extractCodexTurns(from: fileURL, maxTurns: 8)
+            case .dsh: break
+            }
         }
+        let turns = normalizeHandoffTurns(extracted.isEmpty ? fallbackTurns : extracted, maxTurns: 8)
         return composeEnvelope(
             sourceProvider: sourceProvider,
             targetProvider: targetProvider,
             title: title,
             cwd: cwd,
             turns: turns,
-            transcriptPath: fileURL?.path,
+            transcriptPath: referencePath,
             userInstruction: userInstruction
         )
     }
@@ -836,6 +1270,200 @@ enum HandoffBuilder {
             } else if type == "PLANNER_RESPONSE" {
                 let body = ((obj["content"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 if !body.isEmpty { out.append(TurnPair(role: "助手", text: body)) }
+            }
+        }
+        return Array(out.suffix(maxTurns))
+    }
+
+    private static func extractCodexTurns(from url: URL, maxTurns: Int) -> [TurnPair] {
+        guard let text = readTailUTF8(url, maxBytes: 1_048_576) else { return [] }
+        var out: [TurnPair] = []
+        for line in text.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (obj["type"] as? String) == "response_item",
+                  let payload = obj["payload"] as? [String: Any],
+                  (payload["type"] as? String) == "message",
+                  let role = payload["role"] as? String,
+                  role == "user" || role == "assistant" else { continue }
+            let parts = (payload["content"] as? [[String: Any]] ?? []).compactMap { $0["text"] as? String }
+            let body = parts.filter { part in
+                guard role == "user" else { return true }
+                return !isCodexInjectedUserPart(part)
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { continue }
+            if role == "user", body.hasPrefix("[Request interrupted") { continue }
+            out.append(TurnPair(role: role == "user" ? "用户" : "助手", text: body))
+        }
+        return Array(out.suffix(maxTurns))
+    }
+
+    private static func isCodexInjectedUserPart(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.hasPrefix("# AGENTS.md instructions") { return true }
+        let prefixes = [
+            "<environment_context>",
+            "<permissions instructions>",
+            "<collaboration_mode>",
+            "<turn_aborted>",
+            "<INSTRUCTIONS>",
+            "<system-reminder>",
+            "<local-command-",
+            "<command-",
+        ]
+        return prefixes.contains { t.hasPrefix($0) }
+    }
+
+    /// 连续跨引擎接力（A → B → C）时，把上一任 `<thread-handoff>` 信封解包为普通历史轮次，
+    /// 避免 `<thread-handoff>` 无限嵌套，同时保留更早引擎的真实对话上下文。
+    private static func normalizeHandoffTurns(_ turns: [TurnPair], maxTurns: Int) -> [TurnPair] {
+        var out: [TurnPair] = []
+        let defaultConfirm = "请先简要确认你已同步上述交接上下文与当前工作区状态，等待我的下一步指令（或继续未完成的步骤）。"
+        for turn in turns {
+            guard turn.role == "用户",
+                  let open = turn.text.range(of: "<thread-handoff>"),
+                  let close = turn.text.range(of: "</thread-handoff>", range: open.upperBound..<turn.text.endIndex) else {
+                out.append(turn)
+                continue
+            }
+            let inner = String(turn.text[open.upperBound..<close.lowerBound])
+            let after = String(turn.text[close.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            // 从前任信封的「## 3. 最近对话上下文摘录」回收未丢失的历史轮次。
+            if let sec = inner.range(of: "## 3. 最近对话上下文摘录") {
+                var body = String(inner[sec.upperBound...])
+                if let nextSec = body.range(of: "\n## 4.") {
+                    body = String(body[..<nextSec.lowerBound])
+                }
+                let recovered = parseExcerptBlocks(body)
+                out.append(contentsOf: recovered)
+            }
+            if !after.isEmpty && after != defaultConfirm {
+                out.append(TurnPair(role: "用户", text: after))
+            }
+        }
+        return Array(out.suffix(maxTurns))
+    }
+
+    private static func parseExcerptBlocks(_ text: String) -> [TurnPair] {
+        var out: [TurnPair] = []
+        var currentRole: String?
+        var currentLines: [String] = []
+        func flush() {
+            guard let role = currentRole else { return }
+            let joined = currentLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { out.append(TurnPair(role: role, text: joined)) }
+            currentRole = nil
+            currentLines = []
+        }
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "【用户】" {
+                flush()
+                currentRole = "用户"
+            } else if trimmed == "【助手】" {
+                flush()
+                currentRole = "助手"
+            } else if currentRole != nil {
+                currentLines.append(line)
+            }
+        }
+        flush()
+        return out
+    }
+
+    /// 查找 DeepSeek v4 会话事件流文件（`~/.dsh/sessions/<cwd>/<id>/session.v4.jsonl(.zstd)`）。
+    static func dshTranscriptURL(for id: String, cwd: String? = nil) -> URL? {
+        guard !id.isEmpty, !id.hasPrefix("pending-") else { return nil }
+        let fm = FileManager.default
+        let home = ProcessInfo.processInfo.environment["DSH_HOME"] ?? "\(NSHomeDirectory())/.dsh"
+        let sessionsRoot = URL(fileURLWithPath: home, isDirectory: true).appendingPathComponent("sessions", isDirectory: true)
+        func candidate(in sessionDir: URL) -> URL? {
+            for name in ["session.v4.jsonl", "session.v4.jsonl.zstd"] {
+                let url = sessionDir.appendingPathComponent(name)
+                if fm.fileExists(atPath: url.path) { return url }
+            }
+            return nil
+        }
+        if let cwd, !cwd.isEmpty {
+            let encoded = "--" + cwd.trimmingCharacters(in: CharacterSet(charactersIn: "/")).replacingOccurrences(of: "/", with: "-") + "--"
+            if let hit = candidate(in: sessionsRoot.appendingPathComponent(encoded, isDirectory: true).appendingPathComponent(id, isDirectory: true)) {
+                return hit
+            }
+        }
+        guard let dirs = try? fm.contentsOfDirectory(at: sessionsRoot, includingPropertiesForKeys: nil) else { return nil }
+        for dir in dirs {
+            if let hit = candidate(in: dir.appendingPathComponent(id, isDirectory: true)) { return hit }
+        }
+        return nil
+    }
+
+    private static func extractDshV4Turns(from url: URL, maxTurns: Int) -> [TurnPair] {
+        let text: String?
+        if url.pathExtension == "zstd" {
+            text = decompressZstd(url)
+        } else {
+            text = readTailUTF8(url, maxBytes: 1_048_576)
+        }
+        guard let text, !text.isEmpty else { return [] }
+        var out: [TurnPair] = []
+        for line in text.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = obj["type"] as? String,
+                  let payload = obj["data"] as? [String: Any] else { continue }
+            if type == "user/message" {
+                guard let source = payload["source"] as? [String: Any],
+                      (source["kind"] as? String) == "user" else { continue }
+                let body = extractPlainContent(payload["content"]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !body.isEmpty { out.append(TurnPair(role: "用户", text: body)) }
+            } else if type == "assistant/message" {
+                guard let message = payload["message"] as? [String: Any] else { continue }
+                let body = extractPlainContent(message["content"]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !body.isEmpty { out.append(TurnPair(role: "助手", text: body)) }
+            }
+        }
+        return Array(out.suffix(maxTurns))
+    }
+
+    private static func decompressZstd(_ url: URL) -> String? {
+        guard let bin = CliBinaryLocator.findCommand("zstd") else { return nil }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: bin)
+        p.arguments = ["-dc", url.path]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0, !data.isEmpty else { return nil }
+        let tail = data.count > 1_048_576 ? data.suffix(1_048_576) : data
+        var text = String(decoding: tail, as: UTF8.self)
+        if data.count > 1_048_576, let nl = text.firstIndex(of: "\n") {
+            text = String(text[text.index(after: nl)...])
+        }
+        return text
+    }
+
+    private static func extractDshTurns(from url: URL, maxTurns: Int) -> [TurnPair] {
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let record = root["record"] as? [String: Any],
+              let rows = record["rows"] as? [String: Any],
+              let outline = rows["turnOutline"] as? [String: Any],
+              let val = outline["val"] as? [String: Any],
+              let turns = val["turns"] as? [[String: Any]] else { return [] }
+        var out: [TurnPair] = []
+        for turn in turns {
+            if let prompt = (turn["prompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
+                out.append(TurnPair(role: "用户", text: prompt))
+            }
+            if let response = (turn["response"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !response.isEmpty {
+                out.append(TurnPair(role: "助手", text: response))
             }
         }
         return Array(out.suffix(maxTurns))

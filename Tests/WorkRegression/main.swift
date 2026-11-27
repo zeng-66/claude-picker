@@ -1327,6 +1327,18 @@ do {
           && !CliMaintenance.isNewer("0.2.2-rc.5", than: "0.2.2"), "版本比较（含预发布）")
     check(CliMaintenance.installables.first { $0.id == "qoder" }?.install == "curl -fsSL https://qoder.com/install | bash",
           "Qoder 安装命令登记在白名单")
+    let pi = CliMaintenance.installables.first { $0.id == "pi" }
+    check(pi?.install == "curl -fsSL https://pi.dev/install.sh | sh" && pi?.command == "pi"
+          && pi?.homepage == "https://docs.pi.dev/latest", "Pi 安装命令与文档链接登记在白名单")
+    let sysProxy: [String: Any] = ["HTTPSEnable": 1, "HTTPSProxy": "127.0.0.1", "HTTPSPort": 7897,
+                                   "ExceptionsList": ["*.local", "169.254/16"]]
+    let viaSystem = CliMaintenance.installEnvironment(base: ["PATH": "/usr/bin"], system: sysProxy)
+    check(viaSystem["https_proxy"] == "http://127.0.0.1:7897" && viaSystem["http_proxy"] == "http://127.0.0.1:7897"
+          && viaSystem["no_proxy"] == "*.local,169.254/16", "安装命令沿用系统代理（curl 不读系统代理）", "\(viaSystem)")
+    let ownProxy = CliMaintenance.installEnvironment(base: ["https_proxy": "http://corp:8080"], system: sysProxy)
+    check(ownProxy["https_proxy"] == "http://corp:8080" && ownProxy["http_proxy"] == nil, "已配置的代理环境不被覆盖")
+    check(CliMaintenance.installEnvironment(base: [:], system: ["HTTPSEnable": 0])["https_proxy"] == nil,
+          "系统未开代理时不添加")
     check((try? CliMaintenance.install(id: "rm -rf /")) == nil && (try? CliMaintenance.install(id: "workbuddy")) == nil,
           "未登记或没有安装命令的条目不能执行")
 }

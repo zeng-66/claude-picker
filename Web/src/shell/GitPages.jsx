@@ -261,7 +261,7 @@ export function BranchesTab({
 
 // ---------- 工作树 ----------
 
-export function WorktreeTab({ projectPath, home, epoch, onCreateWorktree, runGit }) {
+export function WorktreeTab({ projectPath, home, epoch, onCreateWorktree, runGit, worktreeLabels = {} }) {
   const { data, error, loading } = useGitData('git.worktrees', projectPath, epoch);
   const [confirming, setConfirming] = useState(null);
   return (
@@ -279,7 +279,7 @@ export function WorktreeTab({ projectPath, home, epoch, onCreateWorktree, runGit
         <div className="history-row" key={item.path}>
           <TreeStructure size={20} />
           <span>
-            <strong>{baseName(item.path)}</strong>
+            <strong>{worktreeLabels[item.path]?.name || baseName(item.path)}</strong>
             <small>
               {tildePath(item.path, home)}
               {index === 0 ? ' · 主工作树' : ''}

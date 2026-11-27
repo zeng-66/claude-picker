@@ -235,6 +235,14 @@ struct Project: Identifiable {
 
 // MARK: - 树形顺序 / 展开状态持久化
 
+/// 跨引擎接力合并链中的单个底层引擎段。
+struct HandoffSegment: Codable, Equatable, Sendable {
+    var id: String
+    var provider: String
+    var title: String?
+    var switchedAt: Double?
+}
+
 struct TreeOrder: Codable {
     var projects: [String] = []
     var sessions: [String: [String]] = [:]
@@ -250,6 +258,8 @@ struct TreeOrder: Codable {
     var sessionBranches: [String: String] = [:]
     /// 跨引擎接力来源说明（新会话 id → 来源标题）
     var handoffFrom: [String: String] = [:]
+    /// 跨引擎接力合并链（当前主会话 id → 按时间顺序排列的底层段，最后一项为当前活跃段）
+    var handoffChains: [String: [HandoffSegment]] = [:]
     /// 会话打开方式（会话 id → terminal / chat / structured）；没有记录的旧会话跟随全局默认
     var sessionModes: [String: String] = [:]
 
@@ -267,6 +277,7 @@ struct TreeOrder: Codable {
         sessionProviders = try c.decodeIfPresent([String: String].self, forKey: .sessionProviders) ?? [:]
         sessionBranches = try c.decodeIfPresent([String: String].self, forKey: .sessionBranches) ?? [:]
         handoffFrom = try c.decodeIfPresent([String: String].self, forKey: .handoffFrom) ?? [:]
+        handoffChains = (try? c.decodeIfPresent([String: [HandoffSegment]].self, forKey: .handoffChains)) ?? [:]
         sessionModes = (try? c.decodeIfPresent([String: String].self, forKey: .sessionModes)) ?? [:]
     }
 }

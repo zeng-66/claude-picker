@@ -13,67 +13,33 @@ import {
   X,
 } from '@phosphor-icons/react';
 import { errorText, request } from '../bridge.js';
-import { IconButton, tildePath } from '../ui.jsx';
+import { IconButton, tildePath, useDialogFocus } from '../ui.jsx';
 import { confirmAction } from './confirm.jsx';
 import { formatTime, newId, sourceLabel, statusOf } from './useWorks.js';
 
 /// 弹窗外框：焦点进入弹窗并被约束在里面，Escape / 关闭按钮关闭，关闭后焦点回到触发入口。
 /// `guard` 返回 false 时不关闭（有未保存修改时由调用方先确认）。
-export function ModalFrame({ title, eyebrow = 'CLAUDE PICKER', wide = false, onClose, guard, children }) {
-  const node = useRef(null);
-  const opener = useRef(document.activeElement);
-
-  useEffect(() => {
-    const focusable = node.current?.querySelector(
-      'input:not([type=checkbox]):not([type=radio]):not([disabled]), textarea:not([disabled]), select:not([disabled])',
-    );
-    (focusable ?? node.current)?.focus();
-    const previous = opener.current;
-    return () => previous?.focus?.();
-  }, []);
-
+export function ModalFrame({ title, eyebrow = 'CLAUDE PICKER', wide = false, className = '', onClose, guard, children }) {
   async function close() {
     if (guard && !(await guard())) return;
     onClose();
   }
 
-  function onKeyDown(event) {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      close();
-      return;
-    }
-    if (event.key !== 'Tab') return;
-    const items = [
-      ...node.current.querySelectorAll('button, input, textarea, select, a[href], [tabindex]:not([tabindex="-1"])'),
-    ].filter((item) => !item.disabled && item.offsetParent !== null);
-    if (!items.length) return;
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
+  const focus = useDialogFocus(close);
 
   return (
     <div className="modal-backdrop" data-blocking onClick={close}>
       <section
-        ref={node}
-        tabIndex={-1}
-        className={`modal work-modal ${wide ? 'wide' : ''}`}
+        {...focus}
+        className={`modal work-modal ${wide ? 'wide' : ''} ${className}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onClick={(event) => event.stopPropagation()}
-        onKeyDown={onKeyDown}
       >
         <div className="modal-header">
           <div>
-            <div className="eyebrow">{eyebrow}</div>
+            {eyebrow && <div className="eyebrow">{eyebrow}</div>}
             <h2>{title}</h2>
           </div>
           <IconButton icon={X} label="关闭弹窗" onClick={close} />

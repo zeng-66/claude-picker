@@ -300,6 +300,13 @@ final class LoginEnv: @unchecked Sendable {
         if (env["PATH"] ?? "").isEmpty {
             env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         }
+        // nvm 只在 .zshrc 里初始化，登录 shell 的 PATH 没有它；补到末尾，
+        // 让 codex、dsh-tui 这类 npm 全局命令和它们依赖的 node 都能找到，又不覆盖用户已有的顺序。
+        let pathDirs = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        let missingNvm = CliBinaryLocator.nvmBinDirectories().filter { !pathDirs.contains($0) }
+        if !missingNvm.isEmpty {
+            env["PATH"] = (pathDirs + missingNvm).joined(separator: ":")
+        }
         // 测试可以把命令位置指到替身上，不依赖本机登录环境。
         for (key, value) in ProcessInfo.processInfo.environment where key.hasPrefix("CLAUDE_PICKER_") {
             env[key] = value

@@ -111,6 +111,16 @@ do {
     _ = ok("file.write", p.merging(["filePath": "b.txt", "content": ""]) { $1 })
     expect(sh("wc -c < '\(repo)/b.txt'") == "0", "空内容也能保存")
 
+    // Launch Services 打开方式：查询已安装应用与边界检查（不实际拉起外部窗口）
+    let openWithApps = ok("file.openWithApps", p.merging(["filePath": "b.txt"]) { $1 }) as? [String: Any]
+    let appItems = openWithApps?["apps"] as? [[String: Any]] ?? []
+    expect(!appItems.isEmpty, "file.openWithApps 应为文本文件返回已安装 Mac 应用")
+    expect(appItems.first?["isDefault"] as? Bool == true, "系统默认应用应置顶")
+    let (_, escapeApps) = call("file.openWithApps", p.merging(["filePath": "../outside.txt"]) { $1 })
+    expect(escapeApps?.contains("PERMISSION_DENIED") == true, "file.openWithApps 应拒绝越界路径")
+    let (_, badApp) = call("file.openWith", p.merging(["filePath": "b.txt", "appPath": "/Applications/NoSuchAppXYZ.app"]) { $1 })
+    expect(badApp != nil, "file.openWith 对不存在的应用应返回明确错误")
+
     // Stash（StashPage）
     _ = ok("git.stashSave", p.merging(["message": "wip", "includeUntracked": true]) { $1 })
     let stashes = ok("git.stashes", p) as? [[String: Any]]
@@ -156,6 +166,7 @@ do {
     expect(worktrees?.count == 2, "git.worktrees 应有 2 个")
     _ = ok("git.removeWorktree", ["input": ["projectPath": repo, "path": repo + "/.worktrees/wt", "force": false]])
     expect((ok("git.worktrees", p) as? [Any])?.count == 1, "removeWorktree 后应剩 1 个")
+
 
     // 参数缺失给结构化错误，而不是崩溃
     let (_, missing) = call("git.commit", p)
@@ -493,12 +504,99 @@ MainActor.assumeIsolated {
             expect(InteractionMode.resolve(recorded: "structured", provider: .dsh, global: .terminal, overrides: [:]) == .terminal,
                    "DeepSeek 不支持结构化聊天时回到终端")
 
+            // Antigravity 结构化历史载入：从 transcript.jsonl 解析用户消息、助手回复与工具调用。
+            let agyHistFile = tempRoot.appendingPathComponent("agy-transcript.jsonl")
+            let agyLines = [
+                #"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-11-26T08:00:00Z","content":"<USER_REQUEST>\n检查状态\n</USER_REQUEST>\n<ADDITIONAL_METADATA>ignored</ADDITIONAL_METADATA>"}"#,
+                #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-11-26T08:00:05Z","content":"已完成检查。","tool_calls":[{"name":"read_file","args":{"Path":"/tmp/a.txt"}}]}"#,
+            ].joined(separator: "\n")
+            try agyLines.write(to: agyHistFile, atomically: true, encoding: .utf8)
+            let agyHistory = SessionChatHistory.load(provider: .antigravity, fileURL: agyHistFile)
+            expect(agyHistory.count == 3, "Antigravity 历史应解析出 1 条用户消息、1 条回复与 1 条工具记录，实际 \(agyHistory.count)")
+            expect(agyHistory.first?["kind"]?.stringValue == "user"
+                   && agyHistory.first?["payload"]?["text"]?.stringValue == "检查状态",
+                   "Antigravity 历史应剥离 USER_REQUEST 包装")
+            expect(agyHistory.contains { $0["kind"]?.stringValue == "assistant" && $0["payload"]?["text"]?.stringValue == "已完成检查。" },
+                   "Antigravity 历史应保留助手回复")
+            expect(agyHistory.contains { $0["kind"]?.stringValue == "tool_use" && $0["payload"]?["name"]?.stringValue == "read_file" },
+                   "Antigravity 历史应保留工具调用记录")
+
+            // 切换尺寸与挂载：先在无洞口时切到结构化聊天，再切回终端并回报洞口矩形，视图必须挂载且同步非零尺寸。
+            let testShell = ShellView(frame: NSRect(x: 0, y: 0, width: 1000, height: 640))
+            store.onActiveChanged = {
+                testShell.showTerminal(store.activeView, backgroundColor: store.activeTerminalBackground)
+            }
+            let switchToTermErr = switchMode(sid, .terminal)
+            expect(switchToTermErr == nil, "带 ShellView 切到终端：\(switchToTermErr ?? "")")
+            testShell.applyLayout(["terminal": NSNull(), "blocked": false])
+            testShell.applyLayout(["terminal": ["x": 260, "y": 50, "w": 720, "h": 480], "blocked": false])
+            expect(store.active != nil && store.active?.view.superview != nil, "切回终端后 active 视图已挂载")
+            expect((store.active?.view.frame.width ?? 0) > 700 && (store.active?.view.frame.height ?? 0) > 460
+                   && store.active?.view.superview?.isHidden == false,
+                   "回报洞口矩形后终端视图应同步为非零尺寸且可见，实际：\(String(describing: store.active?.view.frame))")
+            store.onActiveChanged = nil
+
             // Codex：CLI 分配线程 ID，占位 ID 换成原始 ID 后事件仍要送达同一个聊天。
             let fakeCodex = tempRoot.appendingPathComponent("fake-codex")
             try FileManager.default.copyItem(atPath: FileManager.default.currentDirectoryPath + "/Tests/WorkRegression/fake-codex-app-server.py",
                                              toPath: fakeCodex.path)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCodex.path)
+            let fakeCodexLog = tempRoot.appendingPathComponent("bridge-fake-codex.log")
+            setenv("FAKE_CODEX_LOG", fakeCodexLog.path, 1)
             setenv("CLAUDE_PICKER_CODEX_BIN", fakeCodex.path, 1)
+
+            // Codex 运行栏 + 快速模式：只读 config.toml 与 models_cache.json，修改写入 codex-runtime.json。
+            let codexHome = tempRoot.appendingPathComponent("codex-home", isDirectory: true)
+            try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+            let sampleToml = """
+            # >>> aimami-relay codex-router top start (DO NOT EDIT MANUALLY)
+            model_provider = "aimai1"
+            # <<< aimami-relay codex-router top end
+            service_tier = "default"
+            model = "aimami_relay_test::gpt-6.2-sol"
+            model_reasoning_effort = "high"
+
+            [mcp_servers.tapd]
+            command = "uvx"
+            """
+            let tomlURL = codexHome.appendingPathComponent("config.toml")
+            try sampleToml.write(to: tomlURL, atomically: true, encoding: .utf8)
+            let modelsCache = """
+            {"models":[
+              {"slug":"gpt-6.2-sol","display_name":"GPT-6.2-Sol","visibility":"list","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"},{"effort":"xhigh"}]},
+              {"slug":"gpt-hidden","display_name":"Hidden","visibility":"hide","supported_reasoning_levels":[{"effort":"low"}]}
+            ]}
+            """
+            try modelsCache.write(to: codexHome.appendingPathComponent("models_cache.json"), atomically: true, encoding: .utf8)
+            setenv("CLAUDE_PICKER_CODEX_DIR", codexHome.path, 1)
+            store.closeTerminal()
+            store.reloadClaudeOptions()
+            _ = ok("app.runtime", ["key": "provider", "value": "codex"])
+            let codexSnapInit = (ok("app.state") as? [String: Any])?["runtime"] as? [String: Any]
+            let codexModels = codexSnapInit?["models"] as? [[String: Any]] ?? []
+            expect(codexSnapInit?["provider"] as? String == "codex"
+                   && codexSnapInit?["supportsFast"] as? Bool == true
+                   && codexSnapInit?["fast"] as? Bool == false
+                   && codexSnapInit?["model"] as? String == "aimami_relay_test::gpt-6.2-sol"
+                   && (codexSnapInit?["modes"] as? [[String: Any]])?.count == 3
+                   && (codexSnapInit?["efforts"] as? [[String: Any]])?.isEmpty == false
+                   && codexModels.contains { $0["id"] as? String == "aimami_relay_test::gpt-6.2-sol" }
+                   && !codexModels.contains { $0["id"] as? String == "gpt-hidden" },
+                   "Codex 运行栏应返回模式/模型/推理强度/快速模式并过滤隐藏模型：\(String(describing: codexSnapInit))")
+            _ = ok("app.runtime", ["key": "mode", "value": "never"])
+            _ = ok("app.runtime", ["key": "model", "value": "gpt-6.2-sol"])
+            _ = ok("app.runtime", ["key": "effort", "value": "xhigh"])
+            _ = ok("app.runtime", ["key": "fast", "value": true])
+            let reloadedCodex = CodexConfig.loadOptions(in: codexHome)
+            expect(reloadedCodex.mode == .never && reloadedCodex.model == "gpt-6.2-sol"
+                   && reloadedCodex.effort == "xhigh" && reloadedCodex.fast == true,
+                   "Codex 运行栏修改应写入 codex-runtime.json")
+            expect((try? String(contentsOf: tomlURL, encoding: .utf8)) == sampleToml,
+                   "不得修改用户 ~/.codex/config.toml")
+            let codexCliFlags = CodexRenderOptions(mode: .onRequest, model: "gpt-6.2-sol", effort: "xhigh", fast: true).flags()
+            expect(codexCliFlags.contains("service_tier=\"fast\"") && codexCliFlags.contains("model=\"gpt-6.2-sol\""),
+                   "Codex 终端启动参数应包含 service_tier=fast 与 model：\(codexCliFlags)")
+
             let codexCreated = ok("session.create", ["projectPath": repo, "title": "Codex 结构化", "mode": "current",
                                                      "provider": "codex", "openMode": "structured"]) as? [String: Any]
             let placeholder = codexCreated?["sessionId"] as? String ?? ""
@@ -506,13 +604,301 @@ MainActor.assumeIsolated {
             expect(spin { (store.structuredTarget?.sid ?? "").hasPrefix("fake-thread-") }, "取得 Codex 原始线程 ID 后改用原始 ID")
             let threadId = store.structuredTarget?.sid ?? ""
             expect(spin { hub.run(threadId)?.phase == .ready }, "回绑后仍收到就绪事件")
+            _ = ok("sessionChat.runtime", ["sessionId": threadId, "key": "fast", "value": "true"])
             _ = ok("sessionChat.send", ["sessionId": threadId, "text": "你好 Codex"])
             expect(spin { (hub.run(threadId)?.events ?? []).contains { $0["kind"]?.stringValue == "assistant"
                                                                    && $0["payload"]?["text"]?.stringValue == "收到：你好 Codex" } },
                    "Codex 回复送达聊天")
+            let codexReqLog = (try? String(contentsOfFile: fakeCodexLog.path, encoding: .utf8)) ?? ""
+            expect(codexReqLog.contains("\"serviceTier\":\"fast\""), "Codex 结构化聊天 turn/start 应携带 serviceTier=fast")
             expect(store.openMode(for: threadId, provider: .codex) == .structured
                    && store.session(id: threadId)?.provider == .codex, "会话记录随原始 ID 迁移")
             unsetenv("CLAUDE_PICKER_CODEX_BIN")
+            unsetenv("FAKE_CODEX_LOG")
+            unsetenv("CLAUDE_PICKER_CODEX_DIR")
+
+            // 额度刷新与 DeepSeek 金额解析 / 底部运行参数栏
+            _ = ok("app.refreshUsage", ["onlyIfEmpty": true])
+            let sampleYaml = """
+            version: 1
+            records:
+              DEEPSEEK_API_KEY:
+                value: "sk-test-deepseek-key"
+            """
+            expect(DeepSeekUsage.extractKeyFromCredentialsYAML(sampleYaml, keyName: "DEEPSEEK_API_KEY") == "sk-test-deepseek-key",
+                   "应从 DSH .credentials.yaml 提取 DEEPSEEK_API_KEY")
+            let sampleBalance = Data(#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"71.43","granted_balance":"0.00","topped_up_balance":"71.43"}]}"#.utf8)
+            let parsedBalance = DeepSeekUsage.parsePayload(sampleBalance)
+            expect(parsedBalance?.currency == "CNY" && parsedBalance?.total == 71.43 && parsedBalance?.toppedUp == 71.43 && parsedBalance?.isAvailable == true,
+                   "应解析 DeepSeek /user/balance 金额响应")
+
+            // Antigravity 配额与积分解析（官方 agy -p /usage 与 /credits 输出形态）
+            let agyUsageJSON = Data(#"""
+            {
+              "command": {
+                "name": "usage",
+                "data": {
+                  "groups": [
+                    {
+                      "name": "Gemini Models",
+                      "buckets": [
+                        {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.64, "reset_time": "2099-12-03T07:56:21Z"},
+                        {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.55, "reset_time": "2099-11-27T06:06:11Z"}
+                      ]
+                    },
+                    {
+                      "name": "Claude and GPT models",
+                      "buckets": [
+                        {"id": "3p-weekly", "window": "weekly", "remaining_fraction": 0, "reset_time": "2099-12-03T11:35:56Z"},
+                        {"id": "3p-5h", "window": "5h", "disabled": true, "remaining_fraction": 0}
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+            """#.utf8)
+            let agyBuckets = AntigravityUsage.parseUsageOutput(agyUsageJSON)
+            expect(agyBuckets.count == 3
+                   && agyBuckets[0].label == "Gemini 每周" && agyBuckets[0].usedPercent == 36
+                   && agyBuckets[1].label == "Gemini 5 小时" && agyBuckets[1].usedPercent == 45
+                   && agyBuckets[2].label == "Claude/GPT 每周" && agyBuckets[2].usedPercent == 100,
+                   "应解析 Antigravity 模型组配额并跳过 disabled 项：\(agyBuckets)")
+            let agyCreditsJSON = Data(#"{"command":{"name":"credits","data":{"remaining_credits":42}}}"#.utf8)
+            expect(AntigravityUsage.parseCreditsOutput(agyCreditsJSON) == 42, "应解析 Antigravity 积分余额")
+            let agyUsageTSV = Data("Gemini Models\tWeekly Limit Remaining\t64%\t2099-12-03T07:56:21Z\nClaude and GPT models\tFive Hour Limit Remaining\tdisabled\t\n".utf8)
+            let agyTsvBuckets = AntigravityUsage.parseUsageOutput(agyUsageTSV)
+            expect(agyTsvBuckets.count == 1 && agyTsvBuckets[0].usedPercent == 36, "TSV 回退解析应跳过 disabled 行")
+
+            let dshDir = tempRoot.appendingPathComponent("dsh-tui-prefs", isDirectory: true)
+            setenv("CLAUDE_PICKER_DSH_TUI_DIR", dshDir.path, 1)
+            store.closeTerminal()
+            hub.terminateAll()
+            _ = ok("app.runtime", ["key": "provider", "value": "dsh"])
+            _ = ok("app.runtime", ["key": "mode", "value": "read-only"])
+            _ = ok("app.runtime", ["key": "model", "value": "deepseek-account/deepseek-flash"])
+            _ = ok("app.runtime", ["key": "effort", "value": "max"])
+            let dshSnap = (ok("app.state") as? [String: Any])?["runtime"] as? [String: Any]
+            expect(dshSnap?["provider"] as? String == "dsh"
+                   && dshSnap?["mode"] as? String == "read-only"
+                   && dshSnap?["model"] as? String == "deepseek-account/deepseek-flash"
+                   && dshSnap?["effort"] as? String == "max",
+                   "DeepSeek 底部运行栏应返回当前模式、模型与推理强度：\(String(describing: dshSnap))")
+            expect((dshSnap?["modes"] as? [[String: Any]])?.isEmpty == false
+                   && (dshSnap?["models"] as? [[String: Any]])?.isEmpty == false
+                   && (dshSnap?["efforts"] as? [[String: Any]])?.isEmpty == false,
+                   "DeepSeek 底部运行栏应提供可选列表")
+            let reloadedDsh = DeepSeekConfig.loadOptions(in: dshDir)
+            expect(reloadedDsh.mode == .readOnly
+                   && reloadedDsh.model == "deepseek-account/deepseek-flash"
+                   && reloadedDsh.effort == .max,
+                   "DeepSeek 底部运行栏修改应持久化到 dsh-tui 偏好目录")
+            unsetenv("CLAUDE_PICKER_DSH_TUI_DIR")
+
+            // 四引擎（Claude / Antigravity / Codex / DeepSeek）4 × 3 = 12 种会话接力全组合回归
+            do {
+                store.closeTerminal()
+                hub.terminateAll()
+                let handoffDir = tempRoot.appendingPathComponent("handoff-matrix", isDirectory: true)
+                let dshHome = handoffDir.appendingPathComponent("dsh-home", isDirectory: true)
+                let dshProjDir = dshHome.appendingPathComponent("storages/session_projcache/sessions", isDirectory: true)
+                let dshTuiDir = handoffDir.appendingPathComponent("dsh-tui", isDirectory: true)
+                try FileManager.default.createDirectory(at: dshProjDir, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(at: dshTuiDir, withIntermediateDirectories: true)
+                setenv("DSH_HOME", dshHome.path, 1)
+                setenv("CLAUDE_PICKER_DSH_TUI_DIR", dshTuiDir.path, 1)
+                setenv("CLAUDE_PICKER_CLAUDE_BIN", fakeShell.path, 1)
+                setenv("CLAUDE_PICKER_AGY_BIN", fakeShell.path, 1)
+                setenv("CLAUDE_PICKER_CODEX_BIN", fakeShell.path, 1)
+                setenv("CLAUDE_PICKER_DSH_TUI_BIN", fakeShell.path, 1)
+                defer {
+                    unsetenv("DSH_HOME")
+                    unsetenv("CLAUDE_PICKER_DSH_TUI_DIR")
+                    unsetenv("CLAUDE_PICKER_CLAUDE_BIN")
+                    unsetenv("CLAUDE_PICKER_AGY_BIN")
+                    unsetenv("CLAUDE_PICKER_CODEX_BIN")
+                    unsetenv("CLAUDE_PICKER_DSH_TUI_BIN")
+                }
+
+                let claudeFile = handoffDir.appendingPathComponent("src-claude.jsonl")
+                try "{\"type\":\"user\",\"cwd\":\"\(repo)\",\"message\":{\"content\":\"Claude源问题\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":\"Claude源回答\"}}\n"
+                    .write(to: claudeFile, atomically: true, encoding: .utf8)
+
+                let agyFile = handoffDir.appendingPathComponent("src-agy.jsonl")
+                try "{\"type\":\"USER_INPUT\",\"source\":\"USER_EXPLICIT\",\"content\":\"<USER_REQUEST>Agy源问题</USER_REQUEST>\"}\n{\"type\":\"PLANNER_RESPONSE\",\"content\":\"Agy源回答\"}\n"
+                    .write(to: agyFile, atomically: true, encoding: .utf8)
+
+                let codexFile = handoffDir.appendingPathComponent("src-codex.jsonl")
+                try [
+                    ##"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\nignored"},{"type":"input_text","text":"Codex源问题"}]}}"##,
+                    ##"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Codex源回答"}]}}"##,
+                ].joined(separator: "\n").write(to: codexFile, atomically: true, encoding: .utf8)
+
+                let dshUuid = UUID().uuidString.lowercased()
+                let dshSid = "session-\(dshUuid)"
+                let dshFile = dshProjDir.appendingPathComponent("\(dshSid).json")
+                let dshPayload: [String: Any] = [
+                    "version": 1,
+                    "record": [
+                        "identity": ["cwd": repo, "createdAt": Date().timeIntervalSince1970 * 1000],
+                        "rows": [
+                            "turnOutline": [
+                                "ver": 1,
+                                "seq": 1,
+                                "val": [
+                                    "turns": [
+                                        ["turn": 1, "seq": 2, "prompt": "DeepSeek源问题", "response": "DeepSeek源回答"],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ]
+                try JSONSerialization.data(withJSONObject: dshPayload).write(to: dshFile)
+                let dshIndex: [String: Any] = [
+                    "entries": [
+                        dshSid: [
+                            "derived": ["modifiedAt": Date().timeIntervalSince1970 * 1000, "title": "DeepSeek测试会话"],
+                        ],
+                    ],
+                ]
+                try JSONSerialization.data(withJSONObject: dshIndex).write(to: dshTuiDir.appendingPathComponent("session-index.json"))
+
+                let sources: [(provider: AgentProvider, sid: String, marker: String, file: URL)] = [
+                    (.claude, "handoff-src-claude", "Claude源回答", claudeFile),
+                    (.antigravity, "handoff-src-agy", "Agy源回答", agyFile),
+                    (.codex, "handoff-src-codex", "Codex源回答", codexFile),
+                    (.dsh, dshSid, "DeepSeek源回答", dshFile),
+                ]
+                for item in sources {
+                    store.projects[1].sessions.insert(
+                        Session(id: item.sid, cwd: repo, title: "\(item.provider.shortLabel)源会话",
+                                summary: nil, date: Date(), fileURL: item.file, provider: item.provider),
+                        at: 0
+                    )
+                }
+
+                var matrixCount = 0
+                for src in sources {
+                    for dst in AgentProvider.allCases where dst != src.provider {
+                        let envelope = HandoffBuilder.fromSessionFile(
+                            sourceProvider: src.provider,
+                            targetProvider: dst,
+                            title: "\(src.provider.shortLabel)源会话",
+                            cwd: repo,
+                            fileURL: src.file
+                        )
+                        expect(envelope.contains(src.marker), "\(src.provider.rawValue) → \(dst.rawValue) 信封应含源对话内容")
+                        let res = ok("session.handoff", [
+                            "sessionId": src.sid,
+                            "sourceProvider": src.provider.rawValue,
+                            "targetProvider": dst.rawValue,
+                            "projectPath": repo,
+                            "cwd": repo,
+                        ]) as? [String: Any]
+                        let newSid = res?["sessionId"] as? String ?? ""
+                        expect(!newSid.isEmpty && res?["provider"] as? String == dst.rawValue,
+                               "session.handoff 应支持 \(src.provider.rawValue) → \(dst.rawValue)")
+                        let rows = ((ok("app.state") as? [String: Any])?["projects"] as? [[String: Any]])?[1]["sessions"] as? [[String: Any]]
+                        let newRow = rows?.first { $0["id"] as? String == newSid }
+                        expect(newRow?["provider"] as? String == dst.rawValue
+                               && (newRow?["handoffFrom"] as? String)?.hasPrefix(src.provider.shortLabel) == true,
+                               "接力新会话快照应标记 \(src.provider.shortLabel) 来源与目标 \(dst.rawValue)")
+                        store.closeTerminal()
+                        matrixCount += 1
+                    }
+                }
+                expect(matrixCount == 12, "应覆盖全部 12 种引擎接力组合，实际 \(matrixCount)")
+
+                // 单会话连续接力合并验证：Claude → Antigravity → Codex → DeepSeek → Claude 始终保持 1 条侧栏会话。
+                let chainRootId = "unified-chain-root"
+                let countBeforeChain = store.projects[1].sessions.count
+                store.projects[1].sessions.insert(
+                    Session(id: chainRootId, cwd: repo, title: "统一接力话题", summary: nil, date: Date(), fileURL: claudeFile, provider: .claude),
+                    at: 0
+                )
+                let expectedCount = countBeforeChain + 1
+                let h1 = ok("session.handoff", ["sessionId": chainRootId, "sourceProvider": "claude", "targetProvider": "antigravity", "projectPath": repo, "cwd": repo]) as? [String: Any]
+                let h1Id = h1?["sessionId"] as? String ?? ""
+                expect(store.projects[1].sessions.count == expectedCount, "第 1 次接力后侧栏会话数应保持不变，实际 \(store.projects[1].sessions.count) vs \(expectedCount)")
+
+                // 模拟 Agy 接力段后继续接力到 Codex → DeepSeek → Claude
+                let h2 = ok("session.handoff", ["sessionId": h1Id, "sourceProvider": "antigravity", "targetProvider": "codex", "projectPath": repo, "cwd": repo]) as? [String: Any]
+                let h2Id = h2?["sessionId"] as? String ?? ""
+                expect(store.projects[1].sessions.count == expectedCount, "第 2 次接力后侧栏会话数应保持不变")
+
+                // 在同一会话内切回历史段（Claude），不应新增侧栏行，且 threadId 保持指向当前主会话。
+                _ = ok("session.open", ["projectPath": repo, "cwd": repo, "sessionId": chainRootId, "provider": "claude"])
+                let peekState = ok("app.state") as? [String: Any]
+                let peekActive = peekState?["active"] as? [String: Any]
+                expect(peekActive?["sessionId"] as? String == chainRootId && peekActive?["threadId"] as? String == h2Id,
+                       "切回历史段查看时 sessionId 应为历史段且 threadId 保持为主会话：\(String(describing: peekActive))")
+                expect(((peekActive?["handoffChain"] as? [[String: Any]])?.count ?? 0) >= 3,
+                       "接力链应至少包含 3 段：\(String(describing: peekActive?["handoffChain"]))")
+
+                // 切回仍在运行（或刚退出但面板仍在）的 pending Codex 段，不应报「会话尚未取得原始 ID，无法恢复」。
+                _ = ok("session.open", ["projectPath": repo, "cwd": repo, "sessionId": h2Id, "provider": "codex"])
+                expect(store.activeSessionId == h2Id, "应能切回 pending 接力段查看终端")
+
+                // 继续从 Codex 接力到 DeepSeek 再接力回 Claude
+                let h3 = ok("session.handoff", ["sessionId": h2Id, "sourceProvider": "codex", "targetProvider": "dsh", "projectPath": repo, "cwd": repo]) as? [String: Any]
+                let h3Id = h3?["sessionId"] as? String ?? ""
+                let h4 = ok("session.handoff", ["sessionId": h3Id, "sourceProvider": "dsh", "targetProvider": "claude", "projectPath": repo, "cwd": repo]) as? [String: Any]
+                let h4Id = h4?["sessionId"] as? String ?? ""
+                expect(store.projects[1].sessions.count == expectedCount, "连续 4 次跨引擎接力后侧栏仍只应有 1 条会话")
+                let finalRows = ((ok("app.state") as? [String: Any])?["projects"] as? [[String: Any]])?[1]["sessions"] as? [[String: Any]]
+                let finalRow = finalRows?.first { $0["id"] as? String == h4Id }
+                expect(((finalRow?["handoffChain"] as? [[String: Any]])?.count ?? 0) >= 4, "主会话快照应携带完整接力链")
+
+                // Codex 连续接力不丢失 <thread-handoff> 上下文且不产生嵌套标签；DeepSeek v4 JSONL 正常抽取轮次。
+                let chainedCodex = tempRoot.appendingPathComponent("chained-codex.jsonl")
+                let firstEnvelope = HandoffBuilder.fromSessionFile(sourceProvider: .claude, targetProvider: .codex, title: "链式测试", cwd: repo, fileURL: claudeFile)
+                let chainedCodexRow: [String: Any] = [
+                    "type": "response_item",
+                    "payload": [
+                        "type": "message",
+                        "role": "user",
+                        "content": [["type": "input_text", "text": firstEnvelope]],
+                    ],
+                ]
+                let chainedCodexReply: [String: Any] = [
+                    "type": "response_item",
+                    "payload": [
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [["type": "output_text", "text": "Codex接力后确认完成"]],
+                    ],
+                ]
+                let codexChainedLines = [chainedCodexRow, chainedCodexReply].compactMap { obj -> String? in
+                    guard let d = try? JSONSerialization.data(withJSONObject: obj) else { return nil }
+                    return String(data: d, encoding: .utf8)
+                }.joined(separator: "\n")
+                try codexChainedLines.write(to: chainedCodex, atomically: true, encoding: .utf8)
+                let secondEnvelope = HandoffBuilder.fromSessionFile(sourceProvider: .codex, targetProvider: .antigravity, title: "链式测试", cwd: repo, fileURL: chainedCodex)
+                expect(secondEnvelope.contains("Claude源回答") && secondEnvelope.contains("Codex接力后确认完成"),
+                       "Codex 连续接力应保留更早轮次与 Codex 回复")
+                expect(secondEnvelope.components(separatedBy: "<thread-handoff>").count == 2,
+                       "连续接力信封不得嵌套多层 <thread-handoff> 标签")
+
+                // DeepSeek v4 session.v4.jsonl 抽取测试
+                let encodedRepo = "--" + repo.trimmingCharacters(in: CharacterSet(charactersIn: "/")).replacingOccurrences(of: "/", with: "-") + "--"
+                let dshV4Sid = "session-\(UUID().uuidString.lowercased())"
+                let dshV4Dir = dshHome.appendingPathComponent("sessions/\(encodedRepo)/\(dshV4Sid)", isDirectory: true)
+                try FileManager.default.createDirectory(at: dshV4Dir, withIntermediateDirectories: true)
+                let dshV4Lines = [
+                    #"{"type":"user/message","seq":1,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"DeepSeek v4 用户提问"}]}}"#,
+                    #"{"type":"user/message","seq":2,"data":{"source":{"kind":"system"},"content":[{"type":"text","text":"<system-reminder>ignored</system-reminder>"}]}}"#,
+                    #"{"type":"assistant/message","seq":3,"data":{"message":{"role":"assistant","content":[{"type":"reasoning","text":"思考过程"},{"type":"text","text":"DeepSeek v4 助手回答"}]}}}"#,
+                ].joined(separator: "\n")
+                try dshV4Lines.write(to: dshV4Dir.appendingPathComponent("session.v4.jsonl"), atomically: true, encoding: .utf8)
+                let dshV4Envelope = HandoffBuilder.fromSessionFile(sourceProvider: .dsh, targetProvider: .codex, title: "v4测试", cwd: repo, fileURL: nil, sessionId: dshV4Sid)
+                expect(dshV4Envelope.contains("DeepSeek v4 用户提问") && dshV4Envelope.contains("DeepSeek v4 助手回答") && !dshV4Envelope.contains("<system-reminder>"),
+                       "DeepSeek v4 会话应提取真实用户/助手轮次并过滤系统提醒")
+
+                // 删除统一接力会话应同步移除
+                _ = ok("app.remove", ["projectPath": repo, "sessionId": h4Id])
+                expect(store.projects[1].sessions.count == countBeforeChain, "移除统一接力会话后应恢复原会话数")
+            }
 
             hub.terminateAll()
             expect(!hub.isLive(sid) && !SessionOwnership.shared.heldByTerminal(sid), "退出时结束执行器并释放会话")

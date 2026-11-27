@@ -1,5 +1,5 @@
 // 工作区：变更文件（未暂存 / 已暂存）+ 提交表单 + 差异 / 预览 / 编辑。
-import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useId, useRef, useState } from 'react';
 import {
   CaretDoubleLeft,
   CaretDown,
@@ -24,6 +24,7 @@ const MarkdownRenderer = lazy(() => import('../MarkdownRenderer.jsx'));
 
 const DEFAULT_ROWS = [46, 24, 30];
 const DEFAULT_WIDTH = 228;
+const FILE_VIEWS = ['差异', '预览', '编辑'];
 const EDIT_LIMIT = 1024 * 1024;
 
 function isConflict(file) {
@@ -57,6 +58,7 @@ function letterClass(entry) {
 }
 
 export default function WorkspaceTab({ projectPath, status, statusError, stamp, refresh, notify }) {
+  const fileViewId = useId();
   const [query, setQuery] = useState('');
   const [message, setMessage] = useState('');
   const [amend, setAmend] = useState(false);
@@ -362,30 +364,6 @@ export default function WorkspaceTab({ projectPath, status, statusError, stamp, 
     const ready = diff && diff.key === selectedKey;
     return (
       <>
-        <div className="diff-heading">
-          <span>
-            <FileCode size={16} />
-            {selected ? baseName(selected.path.replace(/\/$/, '')) : '选择文件查看差异'}
-          </span>
-          <div className="segmented">
-            {['并排', '统一'].map((mode) => (
-              <button
-                className={diffMode === mode ? 'chosen' : ''}
-                onClick={() => setDiffMode(mode)}
-                key={mode}
-              >
-                {mode}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="file-path">
-          {selected.oldPath ? `${selected.oldPath} → ${selected.path}` : selected.path}
-          <span>
-            <b className="green">+{ready ? (diff.additions ?? 0) : 0}</b>
-            <b className="red">−{ready ? (diff.deletions ?? 0) : 0}</b>
-          </span>
-        </div>
         {!ready ? (
           <div className="pane-note">正在读取差异…</div>
         ) : diff.error ? (
@@ -515,42 +493,68 @@ export default function WorkspaceTab({ projectPath, status, statusError, stamp, 
           <p>{statusError ?? '下一次修改会显示在这里'}</p>
         </div>
       );
+    const path = selected.oldPath ? `${selected.oldPath} → ${selected.path}` : selected.path;
+    const currentView = FILE_VIEWS.indexOf(fileView);
+    const ready = diff?.key === selectedKey && !diff.error;
     return (
       <>
-        <div className="file-view-tabs" role="tablist" aria-label="文件查看方式">
-          {['差异', '预览', '编辑'].map((view) => (
-            <button
-              key={view}
-              role="tab"
-              aria-selected={fileView === view}
-              className={fileView === view ? 'selected' : ''}
-              onClick={() => setFileView(view)}
-            >
-              {view}
-            </button>
-          ))}
-          {fileView === '编辑' && (
-            <button className="save-file" disabled={!hasEdits || saving} onClick={() => saveFile()}>
-              <Check size={13} />
-              {saving ? '正在保存…' : hasEdits ? '保存修改' : '已保存'}
-            </button>
-          )}
-        </div>
-        {fileView === '差异' ? (
-          renderDiff()
-        ) : (
-          <>
-            <div className="diff-heading">
-              <span>
-                <FileText size={16} />
-                {baseName(selected.path)}
-              </span>
-              <small>{fileView === '编辑' ? '编辑 · ⌘S 保存' : '文件预览'}</small>
+        <header className="workspace-file-header">
+          <div className="workspace-file-identity">
+            <FileText size={18} aria-hidden="true" />
+            <div>
+              <h2 title={baseName(selected.path)}>{baseName(selected.path)}</h2>
+              <p title={path}>{path}</p>
             </div>
-            <div className="file-path">{selected.path}</div>
-            {renderContent()}
-          </>
-        )}
+            {fileView === '差异' && ready && (
+              <span className="workspace-file-counts" aria-label={`新增 ${diff.additions ?? 0} 行，删除 ${diff.deletions ?? 0} 行`}>
+                <b className="green">+{diff.additions ?? 0}</b>
+                <b className="red">−{diff.deletions ?? 0}</b>
+              </span>
+            )}
+          </div>
+          <div className="workspace-file-toolbar">
+            <div className="file-view-tabs" role="tablist" aria-label="文件查看方式"
+              onKeyDown={(event) => {
+                const next = {
+                  ArrowLeft: (currentView + FILE_VIEWS.length - 1) % FILE_VIEWS.length,
+                  ArrowRight: (currentView + 1) % FILE_VIEWS.length,
+                  Home: 0,
+                  End: FILE_VIEWS.length - 1,
+                }[event.key];
+                if (next === undefined) return;
+                event.preventDefault();
+                setFileView(FILE_VIEWS[next]);
+                event.currentTarget.children[next]?.focus();
+              }}>
+              {FILE_VIEWS.map((view, index) => (
+                <button type="button" key={view} role="tab" id={`${fileViewId}-tab-${index}`}
+                  aria-selected={fileView === view} aria-controls={`${fileViewId}-panel`}
+                  tabIndex={fileView === view ? 0 : -1}
+                  className={fileView === view ? 'selected' : ''} onClick={() => setFileView(view)}>
+                  {view}
+                </button>
+              ))}
+            </div>
+            {fileView === '差异' && (
+              <div className="segmented workspace-diff-mode" role="group" aria-label="差异布局">
+                {['并排', '统一'].map((mode) => (
+                  <button type="button" key={mode} aria-pressed={diffMode === mode}
+                    onClick={() => setDiffMode(mode)}>{mode}</button>
+                ))}
+              </div>
+            )}
+            {fileView === '编辑' && (
+              <button className="save-file" disabled={!hasEdits || saving} onClick={() => saveFile()}>
+                <Check size={13} />
+                {saving ? '正在保存…' : hasEdits ? '保存修改' : '已保存'}
+              </button>
+            )}
+          </div>
+        </header>
+        <div className="workspace-file-content" role="tabpanel" id={`${fileViewId}-panel`}
+          aria-labelledby={`${fileViewId}-tab-${currentView}`}>
+          {fileView === '差异' ? renderDiff() : renderContent()}
+        </div>
       </>
     );
   }
@@ -582,6 +586,7 @@ export default function WorkspaceTab({ projectPath, status, statusError, stamp, 
               <button
                 className="file-select"
                 title={entry.path}
+                aria-current={selected?.path === entry.path && selected.group === entry.group ? 'true' : undefined}
                 onClick={() => {
                   setPicked({ path: entry.path, group: entry.group });
                   setFileView('差异');

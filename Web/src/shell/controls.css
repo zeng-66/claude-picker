@@ -1,0 +1,156 @@
+/* Shared surfaces and control states for the desktop shell and H5 prototype. */
+.app.module-shell {
+  --surface-base: #222222;
+  --surface-raised: #262424;
+  --control-hover: #3A2F2B;
+  --control-border: #383838;
+  --control-selected: #4A3D36;
+  --control-text: #e9dfd7;
+  --control-focus: #e6a987;
+  --control-radius: 6px;
+  --line: var(--control-border);
+  background: var(--surface-base);
+  color-scheme: dark;
+}
+
+.module-shell :is(.titlebar, .terminal-pane, .workbench, .module-page, .review-page, .session-chat) {
+  background-color: var(--surface-base);
+}
+/* 原生窗口中 SwiftTerm 终端位于透明 WKWebView 下方：存在终端洞口时必须保持透明，避免盖住原生终端。 */
+:root.native .app.module-shell:has([data-terminal-hole]),
+:root.native .module-shell .layout:has([data-terminal-hole]),
+:root.native .module-shell .workspace:has([data-terminal-hole]),
+:root.native .module-shell .terminal-pane:has([data-terminal-hole]),
+:root.native .floating-console:has([data-terminal-hole]) .console-output {
+  background: transparent;
+  background-color: transparent;
+}
+.module-shell :is(.sidebar, .module-sidebar) {
+  background: var(--surface-raised);
+  border-color: var(--control-border);
+}
+.module-shell :is(
+  .modal, .dropdown, .git-scope-popover, .cli-usage-panel, .runtime-menu,
+  .settings-card, .terminal-example-command, .module-page-header, .review-diff-controls
+) {
+  background: var(--surface-raised);
+  border-color: var(--control-border);
+}
+.module-shell :is(.settings-card, .terminal-example-command) {
+  background-color: var(--surface-base);
+}
+
+.module-shell :is(button, input, select, textarea, summary, [role="tab"]):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 1px;
+}
+.module-shell button:disabled {
+  cursor: default;
+}
+.module-shell :is(
+  .icon-button, .git-scope-trigger, .branch-picker, .settings-card button,
+  .terminal-file-toolbar button, .settings-actions button, .modal-footer button, .page-heading button
+) {
+  border-radius: var(--control-radius);
+}
+.module-shell :is(
+  .module-sidebar nav button, .settings-layout nav button, .topnav button,
+  .session-row, .session-branch-row, .project-row, .cli-usage-row, .branch-options button,
+  .dropdown > button, .terminal-example-command summary
+):hover {
+  background-color: var(--control-hover);
+  color: var(--control-text);
+}
+.module-shell :is(
+  .topnav button.active, .module-sidebar nav button.active, .settings-layout nav button.active,
+  .session-row.selected, .git-nav button.selected, .branch-options button.current,
+  .segmented button.chosen, .segmented button[aria-pressed="true"],
+  .terminal-file-subnav button[aria-pressed="true"]
+) {
+  background: var(--control-selected);
+  color: var(--control-text);
+}
+.module-shell :is(
+  .modal-footer, .settings-actions, .page-heading, .module-page-header, .terminal-file-toolbar
+) > button:not(.icon-button, .primary) {
+  background: var(--surface-raised);
+  border-color: var(--control-border);
+}
+.module-shell :is(
+  .git-scope-trigger, .branch-picker, .terminal-open-with > button, .segmented
+) {
+  background-color: var(--surface-raised);
+  border-color: var(--control-border);
+}
+.module-shell :is(
+  .git-scope-trigger, .branch-picker, .terminal-open-with > button,
+  .modal-footer > button:not(.primary), .page-heading > button, .module-page-header > button, .icon-button
+):is(:hover, [aria-expanded="true"]):not(:disabled) {
+  background-color: var(--control-hover);
+  color: var(--control-text);
+}
+.module-shell button.primary {
+  background: var(--control-selected);
+  color: var(--control-text);
+  border: 1px solid var(--control-focus);
+  border-radius: var(--control-radius);
+}
+.module-shell button.primary:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+.module-shell button.primary:disabled {
+  background: var(--surface-raised);
+  border-color: var(--control-border);
+  color: var(--control-text);
+  opacity: 0.55;
+}
+
+.module-shell :is(.field, .settings-card, .workspace-row) :is(
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]),
+  select, textarea
+) {
+  color: var(--control-text);
+  background-color: var(--surface-base);
+  border-color: var(--control-border);
+  border-radius: var(--control-radius);
+}
+.module-shell :is(.field, .settings-card, .workspace-row) select {
+  font: inherit;
+}
+.module-shell :is(input[type="checkbox"], input[type="radio"], input[type="range"]) {
+  accent-color: var(--control-focus);
+}
+.module-shell .cli-usage-trigger {
+  background: var(--surface-base);
+  border-color: var(--control-border);
+}
+.module-shell .cli-usage-trigger:is(:hover, [aria-expanded="true"]) {
+  background: var(--control-hover);
+}
+.module-shell .module-brand-icon {
+  display: inline-grid;
+  flex: 0 0 30px;
+  height: 30px;
+  place-items: center;
+  color: var(--control-focus);
+  background: var(--control-selected);
+  border-radius: var(--control-radius);
+}
+.module-shell .module-sidebar.collapsed .module-brand-icon {
+  flex-basis: 27px;
+  height: 27px;
+}
+.module-shell .control-select-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.module-shell .control-select-with-icon > :is(svg, img) {
+  flex: none;
+  color: var(--control-focus);
+}
+.module-shell .control-select-with-icon > select {
+  flex: 1;
+  min-width: 0;
+}

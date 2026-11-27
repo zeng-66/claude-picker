@@ -4,6 +4,20 @@ import EngineIcon from './EngineIcon.jsx';
 import React from 'react';
 import { ArrowUp, CaretDown, Check, Lightning } from '@phosphor-icons/react';
 import { request } from './bridge.js';
+import { useMenuFocus } from './ui.jsx';
+
+export const ENGINE_OPTIONS = [
+  { id: 'claude', label: 'Claude Code' },
+  { id: 'antigravity', label: 'Antigravity' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'dsh', label: 'DeepSeek' },
+];
+export const ENGINE_LABEL = Object.fromEntries(ENGINE_OPTIONS.map((item) => [item.id, item.label]));
+
+function RuntimeMenu({ label, onClose, children }) {
+  const focus = useMenuFocus(onClose);
+  return <div {...focus} className="runtime-popover" role="menu" aria-label={label}>{children}</div>;
+}
 
 export function contextNumbers(context) {
   const total = context?.total || 200000;
@@ -56,15 +70,12 @@ export default function Composer({
 }) {
   const currentProvider = runtime.provider ?? 'claude';
   const providerLabel = { antigravity: 'Antigravity', codex: 'Codex', dsh: 'DeepSeek' }[currentProvider] ?? 'Claude';
-  const otherProvider = currentProvider === 'antigravity' ? 'claude' : 'antigravity';
-  const otherLabel = otherProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
-  const otherAvailable =
-    providers.length === 0 || providers.some((p) => p.id === otherProvider && p.available);
+  const handoffTargets = ENGINE_OPTIONS.filter((item) => item.id !== currentProvider);
   const settings = [
-    { id: 'mode', label: '模式', value: runtime.mode, values: runtime.modes },
-    { id: 'model', label: '模型', value: runtime.model, values: runtime.models },
-    { id: 'effort', label: '推理强度', value: runtime.effort, values: runtime.efforts },
-  ];
+    { id: 'mode', label: '模式', value: runtime.mode, values: runtime.modes ?? [] },
+    { id: 'model', label: '模型', value: runtime.model, values: runtime.models ?? [] },
+    { id: 'effort', label: '推理强度', value: runtime.effort, values: runtime.efforts ?? [] },
+  ].filter((setting) => setting.values.length > 0);
   const labelOf = (setting) =>
     setting.values.find((item) => item.id === setting.value)?.label ?? setting.value;
 
@@ -97,6 +108,7 @@ export default function Composer({
               className="runtime-value provider-pill"
               title="执行引擎"
               aria-label={`引擎：${providerLabel}`}
+              aria-haspopup="menu"
               aria-expanded={runtimeMenu === 'provider'}
               onClick={() => onRuntimeMenu(runtimeMenu === 'provider' ? null : 'provider')}
             >
@@ -104,51 +116,52 @@ export default function Composer({
               {providerLabel}
             </button>
             {runtimeMenu === 'provider' && (
-              <div className="runtime-popover" role="menu" aria-label="选择执行引擎">
-                {active?.sessionId ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={!otherAvailable}
-                    onClick={() => {
-                      onRuntimeMenu(null);
-                      onHandoff?.(otherProvider);
-                    }}
-                  >
-                    <EngineIcon id={otherProvider} />
-                转到 {otherLabel} 接力继续…
-                  </button>
-                ) : (
-                  [
-                    { id: 'claude', label: 'Claude Code' },
-                    { id: 'antigravity', label: 'Antigravity' },
-                    { id: 'codex', label: 'Codex' },
-                    { id: 'dsh', label: 'DeepSeek' },
-                  ].map((item) => {
-                    const ok =
-                      providers.length === 0 ||
-                      providers.some((p) => p.id === item.id && p.available);
-                    return (
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        key={item.id}
-                        disabled={!ok}
-                        aria-checked={currentProvider === item.id}
-                        onClick={() => {
-                          request('app.runtime', { key: 'provider', value: item.id });
-                          onRuntimeMenu(null);
-                        }}
-                      >
-                        <EngineIcon id={item.id} />
-                        {item.label}
-                        {!ok ? '（未安装）' : ''}
-                        {currentProvider === item.id && <Check size={12} />}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
+              <RuntimeMenu label="选择执行引擎" onClose={() => onRuntimeMenu(null)}>
+                {active?.sessionId
+                  ? handoffTargets.map((item) => {
+                      const ok =
+                        providers.length === 0 ||
+                        providers.some((p) => p.id === item.id && p.available);
+                      return (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          key={item.id}
+                          disabled={!ok}
+                          onClick={() => {
+                            onRuntimeMenu(null);
+                            onHandoff?.(item.id);
+                          }}
+                        >
+                          <EngineIcon id={item.id} />
+                          转到 {item.label} 接力继续…{!ok ? '（未安装）' : ''}
+                        </button>
+                      );
+                    })
+                  : ENGINE_OPTIONS.map((item) => {
+                      const ok =
+                        providers.length === 0 ||
+                        providers.some((p) => p.id === item.id && p.available);
+                      return (
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          key={item.id}
+                          disabled={!ok}
+                          aria-checked={currentProvider === item.id}
+                          onClick={() => {
+                            request('app.runtime', { key: 'provider', value: item.id });
+                            onRuntimeMenu(null);
+                          }}
+                        >
+                          <EngineIcon id={item.id} />
+                          {item.label}
+                          {!ok ? '（未安装）' : ''}
+                          {currentProvider === item.id && <Check size={12} />}
+                        </button>
+                      );
+                    })}
+              </RuntimeMenu>
             )}
           </div>
           {settings.map((setting) => (
@@ -158,13 +171,14 @@ export default function Composer({
                 className="runtime-value"
                 title={setting.label}
                 aria-label={`${setting.label}：${labelOf(setting)}`}
+                aria-haspopup="menu"
                 aria-expanded={runtimeMenu === setting.id}
                 onClick={() => onRuntimeMenu(runtimeMenu === setting.id ? null : setting.id)}
               >
                 {labelOf(setting)}
               </button>
               {runtimeMenu === setting.id && (
-                <div className="runtime-popover" role="menu" aria-label={`选择${setting.label}`}>
+                <RuntimeMenu label={`选择${setting.label}`} onClose={() => onRuntimeMenu(null)}>
                   {setting.values.map((item) => (
                     <button
                       type="button"
@@ -180,7 +194,7 @@ export default function Composer({
                       {setting.value === item.id && <Check size={12} />}
                     </button>
                   ))}
-                </div>
+                </RuntimeMenu>
               )}
             </div>
           ))}
@@ -217,15 +231,12 @@ export function RuntimeBar({
 }) {
   const currentProvider = runtime.provider ?? 'claude';
   const providerLabel = { antigravity: 'Antigravity', codex: 'Codex', dsh: 'DeepSeek' }[currentProvider] ?? 'Claude';
-  const otherProvider = currentProvider === 'antigravity' ? 'claude' : 'antigravity';
-  const otherLabel = otherProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
-  const otherAvailable =
-    providers.length === 0 || providers.some((p) => p.id === otherProvider && p.available);
+  const handoffTargets = ENGINE_OPTIONS.filter((item) => item.id !== currentProvider);
   const settings = [
-    { id: 'mode', label: '模式', value: runtime.mode, values: runtime.modes },
-    { id: 'model', label: '模型', value: runtime.model, values: runtime.models },
-    { id: 'effort', label: '推理强度', value: runtime.effort, values: runtime.efforts },
-  ];
+    { id: 'mode', label: '模式', value: runtime.mode, values: runtime.modes ?? [] },
+    { id: 'model', label: '模型', value: runtime.model, values: runtime.models ?? [] },
+    { id: 'effort', label: '推理强度', value: runtime.effort, values: runtime.efforts ?? [] },
+  ].filter((setting) => setting.values.length > 0);
   const labelOf = (setting) => setting.values.find((item) => item.id === setting.value)?.label ?? setting.value;
   return (
     <div className="runtime-bar runtime-options" role="toolbar" aria-label="运行参数">
@@ -234,6 +245,7 @@ export function RuntimeBar({
           type="button"
           className="runtime-bar-item"
           aria-label={`引擎：${providerLabel}`}
+          aria-haspopup="menu"
           aria-expanded={runtimeMenu === 'provider'}
           onClick={() => onRuntimeMenu(runtimeMenu === 'provider' ? null : 'provider')}
         >
@@ -245,51 +257,52 @@ export function RuntimeBar({
           <CaretDown size={10} />
         </button>
         {runtimeMenu === 'provider' && (
-          <div className="runtime-popover" role="menu" aria-label="选择执行引擎">
-            {active?.sessionId ? (
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!otherAvailable}
-                onClick={() => {
-                  onRuntimeMenu(null);
-                  onHandoff?.(otherProvider);
-                }}
-              >
-                <EngineIcon id={otherProvider} />
-                转到 {otherLabel} 接力继续…
-              </button>
-            ) : (
-              [
-                { id: 'claude', label: 'Claude Code' },
-                { id: 'antigravity', label: 'Antigravity' },
-                { id: 'codex', label: 'Codex' },
-                { id: 'dsh', label: 'DeepSeek' },
-              ].map((item) => {
-                const ok =
-                  providers.length === 0 ||
-                  providers.some((p) => p.id === item.id && p.available);
-                return (
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    key={item.id}
-                    disabled={!ok}
-                    aria-checked={currentProvider === item.id}
-                    onClick={() => {
-                      request('app.runtime', { key: 'provider', value: item.id });
-                      onRuntimeMenu(null);
-                    }}
-                  >
-                    <EngineIcon id={item.id} />
-                    {item.label}
-                    {!ok ? '（未安装）' : ''}
-                    {currentProvider === item.id && <Check size={12} />}
-                  </button>
-                );
-              })
-            )}
-          </div>
+          <RuntimeMenu label="选择执行引擎" onClose={() => onRuntimeMenu(null)}>
+            {active?.sessionId
+              ? handoffTargets.map((item) => {
+                  const ok =
+                    providers.length === 0 ||
+                    providers.some((p) => p.id === item.id && p.available);
+                  return (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      key={item.id}
+                      disabled={!ok}
+                      onClick={() => {
+                        onRuntimeMenu(null);
+                        onHandoff?.(item.id);
+                      }}
+                    >
+                      <EngineIcon id={item.id} />
+                      转到 {item.label} 接力继续…{!ok ? '（未安装）' : ''}
+                    </button>
+                  );
+                })
+              : ENGINE_OPTIONS.map((item) => {
+                  const ok =
+                    providers.length === 0 ||
+                    providers.some((p) => p.id === item.id && p.available);
+                  return (
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      key={item.id}
+                      disabled={!ok}
+                      aria-checked={currentProvider === item.id}
+                      onClick={() => {
+                        request('app.runtime', { key: 'provider', value: item.id });
+                        onRuntimeMenu(null);
+                      }}
+                    >
+                      <EngineIcon id={item.id} />
+                      {item.label}
+                      {!ok ? '（未安装）' : ''}
+                      {currentProvider === item.id && <Check size={12} />}
+                    </button>
+                  );
+                })}
+          </RuntimeMenu>
         )}
       </div>
       {settings.map((setting) => (
@@ -298,6 +311,7 @@ export function RuntimeBar({
             type="button"
             className="runtime-bar-item"
             aria-label={`${setting.label}：${labelOf(setting)}`}
+            aria-haspopup="menu"
             aria-expanded={runtimeMenu === setting.id}
             onClick={() => onRuntimeMenu(runtimeMenu === setting.id ? null : setting.id)}
           >
@@ -306,7 +320,7 @@ export function RuntimeBar({
             <CaretDown size={10} />
           </button>
           {runtimeMenu === setting.id && (
-            <div className="runtime-popover" role="menu" aria-label={`选择${setting.label}`}>
+            <RuntimeMenu label={`选择${setting.label}`} onClose={() => onRuntimeMenu(null)}>
               {setting.values.map((item) => (
                 <button
                   type="button"
@@ -322,7 +336,7 @@ export function RuntimeBar({
                   {setting.value === item.id && <Check size={12} />}
                 </button>
               ))}
-            </div>
+            </RuntimeMenu>
           )}
         </div>
       ))}

@@ -3,6 +3,11 @@ import SQLite3
 
 enum CodexSessionScanner {
     private static let dateParser = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let fallbackDateParser = Date.ISO8601FormatStyle()
+
+    private static func parseDate(_ raw: String) -> Date? {
+        (try? dateParser.parse(raw)) ?? (try? fallbackDateParser.parse(raw))
+    }
 
     private static var home: URL {
         let path = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? "\(NSHomeDirectory())/.codex"
@@ -12,11 +17,33 @@ enum CodexSessionScanner {
     private static func metadata(_ url: URL) -> [String: Any]? {
         guard let file = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? file.close() }
-        guard let bytes = try? file.read(upToCount: 32 * 1024),
-              let end = bytes.firstIndex(of: 10),
+        // 首行 session_meta 带着完整的基础指令与 AGENTS.md，项目指令长时会超过几十 KB；读到换行为止（上限 2MB）。
+        var bytes = Data()
+        var end: Data.Index?
+        while end == nil, bytes.count < 2 * 1024 * 1024 {
+            guard let chunk = try? file.read(upToCount: 64 * 1024), !chunk.isEmpty else { break }
+            let start = bytes.count
+            bytes.append(chunk)
+            end = bytes[start...].firstIndex(of: 10)
+        }
+        guard let end,
               let row = try? JSONSerialization.jsonObject(with: bytes.prefix(upTo: end)) as? [String: Any],
               row["type"] as? String == "session_meta" else { return nil }
         return row["payload"] as? [String: Any]
+    }
+
+    /// 按会话 ID 找 rollout（文件名以 `-<ID>.jsonl` 结尾），多份时取最近修改的。
+    static func find(id: String) -> Session? {
+        guard UUID(uuidString: id) != nil,
+              let files = FileManager.default.enumerator(at: home.appendingPathComponent("sessions"),
+                                                         includingPropertiesForKeys: [.contentModificationDateKey],
+                                                         options: [.skipsHiddenFiles]) else { return nil }
+        let suffix = "-\(id).jsonl"
+        let names = titles()
+        return files.compactMap { entry -> Session? in
+            guard let file = entry as? URL, file.lastPathComponent.hasSuffix(suffix) else { return nil }
+            return parse(file, titles: names)
+        }.filter { $0.id == id }.max { $0.date < $1.date }
     }
 
     /// 会话标题：`session_index.jsonl` 的 `thread_name`（改名会追加新行，后写的为准）优先，
@@ -68,7 +95,7 @@ enum CodexSessionScanner {
               let id = info["id"] as? String, UUID(uuidString: id) != nil,
               let cwd = info["cwd"] as? String, cwd.hasPrefix("/") else { return nil }
         let updated = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        let started = (info["timestamp"] as? String).flatMap { try? dateParser.parse($0) }
+        let started = (info["timestamp"] as? String).flatMap(parseDate)
         return Session(id: id, cwd: cwd, title: titles[id] ?? "Codex · \(id.prefix(8))", summary: nil,
                        date: updated ?? started ?? .distantPast, fileURL: url, provider: .codex,
                        gitBranch: (info["git"] as? [String: Any])?["branch"] as? String)
@@ -108,17 +135,34 @@ enum CodexSessionScanner {
     }
 
     static func newConversation(in cwd: String, since: Date, ignoring ids: Set<String>) -> Session? {
-        let utc = Calendar(identifier: .iso8601)
-        let fields = utc.dateComponents(in: TimeZone(secondsFromGMT: 0)!, from: since)
-        guard let year = fields.year, let month = fields.month, let day = fields.day else { return nil }
-        let root = home.appendingPathComponent(String(format: "sessions/%04d/%02d/%02d", year, month, day))
-        let matches = list(in: root, titles: titles()).filter { session in
-            guard !ids.contains(session.id), resolvedPath(session.cwd) == resolvedPath(cwd),
-                  let source = session.fileURL, let timestamp = metadata(source)?["timestamp"] as? String,
-                  let started = try? dateParser.parse(timestamp) else { return false }
-            return started >= since
+        // rollout 按日期分目录。Codex 用哪个时区落目录不确定，首条消息也可能跨过零点：
+        // 开始时刻与当前时刻、本地与 UTC 的日期目录都查一遍。
+        let calendar = Calendar(identifier: .iso8601)
+        var folders: [String] = []
+        for moment in [since, Date()] {
+            for zone in [TimeZone.current, TimeZone(secondsFromGMT: 0)!] {
+                let fields = calendar.dateComponents(in: zone, from: moment)
+                guard let year = fields.year, let month = fields.month, let day = fields.day else { continue }
+                let folder = String(format: "sessions/%04d/%02d/%02d", year, month, day)
+                if !folders.contains(folder) { folders.append(folder) }
+            }
         }
-        return matches.count == 1 ? matches.first : nil
+        let names = titles()
+        let candidates = folders.flatMap { list(in: home.appendingPathComponent($0), titles: names) }
+        var unique: [String: Session] = [:]
+        for session in candidates where unique[session.id].map({ session.date > $0.date }) ?? true {
+            unique[session.id] = session
+        }
+        let matches = unique.values.filter { session in
+            guard !ids.contains(session.id), resolvedPath(session.cwd) == resolvedPath(cwd),
+                  let source = session.fileURL, let meta = metadata(source),
+                  let timestamp = meta["timestamp"] as? String,
+                  let started = parseDate(timestamp) else { return false }
+            // 跳过子代理 rollout，避免子代理落盘导致主会话无法唯一匹配。
+            if let origin = meta["source"] as? [String: Any], origin["subagent"] != nil { return false }
+            return started >= since.addingTimeInterval(-3)
+        }
+        return matches.count == 1 ? matches.first : matches.sorted { $0.date > $1.date }.first
     }
 
     private static func list(in root: URL, titles: [String: String]) -> [Session] {

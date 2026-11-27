@@ -5,6 +5,50 @@
 const HOME = '/Users/demo';
 const P = (name) => `${HOME}/project/${name}`;
 
+const terminalTextFixtures = {
+  'logs/build.log': '10:00:01  INFO  Starting local build\n10:00:02  INFO  Web bundle complete\n10:00:03  INFO  3 preview fixtures validated',
+  'notes/待办.txt': '核对打开方式菜单\n验证文本保存\n检查音视频播放\n',
+  'config/app.json': '{\n  "name": "ClaudePicker",\n  "preview": true\n}\n',
+  'config/settings.yaml': 'preview:\n  enabled: true\n  mode: local\n',
+  'config/manifest.xml': '<?xml version="1.0"?>\n<app name="ClaudePicker" preview="true" />\n',
+  'config/defaults.toml': '[preview]\nenabled = true\nmode = "local"\n',
+  'site/index.html': '<!doctype html>\n<html lang="zh-CN">\n  <title>ClaudePicker</title>\n  <h1>第三栏预览</h1>\n</html>\n',
+  'data/任务清单.csv': '任务,状态,负责人\n"文件预览, 第三栏",已完成,演示用户\n编辑保存,已完成,演示用户\n',
+  'data/运行记录.tsv': '引擎\t状态\t耗时\nClaude\t完成\t1.8s\nCodex\t完成\t2.2s\n',
+};
+const terminalReadOnlyFixtures = {
+  'Web/src/shell/clawd-mark.png': { kind: 'image', content: new URL('./clawd-mark.png', import.meta.url).href },
+  'docs/评审摘要.pdf': {
+    kind: 'pdf',
+    content: new URL('./preview-fixtures/sample.pdf', import.meta.url).href,
+    previewImage: new URL('./preview-fixtures/sample-pdf.png', import.meta.url).href,
+  },
+  'docs/设计评审.docx': {
+    kind: 'document',
+    content: '# 设计评审\n\n终端文件预览与编辑\n\n## 评审内容\n\n- 文档在第三栏阅读。\n- 文件链接保留原路径与文件名。\n- 这是 Word 文档的原型样例。',
+  },
+  'docs/周报.xlsx': {
+    kind: 'spreadsheet',
+    sheets: [
+      { name: '进度', rows: [['功能', '状态', '日期'], ['文本预览', '完成', '11-26'], ['音视频预览', '完成', '11-26']] },
+      { name: '文件', rows: [['类型', '示例'], ['文档', '评审摘要.pdf'], ['图片', 'clawd-mark.png']] },
+    ],
+  },
+  'docs/评审演示.pptx': {
+    kind: 'presentation',
+    slides: [
+      { title: '终端文件预览', body: 'ClaudePicker · 方案评审' },
+      { title: '第三栏交互', body: '按类型查看文件，编辑文本，或用 Mac 应用打开。' },
+    ],
+  },
+  'media/提示音.wav': { kind: 'audio', content: new URL('./preview-fixtures/sample.wav', import.meta.url).href },
+  'media/界面演示.mp4': { kind: 'video', content: new URL('./preview-fixtures/sample.mp4', import.meta.url).href },
+  'artifacts/评审资料.zip': {
+    kind: 'archive',
+    entries: [['评审摘要.pdf', '640 B'], ['周报.xlsx', '4 KB'], ['评审演示.pptx', '9 KB']],
+  },
+};
+
 const projectSeed = [
   [
     'claude-picker',
@@ -58,6 +102,8 @@ const mainSwiftPatch = `@@ -38,15 +38,18 @@
  }`;
 
 function originalContent(path) {
+  if (path === 'Web/src/shell/Sidebar.jsx')
+    return "import React from 'react';\n\nexport default function Sidebar({ projects }) {\n  const visibleProjects = projects.filter((project) => !project.hidden);\n  return (\n    <aside aria-label=\"项目与会话\">\n      {visibleProjects.map((project) => (\n        <div key={project.path}>{project.title}</div>\n      ))}\n    </aside>\n  );\n}";
   if (path.endsWith('.md'))
     return '# 界面交互说明\n\n项目、会话与工作台共用当前项目上下文。\n\n## 文件操作\n\n- 点击变更文件查看差异。\n- 在同一面板切换预览与编辑。\n- 保存后继续查看其他文件。';
   if (path.endsWith('.css'))
@@ -103,7 +149,7 @@ const db = {
     density: 'comfortable',
     sidebar: true,
     terminal: true,
-    workbench: true,
+    workbench: false,
     terminalWidth: 30,
     defaultProvider: 'claude',
     scanAntigravity: true,
@@ -151,6 +197,7 @@ function repo(projectPath) {
       remotes: ['origin/main'],
       files: baseFiles.map(([path, label, staged]) => ({ path, label, staged })),
       contents: {},
+      modifiedTimes: {},
       history: [
         ['整理 Git 工作台布局与分支入口', 'a84c2e1', -12],
         ['补充终端会话状态与恢复逻辑', '73f4b96', -60],
@@ -183,6 +230,18 @@ function requireRepo(projectPath) {
   const found = repo(projectPath);
   if (!found) throw fail('NOT_A_REPOSITORY', '这个目录不是 Git 仓库', projectPath);
   return found;
+}
+
+function createMockWorktree(projectPath, branch) {
+  const r = requireRepo(projectPath);
+  if (r.branches.includes(branch)) throw fail('BRANCH_EXISTS', `分支已存在：${branch}`);
+  const path = `${projectPath}/.worktrees/${branch.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+  if (db.repos[path]) throw fail('WORKTREE_PATH_EXISTS', `工作树目录已存在：${path}`);
+  const tree = { path, branch, head: 'a84c2e1', isLocked: false, isPrunable: false, isBare: false };
+  r.branches.push(branch);
+  r.worktrees.push(tree);
+  db.repos[path] = { ...r, branch, files: [], contents: {}, modifiedTimes: {} };
+  return tree;
 }
 
 function snapshot() {
@@ -248,6 +307,14 @@ function snapshot() {
       usage: {
         session: { percent: 40, reset: '23:50' },
         weekly: { percent: 26, reset: '11-18' },
+        antigravity: [
+          { id: 'gemini-5h', label: 'Gemini 5 小时', percent: 45, reset: '今天 14:06' },
+          { id: 'gemini-weekly', label: 'Gemini 每周', percent: 36, reset: '12-03 15:56' },
+          { id: '3p-weekly', label: 'Claude/GPT 每周', percent: 100, reset: '12-03 19:35' },
+        ],
+        antigravityCredits: 0,
+        antigravityUpdated: '10:05',
+        deepseek: { currency: 'CNY', symbol: '¥', total: 71.43, toppedUp: 71.43, granted: 0, available: true, updated: '18:50' },
         note: null,
       },
     }),
@@ -305,6 +372,11 @@ function patchFor(r, path) {
 }
 
 const handlers = {
+  'cli.installables': () => [
+    { id: 'qoder', label: 'Qoder CLI', command: 'qodercli', note: '检测与安装，会话入口待接入' },
+    { id: 'pi', label: 'Pi', command: 'pi', note: '检测与安装，会话入口待接入' },
+    { id: 'workbuddy', label: 'WorkBuddy', note: 'CLI 启动入口待验证' },
+  ],
   'update.status': () => ({ version: '演示版本', platform: '浏览器', state: 'idle', preview: true }),
   'update.check': () => ({ version: '演示版本', platform: '浏览器', state: 'unpublished', preview: true }),
   'app.state': () => snapshot(),
@@ -469,11 +541,7 @@ const handlers = {
     const p = project(projectPath);
     let cwd = workspace?.worktreePath ?? projectPath;
     if (mode === 'worktree') {
-      const r = requireRepo(projectPath);
-      if (r.branches.includes(branch)) throw fail('BRANCH_EXISTS', `分支已存在：${branch}`);
-      cwd = `${projectPath}/.worktrees/${branch.replace(/[^\w.-]+/g, '-')}`;
-      r.branches.push(branch);
-      r.worktrees.push({ path: cwd, head: 'a84c2e1', branch });
+      cwd = createMockWorktree(projectPath, branch).path;
     }
     const id = `demo-new-${++seq}`;
     const label = title || '新建会话';
@@ -482,20 +550,30 @@ const handlers = {
     db.active = { sessionId: id, cwd, projectPath, label, provider, busy: false };
     db.runtime.provider = provider;
     push();
-    return { sessionId: id, cwd, provider, mode };
+    return { sessionId: id, cwd, provider, mode, branch: workspace?.branch ?? branch };
   },
   'session.handoff': ({ sessionId, sourceProvider = 'claude', targetProvider = 'antigravity', projectPath }) => {
     const p = project(projectPath);
-    const src = p.sessions.find((s) => s.id === sessionId);
+    const srcIdx = p.sessions.findIndex((s) => s.id === sessionId);
+    const src = srcIdx >= 0 ? p.sessions[srcIdx] : null;
     const id = `demo-handoff-${++seq}`;
     const label = src?.title ?? '接力会话';
     const cwd = src?.cwd ?? projectPath;
-    const fromName = sourceProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
-    p.sessions.unshift({ id, title: label, cwd, provider: targetProvider, handoffFrom: fromName, time: '刚刚', running: false, unread: false });
-    db.active = { sessionId: id, cwd, projectPath, label, provider: targetProvider, busy: false };
+    const names = { claude: 'Claude', antigravity: 'Antigravity', codex: 'Codex', dsh: 'DeepSeek' };
+    const fromName = `${names[sourceProvider] ?? sourceProvider} · ${label}`;
+    const existingChain = Array.isArray(src?.handoffChain) && src.handoffChain.length > 0
+      ? src.handoffChain.map((seg) => ({ ...seg, active: false }))
+      : [{ id: src?.id ?? sessionId, provider: sourceProvider, label: names[sourceProvider] ?? sourceProvider, shortLabel: names[sourceProvider] ?? sourceProvider, active: false, pending: false, alive: true }];
+    const chain = [
+      ...existingChain,
+      { id, provider: targetProvider, label: names[targetProvider] ?? targetProvider, shortLabel: names[targetProvider] ?? targetProvider, active: true, pending: false, alive: true },
+    ];
+    if (srcIdx >= 0) p.sessions.splice(srcIdx, 1);
+    p.sessions.unshift({ id, title: label, cwd, branch: src?.branch, provider: targetProvider, handoffFrom: fromName, handoffChain: chain, time: '刚刚', running: false, unread: false });
+    db.active = { sessionId: id, threadId: id, cwd, projectPath, label, provider: targetProvider, busy: false, handoffChain: chain };
     db.runtime.provider = targetProvider;
     push();
-    return { sessionId: id, cwd, provider: targetProvider };
+    return { sessionId: id, threadId: id, cwd, provider: targetProvider };
   },
   'git.status': ({ projectPath }) => statusOf(projectPath),
   'git.diff': ({ projectPath, filePath, staged }) => {
@@ -589,17 +667,7 @@ const handlers = {
     r.branch = branch;
     return { ok: true };
   },
-  'git.createWorktree': ({ input }) => {
-    const { projectPath, branch } = input;
-    const r = requireRepo(projectPath);
-    if (r.branches.includes(branch)) throw fail('BRANCH_EXISTS', `分支已存在：${branch}`);
-    const path = `${projectPath}/.worktrees/${branch.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
-    const tree = { path, branch, head: 'a84c2e1', isLocked: false, isPrunable: false, isBare: false };
-    r.branches.push(branch);
-    r.worktrees.push(tree);
-    db.repos[path] = { ...r, branch, files: [], contents: {} };
-    return tree;
-  },
+  'git.createWorktree': ({ input }) => createMockWorktree(input.projectPath, input.branch),
   'git.fetch': () => ({ ok: true }),
   'git.pull': () => ({ ok: true }),
   'git.push': () => ({ ok: true }),
@@ -615,6 +683,7 @@ const handlers = {
   'git.removeWorktree': ({ input }) => {
     const r = requireRepo(input.projectPath);
     r.worktrees = r.worktrees.filter((item) => item.path !== input.path);
+    delete db.repos[input.path];
     return { ok: true };
   },
   'git.stashes': ({ projectPath }) =>
@@ -666,23 +735,66 @@ const handlers = {
     })),
   'file.read': ({ projectPath, filePath }) => {
     const r = requireRepo(projectPath);
-    const content = r.contents[filePath] ?? originalContent(filePath);
+    if (Object.hasOwn(terminalReadOnlyFixtures, filePath))
+      return { path: filePath, isBinary: true, ...terminalReadOnlyFixtures[filePath] };
+    const content = r.contents[filePath] ?? (Object.hasOwn(terminalTextFixtures, filePath) ? terminalTextFixtures[filePath] : originalContent(filePath));
     return {
       path: filePath,
       size: content.length,
-      modifiedAt: '2026-11-13T14:20:00Z',
+      modifiedAt: r.modifiedTimes[filePath] ?? '2026-11-13T14:20:00Z',
       isBinary: false,
       content,
       truncated: false,
-      kind: filePath.endsWith('.md') ? 'markdown' : 'code',
+      kind: filePath.endsWith('.md') ? 'markdown' : /\.(csv|tsv)$/i.test(filePath) ? 'delimited' : 'code',
     };
   },
-  'file.write': ({ projectPath, filePath, content }) => {
+  'file.write': ({ projectPath, filePath, content, expectedModifiedAt }) => {
     const r = requireRepo(projectPath);
+    const previous = r.modifiedTimes[filePath] ?? '2026-11-13T14:20:00Z';
+    if (expectedModifiedAt && expectedModifiedAt !== previous) {
+      throw fail('COMMAND_FAILED', '文件已在外部修改', 'STALE_FILE');
+    }
+    const modifiedAt = new Date(Math.max(Date.now(), Date.parse(previous) + 1)).toISOString();
     r.contents[filePath] = content;
+    r.modifiedTimes[filePath] = modifiedAt;
     const file = r.files.find((item) => item.path === filePath);
     if (file) Object.assign(file, { staged: false, label: file.label === '?' ? '?' : 'M' });
-    return { modifiedAt: new Date().toISOString() };
+    return { modifiedAt };
+  },
+  'file.openWithApps': ({ filePath }) => {
+    const mockAppsByKind = {
+      image: ['预览', 'Pixelmator Pro'],
+      pdf: ['预览', 'Adobe Acrobat'],
+      document: ['Microsoft Word', 'Pages'],
+      spreadsheet: ['Microsoft Excel', 'Numbers'],
+      presentation: ['Microsoft PowerPoint', 'Keynote'],
+      delimited: ['Numbers', 'Microsoft Excel', '文本编辑'],
+      audio: ['QuickTime Player', 'VLC'],
+      video: ['QuickTime Player', 'VLC'],
+      archive: ['归档实用工具', 'Keka'],
+      markdown: ['Visual Studio Code', '文本编辑'],
+      code: ['Visual Studio Code', '文本编辑'],
+    };
+    const kind = Object.hasOwn(terminalReadOnlyFixtures, filePath)
+      ? terminalReadOnlyFixtures[filePath].kind
+      : filePath.endsWith('.md')
+        ? 'markdown'
+        : /\.(csv|tsv)$/i.test(filePath)
+          ? 'delimited'
+          : 'code';
+    const names = mockAppsByKind[kind] ?? ['文本编辑'];
+    return {
+      apps: names.map((name, index) => ({
+        name,
+        path: `/Applications/${name}.app`,
+        bundleId: `demo.${name}`,
+        isDefault: index === 0,
+      })),
+    };
+  },
+  'file.openWith': ({ appPath }) => {
+    const name = String(appPath ?? '').split('/').pop()?.replace(/\.app$/i, '') || '默认应用';
+    return { ok: true, appName: name, demo: true };
   },
   'mcp.list': () => db.mcp.map(({ tools, connected, ...server }) => server),
   'mcp.status': () =>
@@ -737,6 +849,26 @@ const handlers = {
 // 地址带 ?demo 时给出几条演示 Work / TAPD 待办，便于检查界面（不会出现在应用里）。
 const demoMode = typeof location !== 'undefined' && new URLSearchParams(location.search).has('demo');
 const demoProject = { id: 'p1', name: 'claude-picker', path: '/Users/demo/project/claude-picker' };
+const demoTapdWorkspaces = [
+  { id: '67103358', name: 'lm-global', enabled: true, projects: [demoProject.path] },
+  { id: '33349361', name: '蓝马', enabled: true, projects: [] },
+];
+let tapdSettings = {
+  enabled: demoMode,
+  transport: 'mcp',
+  cliPath: '',
+  syncOnLaunch: true,
+  workspaces: demoMode ? demoTapdWorkspaces : [],
+};
+let tapdHasToken = demoMode;
+const tapdPrerequisites = () => ({
+  cli: demoMode ? '/usr/local/bin/tapd-cli' : null,
+  endpoint: tapdSettings.endpoint || 'https://api.tapd.cn',
+  tokenSet: tapdHasToken,
+  tokenSource: tapdHasToken ? 'keychain' : null,
+  mcpCommand: '/opt/homebrew/bin/uvx',
+  mcpPackage: 'mcp-server-tapd==8.0.81',
+});
 const demoWorks = demoMode
   ? [
       ['queued', '订单解码接口联调', false, [{ workspaceId: '67103358', entityType: 'story', entityId: '1167103358001001001' }]],
@@ -799,20 +931,53 @@ Object.assign(handlers, {
     drafts.set(`${scope}:${key}`, value);
     return { ok: true };
   },
-  'tapd.settings': () => ({
-    settings: demoMode
-      ? {
-          enabled: true,
-          cliPath: '',
-          syncOnLaunch: true,
-          workspaces: [
-            { id: '67103358', name: 'lm-global', enabled: true, projects: [demoProject.path] },
-            { id: '33349361', name: '蓝马', enabled: true, projects: [] },
-          ],
-        }
-      : { enabled: false, cliPath: '', workspaces: [], syncOnLaunch: true },
-    prerequisites: { cli: demoMode ? '/usr/local/bin/tapd-cli' : null, endpointSet: demoMode, tokenSet: demoMode },
-  }),
+  'tapd.settings': ({ patch }) => {
+    if (patch) tapdSettings = { ...tapdSettings, ...patch };
+    return { settings: tapdSettings, prerequisites: tapdPrerequisites() };
+  },
+  'tapd.mcpSetup': ({ workspaceIds, token, server, demoScenario }) => {
+    const ids = [...new Set(workspaceIds.trim().split(/[\s,，]+/).filter(Boolean))];
+    if (!ids.length || ids.some((id) => !/^\d+$/.test(id)))
+      return { ok: false, stage: 'input', message: '请填写有效的数字项目 ID' };
+    if (!tapdHasToken && !token)
+      return { ok: false, stage: 'credential', message: '请填写 TAPD 个人令牌' };
+    if (demoScenario === 'handshake')
+      return { ok: false, stage: 'handshake', message: '演示服务未响应握手，可切换场景后重试' };
+    if (demoScenario === 'project')
+      return {
+        ok: false,
+        stage: 'project',
+        message: '演示项目试读失败',
+        projects: [{ id: ids[0], ok: false, message: '当前令牌缺少项目读取权限' }],
+      };
+    const existing = new Map(tapdSettings.workspaces.map((item) => [item.id, item]));
+    const projects = ids.map((id) => ({ id, ok: true, name: demoTapdWorkspaces.find((item) => item.id === id)?.name ?? `演示项目 ${id}` }));
+    for (const { id, name } of projects) {
+      if (!existing.has(id)) existing.set(id, { id, name, projects: [], enabled: true });
+    }
+    tapdHasToken = true;
+    tapdSettings = {
+      ...tapdSettings,
+      enabled: true,
+      transport: 'mcp',
+      mcp: server ?? tapdSettings.mcp,
+      mcpCheckedAt: new Date().toISOString(),
+      workspaces: [...existing.values()],
+    };
+    return { ok: true, stage: 'saved', message: '演示验证通过，已启用 MCP', projects };
+  },
+  'tapd.setToken': () => {
+    tapdHasToken = true;
+    return { prerequisites: tapdPrerequisites() };
+  },
+  'tapd.clearToken': () => {
+    tapdHasToken = false;
+    return { prerequisites: tapdPrerequisites() };
+  },
+  'tapd.test': () => tapdHasToken
+    ? { connected: true, server: { name: '演示 MCP' } }
+    : { connected: false, message: '请先配置个人令牌' },
+  'tapd.workspaces': () => ({ workspaces: tapdSettings.workspaces }),
   'tapd.todos': ({ workspaceId, scope }) => {
     const items = demoTapd.filter(
       (item) => (!workspaceId || item.ref.workspaceId === workspaceId) && (scope === 'created' ? item.creator === '演示用户' : true),
@@ -893,6 +1058,6 @@ export function mockRequest(method, params) {
       } catch (error) {
         reject(error);
       }
-    }, 20);
+    }, method === 'tapd.mcpSetup' && params?.demoScenario ? 700 : 20);
   });
 }

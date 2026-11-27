@@ -1,9 +1,10 @@
 // 第一栏：项目与会话树。数据来自原生 Store 的快照，所有操作回写原生。
 import PromptCacheTimer from './PromptCacheTimer.jsx';
 import UsagePopover from './UsagePopover.jsx';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   CaretDown,
+  CaretUp,
   CaretRight,
   ChatCircleDots,
   CircleNotch,
@@ -17,12 +18,14 @@ import {
   Terminal,
   TreeStructure,
 } from '@phosphor-icons/react';
-import appIcon from './clawd-mark.png';
 import { IconButton } from './ui.jsx';
 import { request } from './bridge.js';
 import { statusOf } from './work/useWorks.js';
 
 import { engineIcons } from './EngineIcon.jsx';
+
+const VISIBLE_SESSIONS = 5;
+const VISIBLE_GROUPS = 5;
 
 function sessionGroups(sessions, worktrees = []) {
   const groups = new Map(worktrees.map((item) => {
@@ -54,6 +57,7 @@ export default function Sidebar({
   onExpandTerminal,
   onSelectProject,
   onOpenSession,
+  onBrowseGroup,
   onTreeContext,
   onBranchTreeContext,
   onAddDirectory,
@@ -66,9 +70,15 @@ export default function Sidebar({
   onOpenWork,
   onSearch,
   worktreesByProject,
+  worktreeLabels = {},
 }) {
   const [dragging, setDragging] = useState(null);
-  const [collapsed, setCollapsed] = useState({});
+  // 分支 / 工作树分组默认收起，只记展开过的分组。
+  const [openGroups, setOpenGroups] = useState({});
+  // 展开的分组里默认只列最近 VISIBLE_SESSIONS 条，其余用「展开其余 N 条」收起。
+  const [showAllGroups, setShowAllGroups] = useState({});
+  // 项目下的分支 / 工作树分组同样默认只列前 VISIBLE_GROUPS 个（按项目路径记录是否展开其余）。
+  const [showAllBranches, setShowAllBranches] = useState({});
   const projects = state.projects;
   const active = state.active;
   const providers = state.providers ?? [];
@@ -84,11 +94,34 @@ export default function Sidebar({
   }
 
   const visibleSessions = (project) => project.sessions.filter((session) => !hiddenSessions.has(session.id));
+
+  // 打开的会话变化时，展开它所在的分组一次，避免当前会话藏在收起的分组里；之后可再手动收起。
+  const activeSessionId = active?.threadId || active?.sessionId;
+  const revealedSession = useRef(null);
+  useEffect(() => {
+    if (!activeSessionId || revealedSession.current === activeSessionId) return;
+    for (const project of projects) {
+      const projectGroups = sessionGroups(visibleSessions(project), worktreesByProject?.[project.path] ?? []);
+      const groupIndex = projectGroups.findIndex((item) => item.sessions.some((session) => session.id === activeSessionId));
+      const group = projectGroups[groupIndex];
+      if (group) {
+        if (groupIndex >= VISIBLE_GROUPS) setShowAllBranches((current) => ({ ...current, [project.path]: true }));
+        const groupKey = `${project.path}:${group.key}`;
+        revealedSession.current = activeSessionId;
+        setOpenGroups((current) => (current[groupKey] ? current : { ...current, [groupKey]: true }));
+        // 当前会话排在前 VISIBLE_SESSIONS 条之后时一并展开其余，否则它仍被收起看不到。
+        if (group.sessions.findIndex((session) => session.id === activeSessionId) >= VISIBLE_SESSIONS) {
+          setShowAllGroups((current) => ({ ...current, [groupKey]: true }));
+        }
+        return;
+      }
+    }
+  }, [activeSessionId, projects, worktreesByProject]);
   const rowCount = projects.reduce((count, project) => count + 1 + (project.expanded ? visibleSessions(project).length : 0), 0);
 
   function navigateTree(event) {
     const rows = [
-      ...event.currentTarget.querySelectorAll('.project-row, .session-branch-row, .session-row'),
+      ...event.currentTarget.querySelectorAll('.project-row, .session-branch-row, .session-row, .more-sessions'),
     ];
     const current = rows.indexOf(event.target.closest('button'));
     if (current < 0) return;
@@ -161,9 +194,8 @@ export default function Sidebar({
   return (
     <aside className="sidebar">
       <div className="sidebar-heading">
-        <img src={appIcon} alt="" />
         <div className="sidebar-brand">
-          <strong>Claude Code</strong>
+          <strong>Claude<span>Picker</span></strong>
           <small>
             {projects.length} 个目录 · {rowCount} 行
           </small>
@@ -204,6 +236,17 @@ export default function Sidebar({
                 onContextMenu={(event) => onTreeContext(event, project)}
                 onClick={() => {
                   onCursor(`project-${project.path}`);
+                  // 每次点文件夹，该项目下的分支 / 工作树分组和「展开其余」都回到收起。
+                  const prefix = `${project.path}:`;
+                  const collapse = (current) => Object.fromEntries(
+                    Object.entries(current).filter(([key]) => !key.startsWith(prefix)),
+                  );
+                  setOpenGroups(collapse);
+                  setShowAllGroups(collapse);
+                  setShowAllBranches((current) => {
+                    const { [project.path]: _removed, ...rest } = current;
+                    return rest;
+                  });
                   request('app.toggleProject', { path: project.path });
                 }}
               >
@@ -241,16 +284,20 @@ export default function Sidebar({
                       </button>
                     );
                   })}
-                  {groups.map((group) => {
+                  {(showAllBranches[project.path] ? groups : groups.slice(0, VISIBLE_GROUPS)).map((group) => {
                     const groupKey = `${project.path}:${group.key}`;
-                    const expanded = !collapsed[groupKey];
-                    const label = group.branch || (group.worktree ? group.worktree.split('/').at(-1) : '未绑定分支');
+                    const expanded = !!openGroups[groupKey];
+                    const label = worktreeLabels[group.worktree]?.name || group.branch ||
+                      (group.worktree ? group.worktree.split('/').at(-1) : '未绑定分支');
                     return (
                       <div className="session-branch-group" key={group.key}>
                         <button className="session-branch-row" type="button" aria-expanded={expanded}
                           title={group.worktree ?? label}
                           onContextMenu={(event) => onBranchTreeContext(event, project, group)}
-                          onClick={() => setCollapsed((current) => ({ ...current, [groupKey]: expanded }))}>
+                          onClick={() => {
+                            onBrowseGroup();
+                            setOpenGroups((current) => ({ ...current, [groupKey]: !expanded }));
+                          }}>
                           {expanded ? <CaretDown size={10} /> : <CaretRight size={10} />}
                           {group.worktree ? <TreeStructure size={13} /> : <GitBranch size={13} />}
                           <strong>{label}</strong>
@@ -258,15 +305,23 @@ export default function Sidebar({
                           <span>{group.sessions.length}</span>
                         </button>
                         {expanded && group.sessions.length === 0 && <p className="cli-worktree-empty">还没有会话</p>}
-                        {expanded && group.sessions.map((session) => {
+                        {expanded && (showAllGroups[groupKey] ? group.sessions : group.sessions.slice(0, VISIBLE_SESSIONS)).map((session) => {
                             const prov = session.provider ?? 'claude';
                             const provLabel = providers.find((item) => item.id === prov)?.label ?? 'Claude Code';
-                            const tip = session.handoffFrom
-                              ? `${provLabel} · ${session.title}（接力自 ${session.handoffFrom}）`
-                              : `${provLabel} · ${session.title}`;
+                            const chain = Array.isArray(session.handoffChain) && session.handoffChain.length > 1
+                              ? session.handoffChain
+                              : null;
+                            const isSelected = !selectedWorkId && (active?.threadId === session.id || active?.sessionId === session.id);
+                            const tip = chain
+                              ? `${provLabel} · ${session.title}（接力轨迹：${chain.map((seg) => seg.shortLabel ?? seg.provider).join(' → ')}）`
+                              : session.handoffFrom
+                                ? `${provLabel} · ${session.title}（接力自 ${session.handoffFrom}）`
+                                : `${provLabel} · ${session.title}`;
+                            const visibleChain = chain && chain.length > 4 ? chain.slice(-4) : chain;
+                            const clippedCount = chain ? chain.length - visibleChain.length : 0;
                             return (
                               <button
-                                className={`session-row ${!selectedWorkId && active?.sessionId === session.id ? 'selected' : ''} ${dragging?.sessionId === session.id ? 'dragging' : ''}`}
+                                className={`session-row ${isSelected ? 'selected' : ''} ${dragging?.sessionId === session.id ? 'dragging' : ''}`}
                                 key={`${prov}-${session.id}`}
                                 data-session={session.id}
                                 title={tip}
@@ -299,7 +354,25 @@ export default function Sidebar({
                                     {session.title}
                                   </b>
                                   <small>
-                                    {session.handoffFrom ? `接力 · ${session.time}` : session.time}
+                                    {visibleChain ? (
+                                      <>
+                                        <span className="handoff-mini-trail" aria-label={`接力 ${chain.length} 段`}>
+                                          {clippedCount > 0 && <span className="handoff-mini-more">+{clippedCount}</span>}
+                                          {visibleChain.map((seg, idx) => (
+                                            <React.Fragment key={`${seg.id}-${idx}`}>
+                                              {(idx > 0 || clippedCount > 0) && <span className="handoff-mini-sep" aria-hidden="true">›</span>}
+                                              <img
+                                                className={`handoff-mini-icon${idx === visibleChain.length - 1 ? ' current' : ''}`}
+                                                src={engineIcons[seg.provider] ?? engineIcons.claude}
+                                                alt={seg.shortLabel ?? seg.provider}
+                                              />
+                                            </React.Fragment>
+                                          ))}
+                                        </span>
+                                        {' · '}
+                                        {session.time}
+                                      </>
+                                    ) : session.handoffFrom ? `接力 · ${session.time}` : session.time}
                                     {prov === 'claude' && !session.running && state.settings.promptCacheEnabled !== false && session.lastCompletedTurn &&
                                       <PromptCacheTimer expiresAt={session.lastCompletedTurn * 1000 + (state.settings.promptCacheMinutes ?? 5) * 60000} />}
                                   </small>
@@ -307,9 +380,35 @@ export default function Sidebar({
                               </button>
                             );
                           })}
+                        {expanded && group.sessions.length > VISIBLE_SESSIONS && (
+                          <button
+                            className={`more-sessions ${treeCursor === `more-${groupKey}` ? 'cursor' : ''}`}
+                            type="button"
+                            onClick={() => {
+                              onCursor(`more-${groupKey}`);
+                              setShowAllGroups((current) => ({ ...current, [groupKey]: !current[groupKey] }));
+                            }}
+                          >
+                            {showAllGroups[groupKey] ? '收起' : `展开其余 ${group.sessions.length - VISIBLE_SESSIONS} 条`}
+                            {showAllGroups[groupKey] ? <CaretUp size={9} /> : <CaretDown size={9} />}
+                          </button>
+                        )}
                       </div>
                     );
                   })}
+                  {groups.length > VISIBLE_GROUPS && (
+                    <button
+                      className={`more-sessions more-branches ${treeCursor === `more-branches-${project.path}` ? 'cursor' : ''}`}
+                      type="button"
+                      onClick={() => {
+                        onCursor(`more-branches-${project.path}`);
+                        setShowAllBranches((current) => ({ ...current, [project.path]: !current[project.path] }));
+                      }}
+                    >
+                      {showAllBranches[project.path] ? '收起分支' : `展开其余 ${groups.length - VISIBLE_GROUPS} 个分支`}
+                      {showAllBranches[project.path] ? <CaretUp size={9} /> : <CaretDown size={9} />}
+                    </button>
+                  )}
                 </div>
               )}
             </section>

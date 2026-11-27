@@ -221,6 +221,8 @@ final class ACPProcess: AgentExecutorProcess, @unchecked Sendable {
                 "availableModels": resultObj?["models"]?["availableModels"] ?? .null,
             ])))
             if !readySent {
+                currentTurnText = ""
+                seenToolCalls.removeAll()
                 readySent = true
                 onEvent(.ready)
             }
@@ -261,6 +263,9 @@ final class ACPProcess: AgentExecutorProcess, @unchecked Sendable {
     }
 
     private func handleSessionUpdate(_ update: JSONValue) {
+        // `session/load` 响应到达前的重放通知不包含完整 user/assistant 配对：
+        // 本地历史已由 `SessionChatHistory` 完整载入，重放期直接跳过，避免拼出残缺卡片或污染下一回合文本。
+        guard readySent else { return }
         guard let kind = update["sessionUpdate"]?.stringValue else { return }
         switch kind {
         case "agent_message_chunk":

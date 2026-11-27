@@ -1279,6 +1279,51 @@
   white-space: normal;
   font-size: 10px;
 }
+.module-sidebar:has(.git-scope-picker),
+.module-branch-controls:has(.git-scope-picker) {
+  overflow: visible;
+}
+.git-scope-trigger {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 5px 8px;
+  width: 100%;
+  padding: 9px 10px;
+  text-align: left;
+  border: 1px solid #5d514b;
+  border-radius: 7px;
+  background: #292627;
+}
+.git-scope-trigger:is(:hover,[aria-expanded=true]) { background: #3a302c; }
+.git-scope-trigger :is(strong,span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-scope-trigger strong { font-size: 12px; }
+.git-scope-trigger span {
+  grid-column: 2 / -1;
+  color: var(--control-focus);
+  font: 10px Menlo, monospace;
+}
+.git-scope-trigger .git-scope-caret { color: #aba29d; }
+.git-scope-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 12;
+  display: block;
+  width: min(410px,calc(100vw - 24px));
+  padding: 12px;
+  background: #262427;
+  border: 1px solid #51464a;
+  border-radius: 9px;
+  box-shadow: 0 12px 30px #0007;
+}
+.git-scope-fields { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.2fr); gap: 10px; }
+.git-scope-fields > div > span { display: block; margin-bottom: 5px; color: #bcb5ad; font-size: 11px; }
+.git-scope-fields .branch-picker { background: #292627; border-color: #51464a; color: #ded0c5; }
+.git-scope-fields .branch-picker:is(:hover,[aria-expanded=true]) { background: #3a302c; border-color: #886653; }
+.git-scope-fields .branch-picker > b { font-size: 11px; }
+.git-scope-fields .git-project-button > b { font-family: inherit; }
+.git-scope-popover .cli-branch-menu { width: 100%; }
 
 .terminal-command-record {
   margin: 12px 0;

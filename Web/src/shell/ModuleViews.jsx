@@ -18,7 +18,6 @@ import {
   TreeStructure,
   WarningCircle,
 } from '@phosphor-icons/react';
-import appIcon from './clawd-mark.png';
 import { IconButton } from './ui.jsx';
 
 export const PAGE_IDS = ['workspace', 'tapd', 'works', 'git'];
@@ -178,12 +177,13 @@ export function ModuleSidebar({
   onTerminal,
   branchControls,
   search,
+  icon: PageIcon = Folder,
 }) {
   const label = PAGE_LABELS[page] ?? 'ClaudePicker';
   return (
     <aside className={`module-sidebar ${collapsed ? 'collapsed' : ''}`} aria-label={`${label}操作栏`}>
       <div className="module-brand">
-        <img src={appIcon} alt="ClaudePicker" />
+        <span className="module-brand-icon"><PageIcon size={16} aria-hidden="true" /></span>
         {!collapsed && <strong>{label}</strong>}
         <div className="sidebar-header-actions">
           <IconButton

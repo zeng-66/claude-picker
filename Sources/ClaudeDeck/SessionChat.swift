@@ -90,8 +90,9 @@ final class SessionChatHub {
         let previous = runs[sessionId]
         let run = Run(sessionId: sessionId, provider: provider, cwd: cwd)
         run.runtime = runtime
-        if let previous {
-            // 进程退出后重开：保留界面上的记录与本会话改过的运行参数，接着往下写。
+        if let previous, history.isEmpty {
+            // 仅当没有新的本地历史可重载时（如进程意外退出重连），沿用内存里的记录；
+            // 若用户曾在终端续聊再切回结构化聊天，则用最新本地历史重建上文并保留运行参数。
             run.events = previous.events
             run.seq = previous.seq
             run.modelEfforts = previous.modelEfforts
@@ -99,6 +100,12 @@ final class SessionChatHub {
             run.context = previous.context
             for (key, value) in previous.runtime where !value.isNull { run.runtime[key] = value }
         } else {
+            if let previous {
+                run.modelEfforts = previous.modelEfforts
+                run.writerRetries = previous.writerRetries
+                run.context = previous.context
+                for (key, value) in previous.runtime where !value.isNull { run.runtime[key] = value }
+            }
             for item in history.suffix(Self.historyLimit) {
                 append(run, kind: item["kind"]?.stringValue ?? "assistant", payload: item["payload"] ?? .object([:]),
                        emit: false, at: item["at"]?.doubleValue)
@@ -111,6 +118,7 @@ final class SessionChatHub {
         let config = ExecutorConfig(provider: provider, executable: executable, cwd: cwd, sessionId: cliId,
                                     resume: resume && !realId.isEmpty, permissionMode: run.runtime["mode"]?.text,
                                     model: run.runtime["model"]?.text, effort: run.runtime["effort"]?.text,
+                                    fast: run.runtime["fast"]?.boolValue,
                                     environment: LoginEnv.shared.environment.merging(ProcessInfo.processInfo.environment) { login, _ in login })
         let token = run.token
         guard let process = AgentExecutorFactory.make(config, onEvent: { [weak self] event in
@@ -311,6 +319,9 @@ final class SessionChatHub {
         for (key, source) in [("mode", "permissionMode"), ("model", "model"), ("effort", "effort")] {
             if run.runtime[key]?.text == nil, let value = info[source]?.text { run.runtime[key] = .string(value) }
         }
+        if run.runtime["fast"] == nil, let fast = info["fast"]?.boolValue {
+            run.runtime["fast"] = .bool(fast)
+        }
         if run.provider == .codex { refreshCodexEfforts(run) }
     }
 
@@ -335,8 +346,25 @@ final class SessionChatHub {
     }
 
     func setRuntime(sessionId: String, key: String, value: String) throws -> RuntimeOutcome {
-        guard ["mode", "model", "effort"].contains(key), let run = runs[sessionId] else {
+        guard ["mode", "model", "effort", "fast"].contains(key), let run = runs[sessionId] else {
             throw GitError.commandFailed("会话执行器未运行，请重新打开该会话", recoverable: true)
+        }
+        if key == "fast" {
+            let on = value == "true" || value == "1"
+            run.runtime["fast"] = .bool(on)
+            if run.provider == .codex { CodexConfig.setFast(on) }
+            if run.provider == .claude { ClaudeConfig.setFast(on) }
+            var outcome: RuntimeOutcome = .deferred
+            if let process = run.process, run.phase != .exited, run.phase != .failed {
+                if process.updateRuntime(key: "fast", value: on ? "true" : "false") {
+                    outcome = .applied
+                }
+            }
+            append(run, kind: "status", payload: .obj([
+                "text": .string("快速模式已\(on ? "开启" : "关闭")，下一回合起生效"),
+            ]))
+            emitState(run)
+            return outcome
         }
         let catalog = run.runtime[key == "mode" ? "modes" : key == "model" ? "models" : "efforts"]?.arrayValue ?? []
         guard catalog.isEmpty || catalog.contains(where: { $0["id"]?.text == value }) else {
@@ -531,10 +559,12 @@ enum SessionChatHistory {
             switch provider {
             case .claude: items = claudeItems(row)
             case .codex: items = codexItems(row)
+            case .antigravity: items = antigravityItems(row)
             default: return []
             }
             // 历史消息沿用记录里的时间，而不是载入时间。
-            if let stamp = row["timestamp"]?.text, let date = iso.date(from: stamp) ?? ISO8601DateFormatter().date(from: stamp) {
+            if let stamp = row["timestamp"]?.text ?? row["created_at"]?.text,
+               let date = iso.date(from: stamp) ?? ISO8601DateFormatter().date(from: stamp) {
                 items = items.map { item in
                     guard case .object(var dict) = item else { return item }
                     dict["at"] = .number(date.timeIntervalSince1970)
@@ -580,16 +610,84 @@ enum SessionChatHistory {
 
     static func codexItems(_ row: JSONValue) -> [JSONValue] {
         guard row["type"]?.stringValue == "response_item", let payload = row["payload"],
-              payload["type"]?.stringValue == "message", let role = payload["role"]?.stringValue else { return [] }
-        // Codex 把 AGENTS.md 指令、<environment_context> 等作为 user 消息里的独立 input_text 段注入，逐段剔除。
-        let text = (payload["content"]?.arrayValue ?? []).compactMap { $0["text"]?.stringValue }
-            .filter { role != "user" || !injectedCodexContext($0) }
-            .joined(separator: "\n")
-        switch role {
-        case "user": return userItem(text)
-        case "assistant": return text.isEmpty ? [] : [item("assistant", ["text": .string(text)])]
-        default: return []
+              let payloadType = payload["type"]?.stringValue else { return [] }
+        if payloadType == "message", let role = payload["role"]?.stringValue {
+            // Codex 把 AGENTS.md 指令、<environment_context> 等作为 user 消息里的独立 input_text 段注入，逐段剔除。
+            let text = (payload["content"]?.arrayValue ?? []).compactMap { $0["text"]?.stringValue }
+                .filter { role != "user" || !injectedCodexContext($0) }
+                .joined(separator: "\n")
+            switch role {
+            case "user": return userItem(text)
+            case "assistant": return text.isEmpty ? [] : [item("assistant", ["text": .string(text)])]
+            default: return []
+            }
         }
+        if payloadType == "function_call" || payloadType == "custom_tool_call",
+           let name = payload["name"]?.text {
+            let callId = payload["call_id"]?.text ?? UUID().uuidString.lowercased()
+            let rawArgs = payload["arguments"] ?? payload["input"] ?? .object([:])
+            let parsedInput: JSONValue
+            if let str = rawArgs.stringValue, let obj = JSONValue.parse(Data(str.utf8)) {
+                parsedInput = obj
+            } else {
+                parsedInput = rawArgs
+            }
+            return [item("tool_use", [
+                "toolUseId": .string(callId),
+                "name": .string(name),
+                "input": parsedInput.truncated(limit: 2000),
+                "history": .bool(true),
+            ])]
+        }
+        if payloadType == "function_call_output" || payloadType == "custom_tool_call_output",
+           let callId = payload["call_id"]?.text {
+            return [item("tool_result", [
+                "toolUseId": .string(callId),
+                "isError": .bool(false),
+                "content": (payload["output"] ?? .null).truncated(limit: 2000),
+            ])]
+        }
+        return []
+    }
+
+    static func antigravityItems(_ row: JSONValue) -> [JSONValue] {
+        guard let type = row["type"]?.stringValue else { return [] }
+        if type == "USER_INPUT" {
+            if let src = row["source"]?.stringValue, src != "USER_EXPLICIT" { return [] }
+            guard let raw = row["content"]?.stringValue else { return [] }
+            var body = raw
+            if let open = body.range(of: "<USER_REQUEST>"),
+               let close = body.range(of: "</USER_REQUEST>", range: open.upperBound..<body.endIndex) {
+                body = String(body[open.upperBound..<close.lowerBound])
+            } else {
+                for tag in ["ADDITIONAL_METADATA", "USER_SETTINGS_CHANGE", "SYSTEM_MESSAGE"] {
+                    while let open = body.range(of: "<\(tag)>"),
+                          let close = body.range(of: "</\(tag)>", range: open.upperBound..<body.endIndex) {
+                        body.removeSubrange(open.lowerBound..<close.upperBound)
+                    }
+                }
+            }
+            return userItem(body)
+        }
+        if type == "PLANNER_RESPONSE" {
+            var items: [JSONValue] = []
+            if let content = row["content"]?.stringValue {
+                let clean = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !clean.isEmpty { items.append(item("assistant", ["text": .string(clean)])) }
+            }
+            let step = row["step_index"]?.intValue ?? 0
+            for (idx, call) in (row["tool_calls"]?.arrayValue ?? []).enumerated() {
+                guard let name = call["name"]?.text else { continue }
+                items.append(item("tool_use", [
+                    "toolUseId": .string("agy-hist-\(step)-\(idx)"),
+                    "name": .string(name),
+                    "input": (call["args"] ?? .object([:])).truncated(limit: 2000),
+                    "history": .bool(true),
+                ]))
+            }
+            return items
+        }
+        return []
     }
 
     static func injectedCodexContext(_ text: String) -> Bool {

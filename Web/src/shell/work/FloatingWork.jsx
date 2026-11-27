@@ -33,6 +33,7 @@ export default function FloatingWork({ work, onRestore }) {
 
   function drag(event) {
     if (event.button !== 0 || event.target.closest('button')) return;
+    event.preventDefault();
     const handle = event.currentTarget;
     const start = { ...position };
     const origin = { x: event.clientX, y: event.clientY };

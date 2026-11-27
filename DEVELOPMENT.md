@@ -2,7 +2,7 @@
 
 > 一个 macOS 原生小工具：左侧是可展开的会话树，右侧内嵌终端直接跑 `claude --resume <sid>`。
 > 本文档面向后续迭代开发，记录架构、数据链路、状态文件、UI 常量、交互约定和已知坑。
-> 多 CLI、工作树与工作区交互见 [开发方案](docs/cli-integration-prototype/DEVELOPMENT.md)。
+> 多 CLI、工作树与工作区交互见 [开发方案](docs/cli-integration-prototype/DEVELOPMENT.md)。当前 H5 定稿及控件验收见 [设置与变更交互规范](docs/cli-integration-prototype/DEVELOPMENT.md#10-设置与变更交互规范)。
 
 ---
 
@@ -522,6 +522,7 @@ active != nil      终端区 = TerminalPane + StatusBarView
 | 右键项目行 | 置顶 / 新建对话 / 从列表移除 |
 | 右键会话行 | 置顶（首条禁用）/ 新建对话 / 从列表移除 |
 | 拖拽行 | 排序（项目↔项目、会话↔会话、会话→别的项目即移动） |
+| 点分支 / 工作树分组 | 展开或收起。分组默认收起，当前打开的会话所在分组自动展开一次，之后可手动收起 |
 | 拖分隔线 | 调整侧栏宽度（悬停时光标变成左右箭头） |
 | 点侧栏头部图标收纳 | 收起侧栏（同 `⌘B`） |
 | 点齿轮 | 打开设置 |
@@ -743,7 +744,9 @@ SwiftTerm 会向 CLI 声明支持 OSC 7501，新版 Claude 协商成功后会省
 
 15. **同一原始会话换持有端必须等进程真正退出。** `TerminalSession.terminate()` 只发信号；Codex 的 npm 启动器还会拉起原生子进程，未退出前 App Server 会报 `already has an active writer`。交接用 `terminateAndWait`（等整棵进程树退出，超时 SIGKILL），结构化聊天端对该错误退避重试。
 
-16. **`zsh -lc` 不读 `.zshrc`，nvm 的 `node` 不在 PATH。** Codex、dsh-tui 这类 `#!/usr/bin/env node` 脚本会报 `env: node: No such file or directory`。终端启动前把 CLI 所在目录放到 PATH 最前面（nvm 的 node 在同一 bin 目录）。
+16. **`zsh -lc` 不读 `.zshrc`，nvm 的 `node` 不在 PATH。** Codex、dsh-tui 这类 `#!/usr/bin/env node` 脚本会报 `env: node: No such file or directory`。终端启动前把 CLI 所在目录放到 PATH 最前面（nvm 的 node 在同一 bin 目录）。检测同理：`CliBinaryLocator.findCommand` 额外扫描 `~/.nvm/versions/node/*/bin`（新版本在前），`LoginEnv` 把这些目录补到 PATH 末尾，否则从访达启动时 `npm i -g` 装的 codex、dsh-tui 显示「未检测到」。
+
+19. **curl 不读 macOS 系统代理。** 本机靠系统代理（如 `127.0.0.1:7897`）出网时，安装脚本直连 `download.qoder.com` 会间歇性 `SSL_ERROR_SYSCALL`，表现为「一直安装不上」。`CliMaintenance.installEnvironment` 只为安装命令补上系统代理（`https_proxy` / `http_proxy` / `no_proxy`），环境里已配代理时不覆盖；不改 `LoginEnv`，避免内网 git、TAPD 等被导到代理。
 
 17. **企微卡片回调字段嵌套在 `event.template_card_event` 下**，与官方 Node SDK 类型定义的平铺写法不同。两种都要认，否则点击被静默忽略。
 
@@ -796,6 +799,7 @@ SwiftTerm 会向 CLI 声明支持 OSC 7501，新版 Claude 协商成功后会省
 
 - [ ] 「恢复误删会话」UI 入口（见 §11.2）。
 - [ ] Qoder CLI 会话入口：目前只在「可安装」目录里检测与安装（`qodercli`），启动、恢复与历史扫描待接入。
+- [ ] Pi 会话入口：目前只在「可安装」目录里检测与安装（`curl -fsSL https://pi.dev/install.sh | sh`，命令 `pi`，文档 https://docs.pi.dev/latest）。可接入点：新建 `pi --session-id <id>`、恢复 `pi --session <id>`、历史在 `~/.pi/agent/sessions/`（按工作目录分组），结构化模式 `pi --mode rpc`。
 - [ ] 企微同时 @ 多个机器人的裁决窗口：现为 1.5 秒（先到先处理）；如需严格按列表顺序，需拉长到 20–30 秒，待拍板。
 - [ ] TAPD 详情、评论与状态流转切到 MCP：按场景报告逐项核对返回结构与写权限后替换 tapd-cli。
 - [ ] Windows 安装与运行验收（已交叉打包 `dist-windows/ClaudePickerDev-1.0.0-windows-x64.exe`），以及 Antigravity 在 Windows 的历史扫描。

@@ -34,6 +34,7 @@ import appIcon from './clawd-mark.png';
 import { errorText, isNative, on, request } from './bridge.js';
 import { IconButton, tildePath, useStored } from './ui.jsx';
 import { resumeCommand } from './session-info.js';
+import { nameFromFirstSession } from './worktree-name.js';
 import Sidebar from './Sidebar.jsx';
 import {
   GIT_SECTIONS,
@@ -47,8 +48,10 @@ import {
   useNavigationDrag,
 } from './ModuleViews.jsx';
 import './modules.css';
-import Composer, { RuntimeBar } from './Composer.jsx';
+import Composer, { ENGINE_LABEL, ENGINE_OPTIONS, RuntimeBar } from './Composer.jsx';
+import EngineIcon from './EngineIcon.jsx';
 import DesktopTerminal from './DesktopTerminal.jsx';
+import { TerminalExample, TerminalFilePreview } from './TerminalPrototype.jsx';
 import FloatingConsole, { ConsoleBubble } from './FloatingConsole.jsx';
 import DesktopPet from './pet/DesktopPet.jsx';
 import { petEvent, usePetSignals } from './pet/usePetSignals.js';
@@ -56,6 +59,7 @@ import WorkspaceTab from './WorkspaceTab.jsx';
 import { BranchesTab, HistoryTab, MoreTab, WorktreeTab } from './GitPages.jsx';
 import { ContextModal, CreateWorktreeModal, DirectoryModal, McpModal, RenameSessionModal, SessionInfoModal, SessionModal } from './Modals.jsx';
 import './work/work.css';
+import './controls.css';
 import SessionChat from './SessionChat.jsx';
 import { DeepSeekBanner } from './work/DeepSeekMaintenance.jsx';
 import { needsAttention, useWorks } from './work/useWorks.js';
@@ -111,6 +115,8 @@ const OPEN_MODE_LABEL = { terminal: '原生终端', structured: '结构化聊天
 export default function App() {
   const [state, setState] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [bootError, setBootError] = useState(null);
+  const [bootAttempt, setBootAttempt] = useState(0);
   const [workbenchPath, setWorkbenchPath] = useStored('workbenchProject', '');
   const [tab, setTab] = useStored('tab', '工作区');
   const [morePage, setMorePage] = useState(null);
@@ -125,6 +131,8 @@ export default function App() {
   const gitBusyRef = useRef(false);
 
   const [menu, setMenu] = useState(null);
+  const [gitScopeOpen, setGitScopeOpen] = useState(false);
+  const [projectFilter, setProjectFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
   const [branchContext, setBranchContext] = useState(null);
   const [treeContext, setTreeContext] = useState(null);
@@ -140,12 +148,19 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [log, setLog] = useState([]);
   const [followBanner, setFollowBanner] = useState(null);
+  const [terminalFile, setTerminalFile] = useState(null);
+  const [terminalDrafts, setTerminalDrafts] = useState({});
+  const terminalSaveQueues = useRef(new Map());
   const [deepseekReport, setDeepseekReport] = useState(null);
 
   // ---------- Work ----------
   const { snapshot: workSnap } = useWorks();
   const petSignals = usePetSignals(state, workSnap, settings);
   const [page, setPage] = useStored('page', 'workspace');
+  useEffect(() => {
+    setGitScopeOpen(false);
+    setMenu(null);
+  }, [page]);
   // 模块第一栏的当前分类：TAPD 为 workspace id 或 'all'，Work 为 WORK_SECTIONS 的 id。
   const [sections, setSections] = useStored('moduleSections', { tapd: 'all', works: 'all' });
   // 第一栏宽度按模块分别记忆（180–360，默认 248）。
@@ -182,13 +197,13 @@ export default function App() {
         setState(snapshot);
         setSettings(snapshot.settings);
       })
-      .catch(() => {});
+      .catch((cause) => { if (alive) setBootError(errorText(cause)); });
     const off = on('state', (snapshot) => setState(snapshot));
     return () => {
       alive = false;
       off();
     };
-  }, []);
+  }, [bootAttempt]);
 
   const notify = useCallback((text, failed = false) => {
     setToast({ text, failed });
@@ -205,6 +220,45 @@ export default function App() {
     setSettings((current) => ({ ...current, ...patch }));
     if (persist) request('app.settings', patch).catch(() => {});
   }, []);
+
+  async function saveTerminalEdit(key, target, content, modifiedAt) {
+    const update = (entry) => setTerminalDrafts((current) => ({ ...current, [key]: entry }));
+    const queues = terminalSaveQueues.current;
+    const activeQueue = queues.get(key);
+    update({ content, status: 'saving' });
+    if (activeQueue) {
+      activeQueue.next = content;
+      return;
+    }
+    const queue = { next: content, modifiedAt };
+    queues.set(key, queue);
+    try {
+      while (queue.next !== undefined) {
+        const value = queue.next;
+        queue.next = undefined;
+        try {
+          const result = await request('file.write', {
+            projectPath: target.projectPath,
+            filePath: target.path,
+            content: value,
+            expectedModifiedAt: queue.modifiedAt,
+          });
+          queue.modifiedAt = result.modifiedAt ?? queue.modifiedAt;
+          if (queue.next === undefined) update({ content: value, status: 'saved', modifiedAt: queue.modifiedAt });
+        } catch (cause) {
+          update({
+            content: queue.next ?? value,
+            status: 'error',
+            modifiedAt: queue.modifiedAt,
+            error: cause.detail === 'STALE_FILE' ? '文件已在外部修改，当前草稿已保留。' : errorText(cause),
+          });
+          return;
+        }
+      }
+    } finally {
+      queues.delete(key);
+    }
+  }
 
   // ---------- 顶部页签 ----------
   const navigation = normalizeNavigation(settings?.navigation);
@@ -268,6 +322,38 @@ export default function App() {
   const project = projects.find((item) => item.path === workbenchPath) ?? null;
   const gitPath = diffWorkspace?.projectPath === workbenchPath ? diffWorkspace.worktree : workbenchPath;
   const [worktreesByProject, setWorktreesByProject] = useState({});
+  const [worktreeLabels, setWorktreeLabels] = useStored('worktreeLabels', {});
+  const sessionSnapshot = state?.projects;
+
+  function rememberWorktree(path, branch, explicitTitle, sessionId, firstTitle, replace = false) {
+    if (!path) return;
+    setWorktreeLabels((current) => {
+      const old = current[path];
+      if (!replace && (old?.explicit || old?.sessionId)) return current;
+      const name = explicitTitle || (firstTitle ? nameFromFirstSession(firstTitle, branch) : '');
+      return { ...current, [path]: { branch: branch ?? old?.branch, name, explicit: Boolean(explicitTitle), sessionId } };
+    });
+  }
+
+  useEffect(() => {
+    if (!sessionSnapshot) return;
+    setWorktreeLabels((current) => {
+      let next = current;
+      for (const [path, entry] of Object.entries(current)) {
+        if (entry.explicit) continue;
+        const sessions = sessionSnapshot.flatMap((project) => project.sessions.filter((session) => session.cwd === path));
+        const first = sessions.find((session) => session.id === entry.sessionId) ?? (!entry.name ? sessions.at(-1) : null);
+        if (!first) continue;
+        const title = first.title?.trim() ?? '';
+        const name = title && !['新建会话', '会话', '未命名会话'].includes(title)
+          ? nameFromFirstSession(title, entry.branch ?? first.branch) : entry.name;
+        if (first.id === entry.sessionId && name === entry.name) continue;
+        if (next === current) next = { ...current };
+        next[path] = { ...entry, sessionId: first.id, name };
+      }
+      return next;
+    });
+  }, [sessionSnapshot, worktreeLabels]);
   const projectPaths = JSON.stringify(projects.filter((item) =>
     !item.isHome && (item.expanded || item.path === workbenchPath)).map((item) => item.path));
   useEffect(() => {
@@ -531,7 +617,7 @@ export default function App() {
         { sessionId, sourceProvider, targetProvider, projectPath, cwd },
         { timeoutMs: 90000 },
       );
-      const targetName = targetProvider === 'antigravity' ? 'Antigravity' : 'Claude Code';
+      const targetName = ENGINE_LABEL[targetProvider] ?? targetProvider;
       notify(`已生成前情摘要并转到 ${targetName} 继续`);
     } catch (error) {
       notify(errorText(error), true);
@@ -551,6 +637,7 @@ export default function App() {
       if (navigationRef.current !== navigation) return;
       selectProject(target.path);
       setDiffWorkspace(group.worktree ? { projectPath: target.path, worktree: cwd } : null);
+      setTerminalFile(null);
       setSelectedWorkId(null);
       revealPage('workspace');
       setPage('workspace');
@@ -634,11 +721,12 @@ export default function App() {
       return;
     }
     if (action === '重命名' && session) setModal({ kind: 'rename', session });
-    if (action === '转到 Antigravity 继续' && session) {
-      handoffSession(session.id, session.provider ?? 'claude', 'antigravity', target.path, session.cwd);
-    }
-    if (action === '转到 Claude Code 继续' && session) {
-      handoffSession(session.id, session.provider ?? 'antigravity', 'claude', target.path, session.cwd);
+    if (session) {
+      const handoffTarget = ENGINE_OPTIONS.find((item) => `转到 ${item.label} 继续` === action);
+      if (handoffTarget) {
+        handoffSession(session.id, session.provider ?? 'claude', handoffTarget.id, target.path, session.cwd);
+        return;
+      }
     }
     if (action === '作为 Work 继续' && session) {
       setWorkModal({
@@ -693,7 +781,8 @@ export default function App() {
     const tree = worktreesByProject[target.path]?.find((item) =>
       session.cwd === item.path || session.cwd?.startsWith(item.path + '/'));
     if (tree) setDiffWorkspace({ projectPath: target.path, worktree: tree.path });
-    if (!settings.terminal) updateSettings({ terminal: true });
+    setTerminalFile(null);
+    if (!settings.terminal || settings.workbench) updateSettings({ terminal: true, workbench: false });
     request('session.open', {
       projectPath: target.path,
       cwd: session.cwd,
@@ -750,13 +839,31 @@ export default function App() {
     page3: () => selectPageAt(2),
     page4: () => selectPageAt(3),
     toggleSidebar: () => updateSettings({ sidebar: !settings.sidebar }),
-    toggleWorkbench: () => updateSettings({ workbench: !settings.workbench }),
+    toggleWorkbench: () => {
+      setTerminalFile(null);
+      updateSettings({ workbench: Boolean(terminalFile) || !settings.workbench });
+    },
     openSettings: () => setModal({ kind: 'settings' }),
     search: () => setWorkModal({ kind: 'search' }),
     focusTree: () =>
       (
         document.querySelector('.session-row.selected') ?? document.querySelector('.project-row')
       )?.focus(),
+    openTerminalFile: (detail) => {
+      if (!detail?.path || !detail?.projectPath) return;
+      setSelectedWorkId(null);
+      revealPage('workspace');
+      setPage('workspace');
+      setTerminalFile({
+        sessionId: detail.sessionId ?? active?.sessionId ?? null,
+        projectPath: detail.projectPath,
+        path: detail.path,
+        displayPath: detail.displayPath ?? detail.path,
+        line: typeof detail.line === 'number' ? detail.line : null,
+        column: typeof detail.column === 'number' ? detail.column : null,
+      });
+      if (!settings?.terminal) updateSettings({ terminal: true });
+    },
   };
 
   const workCommands = useRef({});
@@ -791,6 +898,10 @@ export default function App() {
       }
       if (detail.name === 'runtimeSavedNextLaunch') {
         if (detail.text) notify(detail.text);
+        return;
+      }
+      if (detail.name === 'openTerminalFile') {
+        toggles.current.openTerminalFile?.(detail);
         return;
       }
       toggles.current[detail.name]?.();
@@ -831,6 +942,7 @@ export default function App() {
 
   useEffect(() => {
     const handleKey = (event) => {
+      if (event.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"], dialog[open]')) return;
       // 原生窗口里这三个快捷键由菜单统一处理（终端有焦点时网页收不到按键）
       if ((!native || window.claudeDesktop) && (event.metaKey || event.ctrlKey)) {
         const command = {
@@ -864,18 +976,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!menu && !branchContext && !treeContext && !runtimeMenu) return undefined;
+    if (!menu && !gitScopeOpen && !branchContext && !treeContext && !runtimeMenu) return undefined;
     const dismiss = (event) => {
       if (!event.target.closest('.project-menu-wrap, .branch-context')) {
         setMenu(null);
         setBranchContext(null);
       }
+      if (!event.target.closest('.git-scope-picker, .branch-context')) setGitScopeOpen(false);
       if (!event.target.closest('.tree-context') && event.button !== 2) setTreeContext(null);
       if (!event.target.closest('.runtime-options')) setRuntimeMenu(null);
     };
     window.addEventListener('pointerdown', dismiss);
     return () => window.removeEventListener('pointerdown', dismiss);
-  }, [menu, branchContext, treeContext, runtimeMenu]);
+  }, [menu, gitScopeOpen, branchContext, treeContext, runtimeMenu]);
 
   // ---------- 布局回报：原生据此摆放终端视图与窗口拖动区 ----------
   // 弹窗 / 菜单打开时带 data-blocking：原生把整窗的鼠标与键盘都交给网页。
@@ -914,7 +1027,7 @@ export default function App() {
     const handle = event.currentTarget;
     const body = handle.parentElement;
     handle.setPointerCapture(event.pointerId);
-    let latest = settings.terminalWidth;
+    let latest = settings.terminalWidth ?? DEFAULT_TERMINAL_WIDTH;
     handle.onpointermove = (move) => {
       const rect = body.getBoundingClientRect();
       const firstColumn = settings.sidebar ? sidebarWidths[page] || SIDEBAR_DEFAULT : 48;
@@ -937,7 +1050,17 @@ export default function App() {
     handle.onpointercancel = finish;
   }
 
-  if (!state || !settings) return <div className="app booting" />;
+  if (!state || !settings) return (
+    <main className="app booting" aria-busy={!bootError}>
+      {bootError ? (
+        <div role="alert">
+          <h2>无法加载工作空间</h2>
+          <p>{bootError}</p>
+          <button onClick={() => { setBootError(null); setBootAttempt((attempt) => attempt + 1); }}>重试</button>
+        </div>
+      ) : <p role="status">正在加载工作空间…</p>}
+    </main>
+  );
 
   const { sidebar, terminal, workbench } = settings;
   const sidebarWidth = sidebarWidths[page] || SIDEBAR_DEFAULT;
@@ -964,6 +1087,81 @@ export default function App() {
       }
     />
   );
+  function openHandoffSegment(segment) {
+    if (!active || !segment || segment.id === active.sessionId) return;
+    request('session.open', {
+      projectPath: active.projectPath,
+      cwd: active.cwd,
+      sessionId: segment.id,
+      provider: segment.provider,
+    }).catch((error) => notify(errorText(error), true));
+  }
+
+  function retryHandoffSegment(segment) {
+    if (!active || !segment || !Array.isArray(active.handoffChain)) return;
+    const prev = [...active.handoffChain].reverse().find((item) => item.id !== segment.id && !item.pending)
+      ?? active.handoffChain[0];
+    if (!prev) return;
+    handoffSession(prev.id, prev.provider, segment.provider, active.projectPath, active.cwd);
+  }
+
+  const activeHandoffChain = Array.isArray(active?.handoffChain) && active.handoffChain.length > 1
+    ? active.handoffChain
+    : null;
+  const handoffProviderCounts = activeHandoffChain
+    ? activeHandoffChain.reduce((acc, seg) => {
+        acc[seg.provider] = (acc[seg.provider] ?? 0) + 1;
+        return acc;
+      }, {})
+    : {};
+  const handoffProviderSeen = {};
+  const handoffTrailBar = activeHandoffChain ? (
+    <div className="handoff-trail-bar" role="tablist" aria-label="跨引擎接力记录">
+      <span className="handoff-trail-label">接力</span>
+      <div className="handoff-trail-list">
+        {activeHandoffChain.map((seg, idx) => {
+          handoffProviderSeen[seg.provider] = (handoffProviderSeen[seg.provider] ?? 0) + 1;
+          const dup = (handoffProviderCounts[seg.provider] ?? 0) > 1;
+          const tag = dup ? `${seg.shortLabel} #${handoffProviderSeen[seg.provider]}` : seg.shortLabel;
+          const isCurrent = seg.id === active.sessionId;
+          const deadPending = seg.pending && !seg.alive;
+          const tip = deadPending
+            ? `${seg.label} · 尚未取得原始 ID（终端已退出，可查看输出或重试接力）`
+            : seg.pending
+              ? `${seg.label} · 正在初始化会话…`
+              : `${seg.label}${isCurrent ? '（当前）' : ' · 点击切换查看'}`;
+          return (
+            <React.Fragment key={`${seg.id}-${idx}`}>
+              {idx > 0 && <span className="handoff-trail-sep" aria-hidden="true">›</span>}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={isCurrent}
+                className={`handoff-trail-pill${isCurrent ? ' current' : ''}${deadPending ? ' dead' : ''}`}
+                title={tip}
+                onClick={() => openHandoffSegment(seg)}
+              >
+                <EngineIcon id={seg.provider} />
+                <span>{tag}</span>
+                {seg.pending && <i className={`handoff-trail-dot${deadPending ? ' warn' : ''}`} aria-hidden="true" />}
+              </button>
+              {isCurrent && deadPending && (
+                <button
+                  type="button"
+                  className="handoff-trail-retry"
+                  title="重新从上一引擎生成摘要并接力"
+                  onClick={() => retryHandoffSegment(seg)}
+                >
+                  重试
+                </button>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  ) : null;
+
   const consoleAllowed = !terminalVisible && !(page === 'workspace' && selectedWork && !terminal);
   const petOn = settings.pet?.enabled !== false;
   // macOS 原生由桌面悬浮窗显示桌宠（state.desktopPet），主窗口里不再画一份。
@@ -998,7 +1196,12 @@ export default function App() {
   const consoleTerminal =
     structuredActive ? (
       <SessionChat sessionId={active.sessionId} provider={active.provider} label={active.label}
-        supportedModes={settings.cliPreferences?.[active.provider]?.modes ?? ['terminal']} />
+        supportedModes={settings.cliPreferences?.[active.provider]?.modes ?? ['terminal']}
+        providers={state.providers ?? []}
+        cliPreferences={settings.cliPreferences}
+        onHandoff={(targetProv) =>
+          handoffSession(active.sessionId, active.provider ?? 'claude', targetProv, active.projectPath, active.cwd)
+        } />
     ) : active && window.claudeDesktop ? (
       <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
     ) : active && native ? (
@@ -1076,14 +1279,14 @@ export default function App() {
     checkoutBranch(item.name);
   }
 
-  function branchPickerKeys(event) {
+  function pickerKeys(event, trigger) {
     if (event.key === 'Escape') {
       event.stopPropagation();
       setMenu(null);
-      event.currentTarget.parentElement.querySelector('.branch-picker')?.focus();
+      event.currentTarget.parentElement.querySelector(trigger)?.focus();
       return;
     }
-    const buttons = [...event.currentTarget.querySelectorAll('[data-branch-option]:not(:disabled)')];
+    const buttons = [...event.currentTarget.querySelectorAll('[data-picker-option]:not(:disabled)')];
     if (event.key === 'Enter' && event.target.tagName === 'INPUT') {
       event.preventDefault();
       buttons[0]?.click();
@@ -1100,18 +1303,24 @@ export default function App() {
     }
   }
 
-  const branchPicker = (
-    <div className="project-menu-wrap cli-branch-picker">
+  const projectPicker = (
       <label className="cli-project-picker">
-        <Folder size={14} />
+        <Folder size={14} aria-hidden="true" />
         <select aria-label="选择项目" value={workbenchPath}
           onChange={(event) => selectProject(event.target.value)}>
-          {projects.map((item) => <option key={item.path} value={item.path}>{item.title}</option>)}
+          {projects.map((item) => <option key={item.path} value={item.path} title={item.path}>{item.title}</option>)}
         </select>
       </label>
+  );
+  const matchingProjects = projects.filter((item) =>
+    `${item.title} ${item.path}`.toLowerCase().includes(projectFilter.trim().toLowerCase()));
+
+  const branchPickerButton = (
       <button
-        className="branch-picker"
+        type="button"
+        className="branch-picker git-branch-button"
         aria-label="选择分支"
+        aria-haspopup="dialog"
         aria-expanded={menu === 'branch'}
         title={gitPath}
         onClick={() => {
@@ -1124,9 +1333,10 @@ export default function App() {
       >
         <GitBranch size={15} /><b>{branchLabel}</b><CaretDown size={12} />
       </button>
-      {menu === 'branch' && (
+  );
+  const branchPickerList = menu === 'branch' && (
         <div className="dropdown project-branch-dropdown cli-branch-menu" role="dialog"
-          aria-label="切换分支" data-blocking onKeyDown={branchPickerKeys}>
+          aria-label="切换分支" data-blocking onKeyDown={(event) => pickerKeys(event, '.git-branch-button')}>
           <div className="branch-options">
             <label className="search">
               <MagnifyingGlass size={13} />
@@ -1143,7 +1353,7 @@ export default function App() {
               <div key={group}>
                 <div className="menu-title">{group}</div>
                 {items.map((item) => (
-                  <button key={item.name} data-branch-option disabled={gitBusy}
+                  <button key={item.name} data-picker-option disabled={gitBusy}
                     className={item.isCurrent ? 'current' : ''} title={item.name}
                     onClick={() => chooseBranch(item)}
                     onContextMenu={(event) => openBranchContext(event, item.name)}>
@@ -1153,6 +1363,79 @@ export default function App() {
               </div>
             ))}
           </div>
+        </div>
+  );
+  const branchPicker = (
+    <div className="project-menu-wrap cli-branch-picker">
+      {projectPicker}
+      {branchPickerButton}
+      {branchPickerList}
+    </div>
+  );
+  const gitScopePicker = (
+    <div className="project-menu-wrap git-scope-picker">
+      <button type="button" className="git-scope-trigger" aria-label="选择项目和分支"
+        aria-haspopup="dialog" aria-expanded={gitScopeOpen}
+        title={[project?.path, branchLabel].filter(Boolean).join(' · ')}
+        onClick={() => {
+          setMenu(null);
+          setGitScopeOpen(!gitScopeOpen);
+        }}>
+        <Folder size={15} aria-hidden="true" />
+        <strong title={project?.path}>{project?.title ?? '选择项目'}</strong>
+        <CaretDown size={12} className="git-scope-caret" aria-hidden="true" />
+        <GitBranch size={14} aria-hidden="true" />
+        <span title={branchLabel}>{branchLabel}</span>
+      </button>
+      {gitScopeOpen && (
+        <div className="git-scope-popover cli-branch-picker" role="dialog" aria-label="项目和分支" data-blocking
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape' || event.defaultPrevented) return;
+            event.stopPropagation();
+            setMenu(null);
+            setGitScopeOpen(false);
+            event.currentTarget.parentElement.querySelector('.git-scope-trigger')?.focus();
+          }}>
+          <div className="git-scope-fields">
+            <div>
+              <span>项目目录</span>
+              <button type="button" className="branch-picker git-project-button" aria-label="选择项目"
+                aria-haspopup="dialog" aria-expanded={menu === 'project'}
+                title={project?.path} onClick={() => {
+                  setProjectFilter('');
+                  setMenu(menu === 'project' ? null : 'project');
+                }}>
+                <Folder size={15} aria-hidden="true" /><b>{project?.title ?? '选择项目'}</b><CaretDown size={12} aria-hidden="true" />
+              </button>
+            </div>
+            <div><span>分支</span>{branchPickerButton}</div>
+          </div>
+          {menu === 'project' && (
+            <div className="dropdown project-branch-dropdown cli-branch-menu" role="dialog" aria-label="切换项目"
+              onKeyDown={(event) => pickerKeys(event, '.git-project-button')}>
+              <div className="branch-options">
+                <label className="search">
+                  <MagnifyingGlass size={13} aria-hidden="true" />
+                  <input autoFocus aria-label="搜索项目" placeholder="搜索项目名称或目录…" value={projectFilter}
+                    onChange={(event) => setProjectFilter(event.target.value)} />
+                </label>
+                {!matchingProjects.length && <div className="pane-note">没有匹配的项目</div>}
+                {matchingProjects.map((item) => (
+                  <button type="button" data-picker-option key={item.path} title={item.path}
+                    className={item.path === workbenchPath ? 'current' : ''}
+                    aria-current={item.path === workbenchPath ? 'true' : undefined}
+                    onClick={(event) => {
+                      event.currentTarget.closest('.git-scope-popover')?.querySelector('.git-project-button')?.focus();
+                      selectProject(item.path);
+                    }}>
+                    <Folder size={14} aria-hidden="true" /><span>{item.title}</span>
+                    {item.path === workbenchPath && <Check size={13} aria-hidden="true" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {branchPickerList}
         </div>
       )}
     </div>
@@ -1211,6 +1494,7 @@ export default function App() {
     if (tab === '工作树')
       return (
         <WorktreeTab
+          worktreeLabels={worktreeLabels}
           key={project.path}
           projectPath={project.path}
           home={state.home}
@@ -1237,7 +1521,9 @@ export default function App() {
 
   const attentionCount = workSnap.works.filter(needsAttention).length;
   const workSectionCounts = countWorkSections(workSnap.works);
-  const showGitHeader = (page === 'workspace' && !selectedWork && workbench) || (page === 'git' && !selectedWork);
+  const previewFile = terminal && terminalFile?.sessionId === active?.sessionId ? terminalFile : null;
+  const previewFileKey = previewFile && JSON.stringify([previewFile.projectPath, previewFile.path]);
+  const showGitHeader = (page === 'workspace' && !selectedWork && workbench && !previewFile) || (page === 'git' && !selectedWork);
   const contextOpen = settings.contextOpen !== false;
   const contextWidth = settings.contextWidth ?? 330;
 
@@ -1507,8 +1793,11 @@ export default function App() {
           <div className="titlebar-fill" data-drag-region />
         )}
         <div className="titlebar-end">
-          {page === 'workspace' && !selectedWork && !workbench && (
-            <IconButton icon={Code} label="展开工作台 ⌘\\" onClick={() => updateSettings({ workbench: true })} />
+          {page === 'workspace' && !selectedWork && !showGitHeader && (
+            <IconButton icon={Code} label="展开工作台 ⌘\\" onClick={() => {
+              setTerminalFile(null);
+              updateSettings({ workbench: true });
+            }} />
           )}
           <IconButton icon={Gear} label="设置 ⌘," onClick={() => setModal({ kind: 'settings' })} />
         </div>
@@ -1526,8 +1815,14 @@ export default function App() {
             onExpandTerminal={() => updateSettings({ terminal: true })}
             onSelectProject={selectProject}
             onOpenSession={openSession}
+            onBrowseGroup={() => {
+              navigationRef.current += 1;
+              setTerminalFile(null);
+              if (workbench || !terminal) updateSettings({ terminal: true, workbench: false });
+            }}
             onTreeContext={openTreeContext}
             worktreesByProject={worktreesByProject}
+            worktreeLabels={worktreeLabels}
             onBranchTreeContext={(event, target, group) => openTreeContext(event, target, null, group)}
             onAddDirectory={() => setModal({ kind: 'directory' })}
             onSettings={() => setModal({ kind: 'settings' })}
@@ -1546,6 +1841,7 @@ export default function App() {
         ) : (
           <ModuleSidebar
             page={page}
+            icon={PAGES.find(([id]) => id === page)?.[2]}
             items={
               page === 'tapd' ? tapdSections(tapdWorkspaces) : page === 'works' ? WORK_SECTIONS : GIT_SECTIONS
             }
@@ -1562,7 +1858,7 @@ export default function App() {
             onSettings={() => setModal({ kind: 'settings' })}
             terminalVisible={terminalVisible}
             onTerminal={restoreTerminal}
-            branchControls={page === 'git' ? branchPicker : null}
+            branchControls={page === 'git' ? gitScopePicker : null}
             search={
               page === 'tapd'
                 ? {
@@ -1594,10 +1890,13 @@ export default function App() {
           <>
         {terminal ? (
           <section
-            className={`terminal-pane${(active ? active.provider : state.runtime?.provider) === 'antigravity' ? ' is-antigravity' : ''}`}
-            style={{ flexBasis: workbench ? `${terminalWidth}%` : '100%' }}
+            className={`terminal-pane${(active ? active.provider : state.runtime?.provider) === 'antigravity' ? ' is-antigravity' : ''}${handoffTrailBar ? ' has-handoff-trail' : ''}`}
+            style={{
+              flexBasis: previewFile ? 0 : workbench ? `${terminalWidth}%` : '100%',
+              ...(previewFile ? { flexGrow: 1.38 } : {}),
+            }}
           >
-            <div className="terminal-actions" data-terminal-overlay>
+            <div className={`terminal-actions${active ? ' has-close' : ''}`} data-terminal-overlay>
               {active && surfaceToggle && (
                 <IconButton
                   icon={surfaceToggle.icon}
@@ -1605,6 +1904,11 @@ export default function App() {
                   onClick={() => switchSurfaceOfActive(surfaceToggle.mode)}
                 />
               )}
+              <IconButton
+                icon={CaretDoubleLeft}
+                label="收起终端 ⌘J"
+                onClick={() => updateSettings({ terminal: false })}
+              />
               {active && (
                 <IconButton
                   icon={X}
@@ -1612,15 +1916,16 @@ export default function App() {
                   onClick={() => request('app.command', { name: 'closeTerminal' })}
                 />
               )}
-              <IconButton
-                icon={CaretDoubleLeft}
-                label="收起终端 ⌘J"
-                onClick={() => updateSettings({ terminal: false })}
-              />
             </div>
+            {handoffTrailBar}
             {structuredActive ? (
               <SessionChat sessionId={active.sessionId} provider={active.provider} label={active.label}
-        supportedModes={settings.cliPreferences?.[active.provider]?.modes ?? ['terminal']} />
+        supportedModes={settings.cliPreferences?.[active.provider]?.modes ?? ['terminal']}
+        providers={state.providers ?? []}
+        cliPreferences={settings.cliPreferences}
+        onHandoff={(targetProv) =>
+          handoffSession(active.sessionId, active.provider ?? 'claude', targetProv, active.projectPath, active.cwd)
+        } />
             ) : active && window.claudeDesktop ? (
               <DesktopTerminal sessionId={active.sessionId} fontSize={settings.termFontSize} provider={active.provider} />
             ) : active && native ? (
@@ -1638,9 +1943,7 @@ export default function App() {
                   </div>
                 </div>
                 {active ? (
-                  <p className="terminal-user">
-                    {active.label} · 终端由 ClaudePicker 原生窗口承载，浏览器预览不显示终端内容。
-                  </p>
+                  <TerminalExample key={active.sessionId} session={active} onOpenFile={setTerminalFile} />
                 ) : (
                   <div className="terminal-empty">
                     <p>展开左侧项目，选一个会话；或直接在下方输入开始新的对话。</p>
@@ -1654,18 +1957,38 @@ export default function App() {
           </section>
         ) : null}
 
-        {terminal && workbench && (
+        {terminal && workbench && !previewFile && (
           <div
             className="resizer"
             role="separator"
-            aria-label="拖动调整终端宽度"
-            title="左右拖动调整宽度，双击恢复默认"
+            aria-label="调整终端宽度"
+            aria-orientation="vertical"
+            aria-valuemin={24}
+            aria-valuemax={57}
+            aria-valuenow={Math.round(terminalWidth)}
+            aria-valuetext={`${Math.round(terminalWidth)}%`}
+            tabIndex={0}
+            title="左右方向键或拖动调整宽度，双击恢复默认"
+            onKeyDown={(event) => {
+              const width = { ArrowLeft: terminalWidth - 2, ArrowRight: terminalWidth + 2, Home: 24, End: 57 }[event.key];
+              if (width === undefined) return;
+              event.preventDefault();
+              updateSettings({ terminalWidth: Math.max(24, Math.min(57, width)) });
+            }}
             onPointerDown={beginResize}
             onDoubleClick={() => updateSettings({ terminalWidth: DEFAULT_TERMINAL_WIDTH })}
           />
         )}
 
-        {workbench ? (
+        {previewFile ? (
+          <TerminalFilePreview
+            key={previewFileKey}
+            target={previewFile}
+            draft={terminalDrafts[previewFileKey]}
+            onEdit={(value, modifiedAt) => saveTerminalEdit(previewFileKey, previewFile, value, modifiedAt)}
+            onClose={() => setTerminalFile(null)}
+          />
+        ) : workbench ? (
           <main className="workbench">
             {followBanner && (
               <div className="follow-banner" role="status">
@@ -1760,19 +2083,18 @@ export default function App() {
                   ['复制会话 ID', !treeContext.session.originalSessionId],
                   ['复制恢复命令', !resumeCommand(treeContext.session.provider ?? 'claude', treeContext.session.originalSessionId)],
                   ...openModeMenu(treeContext.session),
-                  ...(['codex', 'dsh'].includes(treeContext.session.provider) ? [] : [[
-                    (treeContext.session.provider ?? 'claude') === 'antigravity'
-                      ? '转到 Claude Code 继续'
-                      : '转到 Antigravity 继续',
-                    (state.providers ?? []).length > 0 &&
-                      !(state.providers ?? []).some(
-                        (p) =>
-                          p.id ===
-                            ((treeContext.session.provider ?? 'claude') === 'antigravity'
-                              ? 'claude'
-                              : 'antigravity') && p.available,
-                      ),
-                    ], ['作为 Work 继续', false]]),
+                  ...ENGINE_OPTIONS
+                    .filter((item) => item.id !== (treeContext.session.provider ?? 'claude'))
+                    .map((item) => {
+                      const disabled =
+                        settings.cliPreferences?.[item.id]?.enabled === false ||
+                        ((state.providers ?? []).length > 0 &&
+                          !(state.providers ?? []).some((p) => p.id === item.id && p.available));
+                      return [`转到 ${item.label} 继续`, disabled];
+                    }),
+                  ...(['claude', 'antigravity', 'codex'].includes(treeContext.session.provider ?? 'claude')
+                    ? [['作为 Work 继续', false]]
+                    : []),
                 ]
               : []),
             [
@@ -1853,7 +2175,15 @@ export default function App() {
         <DirectoryModal
           notify={notify}
           onClose={() => setModal(null)}
-          onAdded={(path) => selectProject(path)}
+          onAdded={async (path) => {
+            try {
+              const snapshot = await request('app.state');
+              setState(snapshot);
+              selectProject(path);
+            } catch (cause) {
+              notify(errorText(cause), true);
+            }
+          }}
         />
       )}
       {modal?.kind === 'create-worktree' && modalProject && (
@@ -1861,7 +2191,8 @@ export default function App() {
           projects={projects.filter((item) => !item.isHome)}
           settings={settings} providers={state.providers ?? []}
           onClose={() => setModal(null)}
-          onCreated={(result, path) => {
+          onCreated={(result, path, title) => {
+            rememberWorktree(result.path, result.branch, title, result.sessionId, null, !result.sessionId);
             if (path !== workbenchPath) selectProject(path);
             if (result.sessionId && !settings.terminal) updateSettings({ terminal: true });
             setEpoch((value) => value + 1);
@@ -1883,14 +2214,19 @@ export default function App() {
           notify={notify}
           onClose={() => setModal(null)}
           onCreated={(result) => {
-            if (modal.workspace || result.mode === 'worktree') {
-              selectProject(modalProject.path);
-              setSelectedWorkId(null);
-              revealPage('workspace');
-              setPage('workspace');
-              if (result.cwd !== modalProject.path) setDiffWorkspace({ projectPath: modalProject.path, worktree: result.cwd });
+            if (result.mode === 'worktree' || worktreeLabels[result.cwd]) {
+              rememberWorktree(result.cwd, result.branch ?? modal.workspace?.branch, '', result.sessionId, result.firstSessionTitle,
+                result.mode === 'worktree');
             }
-            if (!settings.terminal) updateSettings({ terminal: true });
+            selectProject(modalProject.path);
+            setSelectedWorkId(null);
+            setTerminalFile(null);
+            revealPage('workspace');
+            setPage('workspace');
+            if ((modal.workspace || result.mode === 'worktree') && result.cwd !== modalProject.path) {
+              setDiffWorkspace({ projectPath: modalProject.path, worktree: result.cwd });
+            }
+            if (!settings.terminal || settings.workbench) updateSettings({ terminal: true, workbench: false });
             setEpoch((value) => value + 1);
           }}
         />

@@ -9,7 +9,7 @@ import Foundation
 /// 本文件不重写扫描逻辑，也不碰 `tree.json` 的格式（那是 `Store.persistTree()` 的事）。
 enum AppHandlers: BridgeModule {
     private static let methods: Set<String> = [
-        "app.state", "app.layout", "app.settings", "app.runtime",
+        "app.state", "app.layout", "app.settings", "app.runtime", "app.refreshUsage", "app.copyText",
         "app.toggleProject", "app.toggleShowAll", "app.pin", "app.remove", "app.renameSession", "app.revealInFinder",
         "app.moveProject", "app.moveSession", "app.addDirectory", "app.pickDirectory",
         "app.prompt", "app.command", "app.context", "app.revealBranchSessions", "app.openURL",
@@ -62,9 +62,13 @@ enum AppHandlers: BridgeModule {
         case "app.refreshUsage":
             if dict["onlyIfEmpty"] as? Bool == true {
                 store.refreshCodexUsage(onlyIfEmpty: true)
+                store.refreshAntigravityUsage(onlyIfEmpty: true)
+                store.refreshDeepSeekBalance(onlyIfEmpty: true)
             } else {
                 store.refreshUsage()
                 store.refreshCodexUsage()
+                store.refreshAntigravityUsage()
+                store.refreshDeepSeekBalance()
             }
             return nil
 
